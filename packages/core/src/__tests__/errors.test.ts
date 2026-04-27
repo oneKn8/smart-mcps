@@ -75,4 +75,20 @@ describe("toMcpResult", () => {
     expect(text).toContain("UPSTREAM");
     expect(text).toContain("totally unexpected");
   });
+
+  it("does not throw when detail is a cyclic object", () => {
+    const cyclic: Record<string, unknown> = { a: 1 };
+    cyclic.self = cyclic;
+    expect(() =>
+      toMcpResult(new UpstreamError("oops", { detail: cyclic })),
+    ).not.toThrow();
+  });
+
+  it("falls back to String(detail) when JSON.stringify returns undefined", () => {
+    const result = toMcpResult(new UpstreamError("fn detail", { detail: () => 1 }));
+    const text = (result.content[0] as { text: string }).text;
+    expect(text).toContain("Detail:");
+    // String(() => 1) yields the function source
+    expect(text).toMatch(/Detail: .*=>/);
+  });
 });

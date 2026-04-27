@@ -110,7 +110,17 @@ export function toMcpResult(err: unknown): McpToolResult {
     );
   }
   if (wrapped.detail !== undefined) {
-    lines.push(`Detail: ${typeof wrapped.detail === "string" ? wrapped.detail : JSON.stringify(wrapped.detail)}`);
+    let detailText: string;
+    if (typeof wrapped.detail === "string") {
+      detailText = wrapped.detail;
+    } else {
+      try {
+        detailText = JSON.stringify(wrapped.detail) ?? String(wrapped.detail);
+      } catch {
+        detailText = String(wrapped.detail);
+      }
+    }
+    lines.push(`Detail: ${detailText}`);
   }
 
   return {
