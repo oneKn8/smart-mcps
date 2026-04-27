@@ -49,6 +49,12 @@ export interface VercelDeployment {
   target: "production" | "staging" | null | string;
 }
 
+export interface UpdateProjectDomainBody {
+  redirect?: string | null;
+  redirectStatusCode?: 301 | 302 | 307 | 308 | null;
+  gitBranch?: string | null;
+}
+
 export interface ListDeploymentsResponse {
   deployments: VercelDeployment[];
   pagination?: { count?: number; next?: string | null };
@@ -127,6 +133,26 @@ export class VercelClient {
       }
       throw err;
     }
+  }
+
+  async updateProjectDomain(
+    idOrName: string,
+    domain: string,
+    body: UpdateProjectDomainBody,
+  ): Promise<ProjectDomain> {
+    const searchParams: Record<string, string | number | undefined> = {};
+    if (this.creds.VERCEL_TEAM_ID) {
+      searchParams.teamId = this.creds.VERCEL_TEAM_ID;
+    }
+    return await fetchJson<ProjectDomain>(
+      `https://api.vercel.com/v9/projects/${encodeURIComponent(idOrName)}/domains/${encodeURIComponent(domain)}`,
+      {
+        method: "PATCH",
+        token: this.creds.VERCEL_TOKEN,
+        searchParams,
+        body,
+      },
+    );
   }
 
   async listProjectDomains(idOrName: string): Promise<ListProjectDomainsResponse> {

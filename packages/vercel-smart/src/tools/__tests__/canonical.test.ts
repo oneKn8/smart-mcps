@@ -1,9 +1,11 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { z } from "zod";
-import { canonicalAudit, redirectsAudit } from "../canonical.js";
+import { ConfirmRequiredError } from "smart-mcp-core";
+import { canonicalAudit, redirectsAudit, flipCanonical } from "../canonical.js";
 
 type FakeClient = {
   listProjectDomains: ReturnType<typeof vi.fn>;
+  updateProjectDomain?: ReturnType<typeof vi.fn>;
 };
 
 function makeClient(response: { domains: Array<Record<string, unknown>> }): FakeClient {
@@ -529,5 +531,726 @@ describe("redirectsAudit", () => {
     });
     const result = await runRedirects(client, "alpha-site");
     expect(result.project).toBe("alpha-site");
+  });
+});
+
+// ---------- flipCanonical ----------
+
+type FlipClient = {
+  listProjectDomains: ReturnType<typeof vi.fn>;
+  updateProjectDomain: ReturnType<typeof vi.fn>;
+};
+
+function makeFlipClient(opts: {
+  before: Array<Record<string, unknown>>;
+  after?: Array<Record<string, unknown>>;
+  updateImpl?: (
+    project: string,
+    domain: string,
+    body: Record<string, unknown>,
+  ) => Promise<unknown>;
+}): FlipClient {
+  const listMock = vi.fn();
+  listMock.mockResolvedValueOnce({ domains: opts.before });
+  if (opts.after) {
+    listMock.mockResolvedValueOnce({ domains: opts.after });
+  } else {
+    listMock.mockResolvedValueOnce({ domains: opts.before });
+  }
+  const updateMock = vi.fn();
+  if (opts.updateImpl) {
+    updateMock.mockImplementation(opts.updateImpl);
+  } else {
+    updateMock.mockImplementation(async (_p, _d, body) => body);
+  }
+  return {
+    listProjectDomains: listMock,
+    updateProjectDomain: updateMock,
+  };
+}
+
+type FlipInput = {
+  project: string;
+  target: "apex" | "www";
+  statusCode?: 301 | 308;
+  confirm?: boolean;
+  skip_verify?: boolean;
+};
+
+async function runFlip(client: FlipClient, raw: FlipInput): Promise<unknown> {
+  const input = flipCanonical.inputSchema.parse(raw);
+  return await flipCanonical.handler(input as never, {
+    client: client as unknown as never,
+  });
+}
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
+
+describe("flipCanonical — metadata", () => {
+  it("has correct name, description, and zod input schema", () => {
+    expect(flipCanonical.name).toBe("flip_canonical");
+    expect(flipCanonical.description).toBe(
+      "Switch apex<->www canonical redirect for a project. Destructive.",
+    );
+    expect(flipCanonical.inputSchema).toBeInstanceOf(z.ZodType);
+    const parsed = flipCanonical.inputSchema.parse({
+      project: "alpha-site",
+      target: "apex",
+    });
+    expect(parsed).toMatchObject({
+      project: "alpha-site",
+      target: "apex",
+      statusCode: 308,
+      confirm: false,
+      skip_verify: false,
+    });
+  });
+
+  it("schema rejects invalid target", () => {
+    expect(() =>
+      flipCanonical.inputSchema.parse({ project: "x", target: "invalid" }),
+    ).toThrow();
+  });
+
+  it("schema rejects invalid statusCode", () => {
+    expect(() =>
+      flipCanonical.inputSchema.parse({
+        project: "x",
+        target: "apex",
+        statusCode: 302,
+      }),
+    ).toThrow();
+  });
+
+  it("schema applies defaults", () => {
+    const parsed = flipCanonical.inputSchema.parse({
+      project: "alpha-site",
+      target: "www",
+    });
+    expect(parsed).toEqual({
+      project: "alpha-site",
+      target: "www",
+      statusCode: 308,
+      confirm: false,
+      skip_verify: false,
+    });
+  });
+});
+
+describe("flipCanonical — confirm gate and idempotence", () => {
+  it("confirm:false throws ConfirmRequiredError with preview containing changes", async () => {
+    // Currently canonical=www, asking to flip to apex
+    const client = makeFlipClient({
+      before: [
+        makeDomain({
+          name: "alpha-site.com",
+          redirect: "www.alpha-site.com",
+          redirectStatusCode: 308,
+        }),
+        makeDomain({
+          name: "www.alpha-site.com",
+          redirect: null,
+          redirectStatusCode: null,
+        }),
+      ],
+    });
+    let caught: unknown = null;
+    try {
+      await runFlip(client, { project: "alpha-site", target: "apex" });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(ConfirmRequiredError);
+    const e = caught as ConfirmRequiredError;
+    expect(e.preview).toContain("alpha-site.com");
+    expect(e.preview).toContain("www.alpha-site.com");
+    expect(e.preview).toContain("->");
+    expect(client.updateProjectDomain).not.toHaveBeenCalled();
+  });
+
+  it("already canonical: returns no-op without calling updateProjectDomain (no confirm needed)", async () => {
+    // Currently canonical=apex, asking for apex
+    const client = makeFlipClient({
+      before: [
+        makeDomain({
+          name: "alpha-site.com",
+          redirect: null,
+          redirectStatusCode: null,
+        }),
+        makeDomain({
+          name: "www.alpha-site.com",
+          redirect: "alpha-site.com",
+          redirectStatusCode: 308,
+        }),
+      ],
+    });
+    const result = (await runFlip(client, {
+      project: "alpha-site",
+      target: "apex",
+      confirm: false,
+    })) as {
+      ok: boolean;
+      changes: unknown[];
+      verified: unknown;
+      verified_at: unknown;
+    };
+    expect(result.ok).toBe(true);
+    expect(result.changes).toEqual([]);
+    expect(result.verified).toBeNull();
+    expect(result.verified_at).toBeNull();
+    expect(client.updateProjectDomain).not.toHaveBeenCalled();
+  });
+
+  it("missing apex: throws informative error mentioning project and 'apex'", async () => {
+    const client = makeFlipClient({
+      before: [
+        makeDomain({
+          name: "www.alpha-site.com",
+          apexName: "alpha-site.com",
+          redirect: null,
+          redirectStatusCode: null,
+        }),
+      ],
+    });
+    let caught: unknown = null;
+    try {
+      await runFlip(client, {
+        project: "alpha-site",
+        target: "apex",
+        confirm: true,
+      });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as Error).message).toContain("alpha-site");
+    expect((caught as Error).message).toContain("apex");
+  });
+
+  it("missing www: throws informative error mentioning project and 'www'", async () => {
+    const client = makeFlipClient({
+      before: [
+        makeDomain({
+          name: "alpha-site.com",
+          apexName: "alpha-site.com",
+          redirect: null,
+          redirectStatusCode: null,
+        }),
+      ],
+    });
+    let caught: unknown = null;
+    try {
+      await runFlip(client, {
+        project: "alpha-site",
+        target: "apex",
+        confirm: true,
+      });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as Error).message).toContain("alpha-site");
+    expect((caught as Error).message).toContain("www");
+  });
+});
+
+describe("flipCanonical — apply changes", () => {
+  it("apex -> www: 2 PATCH calls in correct order (apex first sets redirect, then www nulls)", async () => {
+    // Currently canonical=apex, target=www
+    const client = makeFlipClient({
+      before: [
+        makeDomain({
+          name: "alpha-site.com",
+          redirect: null,
+          redirectStatusCode: null,
+        }),
+        makeDomain({
+          name: "www.alpha-site.com",
+          redirect: "alpha-site.com",
+          redirectStatusCode: 308,
+        }),
+      ],
+      after: [
+        makeDomain({
+          name: "alpha-site.com",
+          redirect: "www.alpha-site.com",
+          redirectStatusCode: 308,
+        }),
+        makeDomain({
+          name: "www.alpha-site.com",
+          redirect: null,
+          redirectStatusCode: null,
+        }),
+      ],
+    });
+    const result = (await runFlip(client, {
+      project: "alpha-site",
+      target: "www",
+      confirm: true,
+      skip_verify: true,
+    })) as { ok: boolean; changes: unknown[] };
+
+    expect(client.updateProjectDomain).toHaveBeenCalledTimes(2);
+    const calls = client.updateProjectDomain.mock.calls;
+    // First: set apex redirect to www
+    expect(calls[0][0]).toBe("alpha-site");
+    expect(calls[0][1]).toBe("alpha-site.com");
+    expect(calls[0][2]).toEqual({
+      redirect: "www.alpha-site.com",
+      redirectStatusCode: 308,
+    });
+    // Second: null out www
+    expect(calls[1][0]).toBe("alpha-site");
+    expect(calls[1][1]).toBe("www.alpha-site.com");
+    expect(calls[1][2]).toEqual({
+      redirect: null,
+      redirectStatusCode: null,
+    });
+    expect(result.ok).toBe(true);
+    expect((result.changes as unknown[]).length).toBeGreaterThan(0);
+  });
+
+  it("www -> apex: 2 PATCH calls in correct order (www first sets redirect, then apex nulls)", async () => {
+    // Currently canonical=www, target=apex
+    const client = makeFlipClient({
+      before: [
+        makeDomain({
+          name: "alpha-site.com",
+          redirect: "www.alpha-site.com",
+          redirectStatusCode: 308,
+        }),
+        makeDomain({
+          name: "www.alpha-site.com",
+          redirect: null,
+          redirectStatusCode: null,
+        }),
+      ],
+      after: [
+        makeDomain({
+          name: "alpha-site.com",
+          redirect: null,
+          redirectStatusCode: null,
+        }),
+        makeDomain({
+          name: "www.alpha-site.com",
+          redirect: "alpha-site.com",
+          redirectStatusCode: 308,
+        }),
+      ],
+    });
+    const result = (await runFlip(client, {
+      project: "alpha-site",
+      target: "apex",
+      confirm: true,
+      skip_verify: true,
+    })) as { ok: boolean };
+
+    expect(client.updateProjectDomain).toHaveBeenCalledTimes(2);
+    const calls = client.updateProjectDomain.mock.calls;
+    // First: set www redirect to apex
+    expect(calls[0][1]).toBe("www.alpha-site.com");
+    expect(calls[0][2]).toEqual({
+      redirect: "alpha-site.com",
+      redirectStatusCode: 308,
+    });
+    // Second: null out apex
+    expect(calls[1][1]).toBe("alpha-site.com");
+    expect(calls[1][2]).toEqual({
+      redirect: null,
+      redirectStatusCode: null,
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("statusCode=301 honored in PATCH body", async () => {
+    const client = makeFlipClient({
+      before: [
+        makeDomain({
+          name: "alpha-site.com",
+          redirect: "www.alpha-site.com",
+          redirectStatusCode: 308,
+        }),
+        makeDomain({
+          name: "www.alpha-site.com",
+          redirect: null,
+          redirectStatusCode: null,
+        }),
+      ],
+    });
+    await runFlip(client, {
+      project: "alpha-site",
+      target: "apex",
+      statusCode: 301,
+      confirm: true,
+      skip_verify: true,
+    });
+    const calls = client.updateProjectDomain.mock.calls;
+    // First call: set www redirect to apex with 301
+    expect(calls[0][2]).toEqual({
+      redirect: "alpha-site.com",
+      redirectStatusCode: 301,
+    });
+  });
+});
+
+describe("flipCanonical — verify", () => {
+  it("verify success: returns observed status and location", async () => {
+    // Currently apex canonical, target=www -> after flip apex should redirect to www
+    const client = makeFlipClient({
+      before: [
+        makeDomain({
+          name: "alpha-site.com",
+          redirect: null,
+          redirectStatusCode: null,
+        }),
+        makeDomain({
+          name: "www.alpha-site.com",
+          redirect: "alpha-site.com",
+          redirectStatusCode: 308,
+        }),
+      ],
+      after: [
+        makeDomain({
+          name: "alpha-site.com",
+          redirect: "www.alpha-site.com",
+          redirectStatusCode: 308,
+        }),
+        makeDomain({
+          name: "www.alpha-site.com",
+          redirect: null,
+          redirectStatusCode: null,
+        }),
+      ],
+    });
+
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes("//alpha-site.com")) {
+        return new Response(null, {
+          status: 308,
+          headers: { location: "https://www.alpha-site.com/" },
+        });
+      }
+      // www
+      return new Response(null, { status: 200 });
+    });
+
+    const result = (await runFlip(client, {
+      project: "alpha-site",
+      target: "www",
+      confirm: true,
+    })) as {
+      ok: boolean;
+      verified: {
+        apex: { url: string; status: number; location?: string };
+        www: { url: string; status: number; location?: string };
+      };
+      verified_at: string;
+    };
+
+    expect(result.ok).toBe(true);
+    expect(result.verified.apex.status).toBe(308);
+    expect(result.verified.apex.location).toBe("https://www.alpha-site.com/");
+    expect(result.verified.www.status).toBe(200);
+    // verified_at is ISO
+    expect(typeof result.verified_at).toBe("string");
+    expect(() => new Date(result.verified_at).toISOString()).not.toThrow();
+    expect(fetchSpy).toHaveBeenCalled();
+  });
+
+  it("verify retry: succeeds on second attempt after CDN propagation", async () => {
+    vi.useFakeTimers();
+    const client = makeFlipClient({
+      before: [
+        makeDomain({
+          name: "alpha-site.com",
+          redirect: null,
+          redirectStatusCode: null,
+        }),
+        makeDomain({
+          name: "www.alpha-site.com",
+          redirect: "alpha-site.com",
+          redirectStatusCode: 308,
+        }),
+      ],
+      after: [
+        makeDomain({
+          name: "alpha-site.com",
+          redirect: "www.alpha-site.com",
+          redirectStatusCode: 308,
+        }),
+        makeDomain({
+          name: "www.alpha-site.com",
+          redirect: null,
+          redirectStatusCode: null,
+        }),
+      ],
+    });
+
+    let apexCalls = 0;
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes("//alpha-site.com")) {
+        apexCalls++;
+        if (apexCalls === 1) {
+          // CDN hasn't propagated, returns 200 instead of expected 308
+          return new Response(null, { status: 200 });
+        }
+        return new Response(null, {
+          status: 308,
+          headers: { location: "https://www.alpha-site.com/" },
+        });
+      }
+      return new Response(null, { status: 200 });
+    });
+
+    const promise = runFlip(client, {
+      project: "alpha-site",
+      target: "www",
+      confirm: true,
+    });
+
+    // Advance through the retry sleep (5000ms)
+    await vi.advanceTimersByTimeAsync(6000);
+
+    const result = (await promise) as {
+      ok: boolean;
+      verified: { apex: { status: number; location?: string } };
+    };
+    expect(result.ok).toBe(true);
+    expect(result.verified.apex.status).toBe(308);
+    // We retried — fetch was called more than 2 times (apex+www on attempt 1, then again)
+    expect(fetchSpy.mock.calls.length).toBeGreaterThan(2);
+  });
+
+  it("verify gives up after 3 attempts: returns last result, ok still true", async () => {
+    vi.useFakeTimers();
+    const client = makeFlipClient({
+      before: [
+        makeDomain({
+          name: "alpha-site.com",
+          redirect: null,
+          redirectStatusCode: null,
+        }),
+        makeDomain({
+          name: "www.alpha-site.com",
+          redirect: "alpha-site.com",
+          redirectStatusCode: 308,
+        }),
+      ],
+      after: [
+        makeDomain({
+          name: "alpha-site.com",
+          redirect: "www.alpha-site.com",
+          redirectStatusCode: 308,
+        }),
+        makeDomain({
+          name: "www.alpha-site.com",
+          redirect: null,
+          redirectStatusCode: null,
+        }),
+      ],
+    });
+
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes("//alpha-site.com")) {
+        // Always wrong: 200 instead of 308
+        return new Response(null, { status: 200 });
+      }
+      return new Response(null, { status: 200 });
+    });
+
+    const promise = runFlip(client, {
+      project: "alpha-site",
+      target: "www",
+      confirm: true,
+    });
+    // Advance through 2 retry sleeps (5000ms each)
+    await vi.advanceTimersByTimeAsync(15000);
+
+    const result = (await promise) as {
+      ok: boolean;
+      verified: { apex: { status: number } };
+    };
+    expect(result.ok).toBe(true);
+    expect(result.verified.apex.status).toBe(200); // last (still wrong) value
+  });
+
+  it("skip_verify:true returns null verified and null verified_at, no fetch calls", async () => {
+    const client = makeFlipClient({
+      before: [
+        makeDomain({
+          name: "alpha-site.com",
+          redirect: null,
+          redirectStatusCode: null,
+        }),
+        makeDomain({
+          name: "www.alpha-site.com",
+          redirect: "alpha-site.com",
+          redirectStatusCode: 308,
+        }),
+      ],
+    });
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const result = (await runFlip(client, {
+      project: "alpha-site",
+      target: "www",
+      confirm: true,
+      skip_verify: true,
+    })) as { verified: unknown; verified_at: unknown };
+    expect(result.verified).toBeNull();
+    expect(result.verified_at).toBeNull();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("flipCanonical — rollback and output shape", () => {
+  it("rollback: when second PATCH fails, first PATCH is restored", async () => {
+    // canonical=apex, target=www
+    // First PATCH: apex.redirect = www, statusCode 308 (succeeds)
+    // Second PATCH: www null/null (fails)
+    // Rollback: apex.redirect = null, statusCode = null
+    const client: FlipClient = {
+      listProjectDomains: vi
+        .fn()
+        .mockResolvedValueOnce({
+          domains: [
+            makeDomain({
+              name: "alpha-site.com",
+              redirect: null,
+              redirectStatusCode: null,
+            }),
+            makeDomain({
+              name: "www.alpha-site.com",
+              redirect: "alpha-site.com",
+              redirectStatusCode: 308,
+            }),
+          ],
+        }),
+      updateProjectDomain: vi.fn(),
+    };
+    let callIdx = 0;
+    client.updateProjectDomain.mockImplementation(async (_p, _d, body) => {
+      callIdx++;
+      if (callIdx === 2) {
+        throw new Error("second patch failed");
+      }
+      return body;
+    });
+
+    let caught: unknown = null;
+    try {
+      await runFlip(client, {
+        project: "alpha-site",
+        target: "www",
+        confirm: true,
+        skip_verify: true,
+      });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(Error);
+
+    // Three calls total: forward apex, forward www (fails), rollback apex
+    expect(client.updateProjectDomain).toHaveBeenCalledTimes(3);
+    const calls = client.updateProjectDomain.mock.calls;
+    // Rollback is third call: restore apex to original (null/null)
+    expect(calls[2][1]).toBe("alpha-site.com");
+    expect(calls[2][2]).toEqual({
+      redirect: null,
+      redirectStatusCode: null,
+    });
+    // Error message mentions both original failure and rollback
+    expect((caught as Error).message).toContain("second patch failed");
+    expect((caught as Error).message.toLowerCase()).toContain("rollback");
+  });
+
+  it("changes[] entries have {domain, field, before, after} shape", async () => {
+    const client = makeFlipClient({
+      before: [
+        makeDomain({
+          name: "alpha-site.com",
+          redirect: null,
+          redirectStatusCode: null,
+        }),
+        makeDomain({
+          name: "www.alpha-site.com",
+          redirect: "alpha-site.com",
+          redirectStatusCode: 308,
+        }),
+      ],
+    });
+    const result = (await runFlip(client, {
+      project: "alpha-site",
+      target: "www",
+      confirm: true,
+      skip_verify: true,
+    })) as {
+      changes: Array<{ domain: string; field: string; before: unknown; after: unknown }>;
+    };
+    expect(result.changes.length).toBeGreaterThan(0);
+    for (const change of result.changes) {
+      expect(Object.keys(change).sort()).toEqual(
+        ["after", "before", "domain", "field"].sort(),
+      );
+      expect(typeof change.domain).toBe("string");
+      expect(["redirect", "redirectStatusCode"]).toContain(change.field);
+    }
+  });
+
+  it("before/after use slim shape with apex_redirect, www_redirect, status_codes (no upstream extras)", async () => {
+    const client = makeFlipClient({
+      before: [
+        makeDomain({
+          name: "alpha-site.com",
+          redirect: null,
+          redirectStatusCode: null,
+          gitBranch: "main",
+          createdAt: 1700000000000,
+          updatedAt: 1700000001000,
+        }),
+        makeDomain({
+          name: "www.alpha-site.com",
+          redirect: "alpha-site.com",
+          redirectStatusCode: 308,
+          gitBranch: "main",
+        }),
+      ],
+      after: [
+        makeDomain({
+          name: "alpha-site.com",
+          redirect: "www.alpha-site.com",
+          redirectStatusCode: 308,
+        }),
+        makeDomain({
+          name: "www.alpha-site.com",
+          redirect: null,
+          redirectStatusCode: null,
+        }),
+      ],
+    });
+    const result = (await runFlip(client, {
+      project: "alpha-site",
+      target: "www",
+      confirm: true,
+      skip_verify: true,
+    })) as {
+      before: Record<string, unknown>;
+      after: Record<string, unknown>;
+    };
+    const beforeKeys = Object.keys(result.before).sort();
+    expect(beforeKeys).toEqual(
+      ["apex_redirect", "status_codes", "www_redirect"].sort(),
+    );
+    const afterKeys = Object.keys(result.after).sort();
+    expect(afterKeys).toEqual(
+      ["apex_redirect", "status_codes", "www_redirect"].sort(),
+    );
+    const statusCodes = result.before.status_codes as Record<string, unknown>;
+    expect(Object.keys(statusCodes).sort()).toEqual(["apex", "www"].sort());
   });
 });

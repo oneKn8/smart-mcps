@@ -210,6 +210,130 @@ describe("VercelClient.listProjectDomains", () => {
   });
 });
 
+describe("VercelClient.updateProjectDomain", () => {
+  const updatedDomain = {
+    name: "www.alpha-site.com",
+    apexName: "alpha-site.com",
+    projectId: "prj_alpha",
+    redirect: "alpha-site.com",
+    redirectStatusCode: 308 as number | null,
+    verified: true,
+    gitBranch: null as string | null,
+    createdAt: 1700000000000,
+    updatedAt: 1700000005000,
+  };
+
+  it("calls correct PATCH URL with bearer header, JSON content-type, and JSON body", async () => {
+    process.env.VERCEL_TOKEN = "test_token";
+    let seenAuth: string | null = null;
+    let seenContentType: string | null = null;
+    let seenMethod: string | null = null;
+    let seenBody: unknown = null;
+    let seenUrl: string | null = null;
+    server.use(
+      http.patch(
+        "https://api.vercel.com/v9/projects/alpha-site/domains/www.alpha-site.com",
+        async ({ request }) => {
+          seenAuth = request.headers.get("authorization");
+          seenContentType = request.headers.get("content-type");
+          seenMethod = request.method;
+          seenUrl = request.url;
+          seenBody = await request.json();
+          return HttpResponse.json(updatedDomain);
+        },
+      ),
+    );
+    const client = new VercelClient();
+    await client.updateProjectDomain("alpha-site", "www.alpha-site.com", {
+      redirect: "alpha-site.com",
+      redirectStatusCode: 308,
+    });
+    expect(seenAuth).toBe("Bearer test_token");
+    expect(seenMethod).toBe("PATCH");
+    expect(seenContentType).toContain("application/json");
+    expect(seenBody).toEqual({
+      redirect: "alpha-site.com",
+      redirectStatusCode: 308,
+    });
+    expect(seenUrl).toContain("/v9/projects/alpha-site/domains/www.alpha-site.com");
+  });
+
+  it("includes teamId when VERCEL_TEAM_ID is set", async () => {
+    process.env.VERCEL_TOKEN = "test_token";
+    process.env.VERCEL_TEAM_ID = "team_xyz";
+    let seenUrl: string | null = null;
+    server.use(
+      http.patch(
+        "https://api.vercel.com/v9/projects/alpha-site/domains/www.alpha-site.com",
+        ({ request }) => {
+          seenUrl = request.url;
+          return HttpResponse.json(updatedDomain);
+        },
+      ),
+    );
+    const client = new VercelClient();
+    await client.updateProjectDomain("alpha-site", "www.alpha-site.com", {
+      redirect: "alpha-site.com",
+      redirectStatusCode: 308,
+    });
+    expect(seenUrl).toContain("teamId=team_xyz");
+  });
+
+  it("returns parsed updated domain object", async () => {
+    process.env.VERCEL_TOKEN = "test_token";
+    server.use(
+      http.patch(
+        "https://api.vercel.com/v9/projects/alpha-site/domains/www.alpha-site.com",
+        () => HttpResponse.json(updatedDomain),
+      ),
+    );
+    const client = new VercelClient();
+    const result = await client.updateProjectDomain("alpha-site", "www.alpha-site.com", {
+      redirect: "alpha-site.com",
+      redirectStatusCode: 308,
+    });
+    expect(result).toEqual(updatedDomain);
+  });
+
+  it("URL-encodes idOrName and domain in the path", async () => {
+    process.env.VERCEL_TOKEN = "test_token";
+    let seenUrl: string | null = null;
+    server.use(
+      http.patch(
+        "https://api.vercel.com/v9/projects/weird%20name/domains/www.alpha-site.com",
+        ({ request }) => {
+          seenUrl = request.url;
+          return HttpResponse.json(updatedDomain);
+        },
+      ),
+    );
+    const client = new VercelClient();
+    await client.updateProjectDomain("weird name", "www.alpha-site.com", {
+      redirect: "alpha-site.com",
+      redirectStatusCode: 308,
+    });
+    expect(seenUrl).toContain("weird%20name");
+    expect(seenUrl).toContain("www.alpha-site.com");
+  });
+
+  it("maps 404 to NotFoundError", async () => {
+    process.env.VERCEL_TOKEN = "test_token";
+    server.use(
+      http.patch(
+        "https://api.vercel.com/v9/projects/missing/domains/www.alpha-site.com",
+        () => HttpResponse.json({ error: "not found" }, { status: 404 }),
+      ),
+    );
+    const client = new VercelClient();
+    await expect(
+      client.updateProjectDomain("missing", "www.alpha-site.com", {
+        redirect: "missing.com",
+        redirectStatusCode: 308,
+      }),
+    ).rejects.toBeInstanceOf(NotFoundError);
+  });
+});
+
 describe("VercelClient.listDeployments", () => {
   const mockResponse = {
     deployments: [
