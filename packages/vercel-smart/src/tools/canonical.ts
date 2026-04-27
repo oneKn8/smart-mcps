@@ -138,3 +138,42 @@ export const canonicalAudit = defineTool<Input, CanonicalAuditOutput, Context>({
     return classify(input.project, domains as ReadonlyArray<UpstreamDomain>);
   },
 });
+
+interface RedirectEntry {
+  from: string;
+  to: string;
+  statusCode: number;
+}
+
+interface RedirectsAuditOutput {
+  project: string;
+  redirects: RedirectEntry[];
+  count: number;
+}
+
+interface ConfiguredRedirectDomain extends UpstreamDomain {
+  redirect: string;
+  redirectStatusCode: number;
+}
+
+function hasConfiguredRedirect(d: UpstreamDomain): d is ConfiguredRedirectDomain {
+  return d.redirect !== null && d.redirectStatusCode !== null;
+}
+
+export const redirectsAudit = defineTool<Input, RedirectsAuditOutput, Context>({
+  name: "redirects_audit",
+  description: "Show every domain on a project that has a configured redirect.",
+  inputSchema,
+  handler: async (input, context) => {
+    const { domains } = await context.client.listProjectDomains(input.project);
+    const upstream = domains as ReadonlyArray<UpstreamDomain>;
+    const redirects: RedirectEntry[] = upstream
+      .filter(hasConfiguredRedirect)
+      .map((d) => ({
+        from: d.name,
+        to: d.redirect,
+        statusCode: d.redirectStatusCode,
+      }));
+    return { project: input.project, redirects, count: redirects.length };
+  },
+});

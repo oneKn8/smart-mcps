@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { z } from "zod";
-import { canonicalAudit } from "../canonical.js";
+import { canonicalAudit, redirectsAudit } from "../canonical.js";
 
 type FakeClient = {
   listProjectDomains: ReturnType<typeof vi.fn>;
@@ -359,5 +359,175 @@ describe("canonicalAudit — handler behavior", () => {
     expect(result.apex?.name).toBe("alpha-site.com");
     expect(result.www?.name).toBe("www.alpha-site.com");
     expect(result.canonical).toBe("apex");
+  });
+});
+
+type RedirectEntry = { from: string; to: string; statusCode: number };
+type RedirectsAuditOutput = {
+  project: string;
+  redirects: RedirectEntry[];
+  count: number;
+};
+
+async function runRedirects(
+  client: FakeClient,
+  project: string,
+): Promise<RedirectsAuditOutput> {
+  const input = redirectsAudit.inputSchema.parse({ project }) as { project: string };
+  return (await redirectsAudit.handler(input, {
+    client: client as unknown as never,
+  })) as RedirectsAuditOutput;
+}
+
+describe("redirectsAudit", () => {
+  it("has correct name, description, and zod input schema", () => {
+    expect(redirectsAudit.name).toBe("redirects_audit");
+    expect(redirectsAudit.description).toBe(
+      "Show every domain on a project that has a configured redirect.",
+    );
+    const parsed = redirectsAudit.inputSchema.parse({ project: "alpha-site" }) as {
+      project: string;
+    };
+    expect(parsed.project).toBe("alpha-site");
+    expect(redirectsAudit.inputSchema).toBeInstanceOf(z.ZodType);
+  });
+
+  it("rejects empty project string", () => {
+    expect(() => redirectsAudit.inputSchema.parse({ project: "" })).toThrow();
+  });
+
+  it("calls client.listProjectDomains with input.project", async () => {
+    const client = makeClient({ domains: [] });
+    await runRedirects(client, "alpha-site");
+    expect(client.listProjectDomains).toHaveBeenCalledWith("alpha-site");
+  });
+
+  it("returns empty redirects when no domain has a redirect", async () => {
+    const client = makeClient({
+      domains: [
+        makeDomain({ name: "alpha-site.com", redirect: null, redirectStatusCode: null }),
+        makeDomain({ name: "www.alpha-site.com", redirect: null, redirectStatusCode: null }),
+      ],
+    });
+    const result = await runRedirects(client, "alpha-site");
+    expect(result).toEqual({ project: "alpha-site", redirects: [], count: 0 });
+  });
+
+  it("returns a single redirect with exact shape", async () => {
+    const client = makeClient({
+      domains: [
+        makeDomain({ name: "alpha-site.com", redirect: null, redirectStatusCode: null }),
+        makeDomain({
+          name: "www.alpha-site.com",
+          redirect: "alpha-site.com",
+          redirectStatusCode: 308,
+        }),
+      ],
+    });
+    const result = await runRedirects(client, "alpha-site");
+    expect(result.count).toBe(1);
+    expect(result.redirects).toHaveLength(1);
+    expect(result.redirects[0]).toEqual({
+      from: "www.alpha-site.com",
+      to: "alpha-site.com",
+      statusCode: 308,
+    });
+  });
+
+  it("returns multiple redirects with their own status codes", async () => {
+    const client = makeClient({
+      domains: [
+        makeDomain({
+          name: "alpha-site.com",
+          redirect: "canonical.com",
+          redirectStatusCode: 301,
+        }),
+        makeDomain({
+          name: "www.alpha-site.com",
+          redirect: "alpha-site.com",
+          redirectStatusCode: 308,
+        }),
+        makeDomain({
+          name: "beta-site.com",
+          redirect: "alpha-site.com",
+          redirectStatusCode: 302,
+        }),
+        makeDomain({
+          name: "gamma-site.com",
+          redirect: null,
+          redirectStatusCode: null,
+        }),
+      ],
+    });
+    const result = await runRedirects(client, "alpha-site");
+    expect(result.count).toBe(3);
+    expect(result.redirects).toContainEqual({
+      from: "alpha-site.com",
+      to: "canonical.com",
+      statusCode: 301,
+    });
+    expect(result.redirects).toContainEqual({
+      from: "www.alpha-site.com",
+      to: "alpha-site.com",
+      statusCode: 308,
+    });
+    expect(result.redirects).toContainEqual({
+      from: "beta-site.com",
+      to: "alpha-site.com",
+      statusCode: 302,
+    });
+  });
+
+  it("skips domain with redirect set but statusCode null", async () => {
+    const client = makeClient({
+      domains: [
+        makeDomain({
+          name: "alpha-site.com",
+          redirect: "x.com",
+          redirectStatusCode: null,
+        }),
+        makeDomain({
+          name: "www.alpha-site.com",
+          redirect: "alpha-site.com",
+          redirectStatusCode: 308,
+        }),
+      ],
+    });
+    const result = await runRedirects(client, "alpha-site");
+    expect(result.count).toBe(1);
+    expect(result.redirects[0]?.from).toBe("www.alpha-site.com");
+  });
+
+  it("strips upstream extras from each redirect entry (only 3 keys)", async () => {
+    const client = makeClient({
+      domains: [
+        makeDomain({
+          name: "www.alpha-site.com",
+          redirect: "alpha-site.com",
+          redirectStatusCode: 308,
+          gitBranch: "main",
+          createdAt: 1700000000000,
+          updatedAt: 1700000001000,
+        }),
+      ],
+    });
+    const result = await runRedirects(client, "alpha-site");
+    expect(result.redirects).toHaveLength(1);
+    const keys = Object.keys(result.redirects[0] as object).sort();
+    expect(keys).toEqual(["from", "statusCode", "to"]);
+  });
+
+  it("echoes the input project name in result.project", async () => {
+    const client = makeClient({
+      domains: [
+        makeDomain({
+          name: "www.alpha-site.com",
+          redirect: "alpha-site.com",
+          redirectStatusCode: 308,
+        }),
+      ],
+    });
+    const result = await runRedirects(client, "alpha-site");
+    expect(result.project).toBe("alpha-site");
   });
 });
