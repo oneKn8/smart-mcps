@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach, beforeEach } from "vitest";
 import { setupServer } from "msw/node";
 import { http, HttpResponse } from "msw";
-import { AuthError, RateLimitError } from "smart-mcp-core";
+import { AuthError, NotFoundError, RateLimitError } from "smart-mcp-core";
 import { VercelClient } from "../client.js";
 
 const server = setupServer();
@@ -119,5 +119,93 @@ describe("VercelClient.listProjects", () => {
     );
     // fetchJson default: initial + 3 retries = 4 calls on persistent 429
     expect(calls).toBe(4);
+  });
+});
+
+describe("VercelClient.listProjectDomains", () => {
+  const mockResponse = {
+    domains: [
+      {
+        name: "alpha-site.com",
+        apexName: "alpha-site.com",
+        projectId: "prj_alpha",
+        redirect: null as string | null,
+        redirectStatusCode: null as number | null,
+        verified: true,
+        gitBranch: null as string | null,
+        createdAt: 1700000000000,
+        updatedAt: 1700000001000,
+      },
+    ],
+  };
+
+  it("calls correct URL with bearer header", async () => {
+    process.env.VERCEL_TOKEN = "test_token";
+    let seenAuth: string | null = null;
+    let seenUrl: string | null = null;
+    server.use(
+      http.get(
+        "https://api.vercel.com/v9/projects/alpha-site/domains",
+        ({ request }) => {
+          seenAuth = request.headers.get("authorization");
+          seenUrl = request.url;
+          return HttpResponse.json(mockResponse);
+        },
+      ),
+    );
+    const client = new VercelClient();
+    await client.listProjectDomains("alpha-site");
+    expect(seenAuth).toBe("Bearer test_token");
+    expect(seenUrl).toContain("/v9/projects/alpha-site/domains");
+  });
+
+  it("includes teamId when VERCEL_TEAM_ID is set", async () => {
+    process.env.VERCEL_TOKEN = "test_token";
+    process.env.VERCEL_TEAM_ID = "team_xyz";
+    let seenUrl: string | null = null;
+    server.use(
+      http.get(
+        "https://api.vercel.com/v9/projects/alpha-site/domains",
+        ({ request }) => {
+          seenUrl = request.url;
+          return HttpResponse.json(mockResponse);
+        },
+      ),
+    );
+    const client = new VercelClient();
+    await client.listProjectDomains("alpha-site");
+    expect(seenUrl).toContain("teamId=team_xyz");
+  });
+
+  it("returns parsed body unchanged", async () => {
+    process.env.VERCEL_TOKEN = "test_token";
+    server.use(
+      http.get(
+        "https://api.vercel.com/v9/projects/alpha-site/domains",
+        () => HttpResponse.json(mockResponse),
+      ),
+    );
+    const client = new VercelClient();
+    const result = await client.listProjectDomains("alpha-site");
+    expect(result).toEqual(mockResponse);
+  });
+
+  it("maps 404 to NotFoundError mentioning the project name", async () => {
+    process.env.VERCEL_TOKEN = "test_token";
+    server.use(
+      http.get(
+        "https://api.vercel.com/v9/projects/missing-project/domains",
+        () =>
+          HttpResponse.json({ error: "not found" }, { status: 404 }),
+      ),
+    );
+    const client = new VercelClient();
+    try {
+      await client.listProjectDomains("missing-project");
+      throw new Error("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(NotFoundError);
+      expect((err as Error).message).toContain("Project not found: missing-project");
+    }
   });
 });

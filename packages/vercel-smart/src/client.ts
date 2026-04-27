@@ -1,4 +1,4 @@
-import { loadCreds, fetchJson, AuthError } from "smart-mcp-core";
+import { loadCreds, fetchJson, AuthError, NotFoundError } from "smart-mcp-core";
 
 export type VercelCreds = {
   VERCEL_TOKEN: string;
@@ -14,6 +14,23 @@ export interface ListProjectsResponse {
 
 export interface ListProjectsOptions {
   limit?: number;
+}
+
+export interface ProjectDomain {
+  name: string;
+  apexName: string;
+  projectId: string;
+  redirect: string | null;
+  redirectStatusCode: number | null;
+  verified: boolean;
+  gitBranch?: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface ListProjectDomainsResponse {
+  domains: ProjectDomain[];
+  pagination?: { count: number; next: string | null };
 }
 
 export class VercelClient {
@@ -51,6 +68,31 @@ export class VercelClient {
           "Vercel rejected the token. Check VERCEL_TOKEN.",
           { detail: err.detail, cause: err },
         );
+      }
+      throw err;
+    }
+  }
+
+  async listProjectDomains(idOrName: string): Promise<ListProjectDomainsResponse> {
+    const searchParams: Record<string, string | number | undefined> = {};
+    if (this.creds.VERCEL_TEAM_ID) {
+      searchParams.teamId = this.creds.VERCEL_TEAM_ID;
+    }
+
+    try {
+      return await fetchJson<ListProjectDomainsResponse>(
+        `https://api.vercel.com/v9/projects/${encodeURIComponent(idOrName)}/domains`,
+        {
+          token: this.creds.VERCEL_TOKEN,
+          searchParams,
+        },
+      );
+    } catch (err) {
+      if (err instanceof NotFoundError) {
+        throw new NotFoundError(`Project not found: ${idOrName}`, {
+          detail: err.detail,
+          cause: err,
+        });
       }
       throw err;
     }
