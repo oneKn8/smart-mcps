@@ -48,11 +48,12 @@ describe("smartProject — resolution", () => {
     const result = (await smartProject.handler(
       smartProject.inputSchema.parse({ query: "alpha-site" }) as { query: string },
       { client: client as unknown as never },
-    )) as { id: string; name: string; framework: string | null };
+    )) as { id: string; name: string; framework: string | null; team: string };
     expect(result).toEqual({
       id: "prj_a",
       name: "alpha-site",
       framework: "nextjs",
+      team: "personal",
     });
   });
 
@@ -88,13 +89,37 @@ describe("smartProject — resolution", () => {
       smartProject.inputSchema.parse({ query: "alpha-site" }) as { query: string },
       { client: client as unknown as never },
     )) as Record<string, unknown>;
-    expect(Object.keys(result).sort()).toEqual(["framework", "id", "name"]);
+    expect(Object.keys(result).sort()).toEqual(
+      ["framework", "id", "name", "team"].sort(),
+    );
     expect(result).not.toHaveProperty("accountId");
     expect(result).not.toHaveProperty("env");
     expect(result).not.toHaveProperty("link");
     expect(result).not.toHaveProperty("latestDeployments");
     expect(result).not.toHaveProperty("updatedAt");
     expect(result).not.toHaveProperty("createdAt");
+  });
+
+  it("propagates team field from upstream project (slug for team projects)", async () => {
+    const client = makeClient([
+      { id: "prj_a", name: "alpha-site", framework: "nextjs", team: "alpha-team" },
+    ]);
+    const result = (await smartProject.handler(
+      smartProject.inputSchema.parse({ query: "alpha-site" }) as { query: string },
+      { client: client as unknown as never },
+    )) as { team: string };
+    expect(result.team).toBe("alpha-team");
+  });
+
+  it("defaults team='personal' when upstream omits it", async () => {
+    const client = makeClient([
+      { id: "prj_a", name: "alpha-site", framework: "nextjs" },
+    ]);
+    const result = (await smartProject.handler(
+      smartProject.inputSchema.parse({ query: "alpha-site" }) as { query: string },
+      { client: client as unknown as never },
+    )) as { team: string };
+    expect(result.team).toBe("personal");
   });
 
   it("returns framework: null when upstream framework is null", async () => {
@@ -521,6 +546,33 @@ describe("dailyStatus — handler", () => {
     expect(out.by_project).toHaveLength(3);
     const names = out.by_project.map((p) => p.project).sort();
     expect(names).toEqual(["alpha-site", "beta-site", "gamma-site"]);
+  });
+
+  it("by_project entries include team field (defaults to 'personal' when upstream omits it)", async () => {
+    const t = NOW - 1 * 3600 * 1000;
+    const client = makeStatusClient(
+      [
+        { id: "prj_p", name: "personal-site", updatedAt: NOW },
+        { id: "prj_t", name: "team-site", updatedAt: NOW, team: "alpha-team" },
+      ],
+      {
+        prj_p: [
+          { uid: "p1", name: "personal-site", url: "p1.vercel.app", state: "READY", createdAt: t, target: "production" },
+        ],
+        prj_t: [
+          { uid: "t1", name: "team-site", url: "t1.vercel.app", state: "READY", createdAt: t, target: "production" },
+        ],
+      },
+    );
+    const out = (await dailyStatus.handler(
+      dailyStatus.inputSchema.parse({}) as { hours: number },
+      { client: client as unknown as never },
+    )) as { by_project: Array<{ project: string; team: string }> };
+    const byName = Object.fromEntries(
+      out.by_project.map((p) => [p.project, p.team]),
+    );
+    expect(byName["personal-site"]).toBe("personal");
+    expect(byName["team-site"]).toBe("alpha-team");
   });
 
   it("latest slim shape strips extra fields (only state, createdAt, url, target)", async () => {

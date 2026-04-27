@@ -16,6 +16,7 @@ type Output = {
   id: string;
   name: string;
   framework: string | null;
+  team: string;
 };
 
 export const smartProject = defineTool<Input, Output, Context>({
@@ -34,11 +35,13 @@ export const smartProject = defineTool<Input, Output, Context>({
       id: string;
       name: string;
       framework?: string | null;
+      team?: string;
     };
     return {
       id: p.id,
       name: p.name,
       framework: p.framework ?? null,
+      team: p.team ?? "personal",
     };
   },
 });
@@ -58,6 +61,7 @@ type LatestSlim = {
 
 type ProjectStatus = {
   project: string;
+  team: string;
   ready: number;
   error: number;
   latest: LatestSlim | null;
@@ -81,6 +85,7 @@ type DailyStatusOutput = {
   };
   by_project: Array<{
     project: string;
+    team: string;
     ready: number;
     error: number;
     building: number;
@@ -127,6 +132,7 @@ export const dailyStatus = defineTool<
         id: string;
         name: string;
         updatedAt?: number;
+        team?: string;
       };
       const { deployments } = await context.client.listDeployments({
         projectId: p.id,
@@ -160,6 +166,7 @@ export const dailyStatus = defineTool<
 
       perProject.push({
         project: p.name,
+        team: p.team ?? "personal",
         ready,
         error: errCount,
         building,
@@ -199,6 +206,7 @@ export const dailyStatus = defineTool<
       deployments: totals,
       by_project: perProject.map((p) => ({
         project: p.project,
+        team: p.team,
         ready: p.ready,
         error: p.error,
         building: p.building,

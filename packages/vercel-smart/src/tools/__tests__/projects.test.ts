@@ -18,7 +18,9 @@ function makeClient(response: { projects: Array<Record<string, unknown>>; pagina
 describe("listProjects — metadata", () => {
   it("has correct name, description, and zod input schema", () => {
     expect(listProjects.name).toBe("list_projects");
-    expect(listProjects.description).toBe("List Vercel projects.");
+    expect(listProjects.description).toBe(
+      "List Vercel projects across all accessible teams.",
+    );
     // smoke check: parsing an empty object should succeed because limit has a default
     const parsed = listProjects.inputSchema.parse({}) as { limit: number };
     expect(parsed.limit).toBe(50);
@@ -93,6 +95,7 @@ describe("listProjects — output mapping", () => {
       framework: "nextjs",
       updatedAt: 1700000000000,
       latestDeploymentUrl: "alpha.vercel.app",
+      team: "personal",
     });
   });
 
@@ -178,7 +181,7 @@ describe("listProjects — output mapping", () => {
     const project = result.projects[0]!;
     const keys = Object.keys(project).sort();
     expect(keys).toEqual(
-      ["framework", "id", "latestDeploymentUrl", "name", "updatedAt"].sort(),
+      ["framework", "id", "latestDeploymentUrl", "name", "team", "updatedAt"].sort(),
     );
     // Belt-and-suspenders: explicitly assert each forbidden field is absent.
     expect(project).not.toHaveProperty("accountId");
@@ -187,5 +190,73 @@ describe("listProjects — output mapping", () => {
     expect(project).not.toHaveProperty("createdAt");
     expect(project).not.toHaveProperty("targets");
     expect(project).not.toHaveProperty("latestDeployments");
+  });
+});
+
+describe("listProjects — team field (multi-team support)", () => {
+  it("propagates upstream team field (slug for team projects)", async () => {
+    const client = makeClient({
+      projects: [
+        {
+          id: "prj_team",
+          name: "team-site",
+          framework: "nextjs",
+          updatedAt: 1700000000000,
+          latestDeployments: [],
+          team: "alpha-team",
+        },
+      ],
+    });
+    const result = (await listProjects.handler(
+      listProjects.inputSchema.parse({}) as { limit: number },
+      { client: client as unknown as never },
+    )) as { projects: Array<{ team: string }> };
+    expect(result.projects[0]?.team).toBe("alpha-team");
+  });
+
+  it("defaults team='personal' when upstream omits it", async () => {
+    const client = makeClient({
+      projects: [
+        {
+          id: "prj_p",
+          name: "personal-site",
+          framework: null,
+          updatedAt: 1700000000000,
+        },
+      ],
+    });
+    const result = (await listProjects.handler(
+      listProjects.inputSchema.parse({}) as { limit: number },
+      { client: client as unknown as never },
+    )) as { projects: Array<{ team: string }> };
+    expect(result.projects[0]?.team).toBe("personal");
+  });
+
+  it("preserves per-row team assignment across mixed projects", async () => {
+    const client = makeClient({
+      projects: [
+        {
+          id: "prj_p",
+          name: "personal-site",
+          framework: null,
+          updatedAt: 1,
+          team: "personal",
+        },
+        {
+          id: "prj_t",
+          name: "team-site",
+          framework: null,
+          updatedAt: 2,
+          team: "alpha-team",
+        },
+      ],
+    });
+    const result = (await listProjects.handler(
+      listProjects.inputSchema.parse({}) as { limit: number },
+      { client: client as unknown as never },
+    )) as { projects: Array<{ name: string; team: string }> };
+    const byName = Object.fromEntries(result.projects.map((p) => [p.name, p.team]));
+    expect(byName["personal-site"]).toBe("personal");
+    expect(byName["team-site"]).toBe("alpha-team");
   });
 });

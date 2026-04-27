@@ -18,6 +18,7 @@ type SlimProject = {
   framework: string | null;
   updatedAt: number;
   latestDeploymentUrl: string | null;
+  team: string;
 };
 
 type Output = {
@@ -33,7 +34,7 @@ function pickLatestDeploymentUrl(value: unknown): string | null {
 
 export const listProjects = defineTool<Input, Output, Context>({
   name: "list_projects",
-  description: "List Vercel projects.",
+  description: "List Vercel projects across all accessible teams.",
   // Cast required because z.ZodType<Input> is invariant; ZodDefault's input
   // type is `number | undefined` but its output type is `number`.
   inputSchema: inputSchema as unknown as z.ZodType<Input>,
@@ -46,6 +47,7 @@ export const listProjects = defineTool<Input, Output, Context>({
         framework: (p.framework ?? null) as string | null,
         updatedAt: p.updatedAt as number,
         latestDeploymentUrl: pickLatestDeploymentUrl(p.latestDeployments),
+        team: (p as { team?: string }).team ?? "personal",
       })),
       count: projects.length,
     };
