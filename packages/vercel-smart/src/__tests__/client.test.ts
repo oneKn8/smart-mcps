@@ -209,3 +209,91 @@ describe("VercelClient.listProjectDomains", () => {
     }
   });
 });
+
+describe("VercelClient.listDeployments", () => {
+  const mockResponse = {
+    deployments: [
+      {
+        uid: "dpl_1",
+        name: "alpha-site",
+        url: "alpha-site-abc.vercel.app",
+        state: "READY",
+        createdAt: 1700000000000,
+        target: "production",
+      },
+    ],
+    pagination: { count: 1, next: null as string | null },
+  };
+
+  it("calls correct URL with bearer header (no projectId filter when not given)", async () => {
+    process.env.VERCEL_TOKEN = "test_token";
+    let seenAuth: string | null = null;
+    let seenUrl: string | null = null;
+    server.use(
+      http.get("https://api.vercel.com/v6/deployments", ({ request }) => {
+        seenAuth = request.headers.get("authorization");
+        seenUrl = request.url;
+        return HttpResponse.json(mockResponse);
+      }),
+    );
+    const client = new VercelClient();
+    await client.listDeployments({});
+    expect(seenAuth).toBe("Bearer test_token");
+    expect(seenUrl).not.toContain("projectId=");
+  });
+
+  it("filters by projectId when given", async () => {
+    process.env.VERCEL_TOKEN = "test_token";
+    let seenUrl: string | null = null;
+    server.use(
+      http.get("https://api.vercel.com/v6/deployments", ({ request }) => {
+        seenUrl = request.url;
+        return HttpResponse.json(mockResponse);
+      }),
+    );
+    const client = new VercelClient();
+    await client.listDeployments({ projectId: "prj_alpha" });
+    expect(seenUrl).toContain("projectId=prj_alpha");
+  });
+
+  it("honors limit", async () => {
+    process.env.VERCEL_TOKEN = "test_token";
+    let seenUrl: string | null = null;
+    server.use(
+      http.get("https://api.vercel.com/v6/deployments", ({ request }) => {
+        seenUrl = request.url;
+        return HttpResponse.json(mockResponse);
+      }),
+    );
+    const client = new VercelClient();
+    await client.listDeployments({ limit: 50 });
+    expect(seenUrl).toContain("limit=50");
+  });
+
+  it("includes teamId when VERCEL_TEAM_ID is set", async () => {
+    process.env.VERCEL_TOKEN = "test_token";
+    process.env.VERCEL_TEAM_ID = "team_xyz";
+    let seenUrl: string | null = null;
+    server.use(
+      http.get("https://api.vercel.com/v6/deployments", ({ request }) => {
+        seenUrl = request.url;
+        return HttpResponse.json(mockResponse);
+      }),
+    );
+    const client = new VercelClient();
+    await client.listDeployments({ projectId: "prj_alpha", limit: 20 });
+    expect(seenUrl).toContain("teamId=team_xyz");
+  });
+
+  it("returns parsed body unchanged", async () => {
+    process.env.VERCEL_TOKEN = "test_token";
+    server.use(
+      http.get("https://api.vercel.com/v6/deployments", () =>
+        HttpResponse.json(mockResponse),
+      ),
+    );
+    const client = new VercelClient();
+    const result = await client.listDeployments({ projectId: "prj_alpha", limit: 20 });
+    expect(result).toEqual(mockResponse);
+  });
+});
