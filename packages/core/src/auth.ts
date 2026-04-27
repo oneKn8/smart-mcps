@@ -1,12 +1,18 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { AuthError } from "./errors.js";
+import { readDotenvFile } from "./dotenv.js";
+
+// Shared dotenv file used across all smart-mcps. Tests override via `sharedEnvPath` (approach A:
+// explicit injection — matches existing `configPaths` pattern, no env-var magic).
+const DEFAULT_SHARED_ENV_PATH = "~/.config/smart-mcps/.env";
 
 export type LoadCredsOpts<T extends Record<string, string>> = {
   serviceName: string;
   required: ReadonlyArray<keyof T>;
   optional?: ReadonlyArray<keyof T>;
   configPaths?: string[];
+  sharedEnvPath?: string;
 };
 
 export function loadCreds<T extends Record<string, string>>(
@@ -14,13 +20,15 @@ export function loadCreds<T extends Record<string, string>>(
 ): T {
   const { serviceName, required, optional = [] } = opts;
   const configPaths = (opts.configPaths ?? defaultConfigPaths(serviceName)).map(expandHome);
+  const sharedEnvPath = expandHome(opts.sharedEnvPath ?? DEFAULT_SHARED_ENV_PATH);
+  const fromSharedEnv = readDotenvFile(sharedEnvPath);
   const fromFile = readFirstConfig(configPaths);
 
   const result: Partial<Record<keyof T, string>> = {};
   const missing: string[] = [];
 
   for (const key of required) {
-    const value = process.env[key as string] ?? fromFile[key as string];
+    const value = resolveValue(key as string, fromSharedEnv, fromFile);
     if (value === undefined || value === "") {
       missing.push(key as string);
     } else {
@@ -29,7 +37,7 @@ export function loadCreds<T extends Record<string, string>>(
   }
 
   for (const key of optional) {
-    const value = process.env[key as string] ?? fromFile[key as string];
+    const value = resolveValue(key as string, fromSharedEnv, fromFile);
     if (value !== undefined && value !== "") {
       result[key] = value;
     }
@@ -39,13 +47,23 @@ export function loadCreds<T extends Record<string, string>>(
     throw new AuthError(
       `Missing required credentials for ${serviceName}: ${missing.join(", ")}`,
       {
-        recovery: `Set as env vars or add to a config file at one of: ${configPaths.join(", ")}`,
-        detail: { missing, serviceName, configPaths },
+        recovery:
+          `Set as env vars, add to the shared .env file at ${sharedEnvPath}, ` +
+          `or add to a per-service config file at one of: ${configPaths.join(", ")}`,
+        detail: { missing, serviceName, sharedEnvPath, configPaths },
       },
     );
   }
 
   return result as T;
+}
+
+function resolveValue(
+  key: string,
+  fromSharedEnv: Record<string, string>,
+  fromFile: Record<string, string>,
+): string | undefined {
+  return process.env[key] ?? fromSharedEnv[key] ?? fromFile[key];
 }
 
 function defaultConfigPaths(serviceName: string): string[] {
