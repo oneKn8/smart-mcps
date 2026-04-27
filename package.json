@@ -2,7 +2,7 @@
   "name": "smart-mcps",
   "version": "0.1.0",
   "private": true,
-  "description": "Personal smart-MCP toolbelt monorepo (Vercel, GSC, GA, Hetzner, Coolify)",
+  "description": "Personal smart-MCP toolbelt monorepo (Vercel, GSC, GA, Hetzner, Coolify, Runpod)",
   "type": "module",
   "engines": {
     "node": ">=22.0.0"

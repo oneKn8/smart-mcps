@@ -46,7 +46,7 @@ describe("SmartMcpError", () => {
 
   it("AmbiguousMatchError exposes candidates", () => {
     const err = new AmbiguousMatchError("multiple matches", {
-      candidates: [{ score: 0.9, label: "alpha-team-com" }],
+      candidates: [{ score: 0.9, label: "alpha-site" }],
     });
     expect(err.candidates).toHaveLength(1);
   });

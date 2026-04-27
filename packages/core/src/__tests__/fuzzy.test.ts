@@ -3,21 +3,21 @@ import { fuzzyRank, resolveOne, type FuzzyMatch } from "../fuzzy.js";
 import { AmbiguousMatchError, NotFoundError } from "../errors.js";
 
 const items = [
-  { id: "1", name: "alpha-team-com" },
-  { id: "2", name: "acme-marketing" },
-  { id: "3", name: "acme-staging" },
+  { id: "1", name: "alpha-site" },
+  { id: "2", name: "alpha-marketing" },
+  { id: "3", name: "alpha-staging" },
   { id: "4", name: "another-project" },
 ];
 
 describe("fuzzyRank", () => {
   it("returns sorted matches by score desc", () => {
-    const matches = fuzzyRank("alpha-team", items, i => i.name);
-    expect(matches[0]?.item.name).toBe("alpha-team-com");
+    const matches = fuzzyRank("alpha-s", items, i => i.name);
+    expect(matches[0]?.item.name).toBe("alpha-site");
     expect(matches[0]!.score).toBeGreaterThan(matches[1]!.score);
   });
 
   it("scores exact match at 1.0", () => {
-    const matches = fuzzyRank("alpha-team-com", items, i => i.name);
+    const matches = fuzzyRank("alpha-site", items, i => i.name);
     expect(matches[0]?.score).toBe(1);
   });
 
@@ -30,13 +30,13 @@ describe("fuzzyRank", () => {
 
 describe("resolveOne", () => {
   it("returns single item when score >= threshold", () => {
-    const result = resolveOne("alpha-team", items, i => i.name, { threshold: 0.5 });
+    const result = resolveOne("alpha-s", items, i => i.name, { threshold: 0.5 });
     expect(result.id).toBe("1");
   });
 
   it("throws AmbiguousMatchError when top score below threshold", () => {
     expect(() =>
-      resolveOne("rhem", items, i => i.name, { threshold: 0.99 }),
+      resolveOne("alph", items, i => i.name, { threshold: 0.99 }),
     ).toThrowError(AmbiguousMatchError);
   });
 
@@ -48,7 +48,7 @@ describe("resolveOne", () => {
 
   it("AmbiguousMatchError carries top 3 candidates", () => {
     try {
-      resolveOne("rhem", items, i => i.name, { threshold: 0.99 });
+      resolveOne("alph", items, i => i.name, { threshold: 0.99 });
       expect.fail("should have thrown");
     } catch (err) {
       expect(err).toBeInstanceOf(AmbiguousMatchError);
