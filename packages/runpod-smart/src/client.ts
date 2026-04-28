@@ -1,4 +1,4 @@
-import { loadCreds, fetchJson, AuthError } from "smart-mcp-core";
+import { loadCreds, fetchJson, AuthError, NotFoundError } from "smart-mcp-core";
 
 export type RunpodCreds = {
   RUNPOD_API_KEY: string;
@@ -68,5 +68,75 @@ export class RunpodClient {
       }
       throw err;
     }
+  }
+
+  // ---------- Single-pod operations ----------
+
+  async getPod(podId: string): Promise<Pod> {
+    const url = `https://rest.runpod.io/v1/pods/${encodeURIComponent(podId)}`;
+    try {
+      return await fetchJson<Pod>(url, {
+        token: this.creds.RUNPOD_API_KEY,
+      });
+    } catch (err) {
+      throw this.mapPodError(err, podId);
+    }
+  }
+
+  async startPod(podId: string): Promise<Pod> {
+    const url = `https://rest.runpod.io/v1/pods/${encodeURIComponent(podId)}/start`;
+    try {
+      return await fetchJson<Pod>(url, {
+        method: "POST",
+        token: this.creds.RUNPOD_API_KEY,
+      });
+    } catch (err) {
+      throw this.mapPodError(err, podId);
+    }
+  }
+
+  async stopPod(podId: string): Promise<Pod> {
+    const url = `https://rest.runpod.io/v1/pods/${encodeURIComponent(podId)}/stop`;
+    try {
+      return await fetchJson<Pod>(url, {
+        method: "POST",
+        token: this.creds.RUNPOD_API_KEY,
+      });
+    } catch (err) {
+      throw this.mapPodError(err, podId);
+    }
+  }
+
+  async terminatePod(podId: string): Promise<void> {
+    const url = `https://rest.runpod.io/v1/pods/${encodeURIComponent(podId)}`;
+    try {
+      // Runpod returns 204 No Content on successful delete; fetchJson maps
+      // 204 to `undefined`. We explicitly drop the body either way.
+      await fetchJson<unknown>(url, {
+        method: "DELETE",
+        token: this.creds.RUNPOD_API_KEY,
+      });
+    } catch (err) {
+      throw this.mapPodError(err, podId);
+    }
+  }
+
+  // Wraps fetchJson errors raised by single-pod endpoints into our public
+  // contract: 404 → NotFoundError("Pod not found: <id>"), 401/403 → AuthError
+  // hinting at RUNPOD_API_KEY. All other errors pass through unchanged.
+  private mapPodError(err: unknown, podId: string): unknown {
+    if (err instanceof NotFoundError) {
+      return new NotFoundError(`Pod not found: ${podId}`, {
+        detail: err.detail,
+        cause: err,
+      });
+    }
+    if (err instanceof AuthError) {
+      return new AuthError(
+        "Runpod rejected the API key. Check RUNPOD_API_KEY.",
+        { detail: err.detail, cause: err },
+      );
+    }
+    return err;
   }
 }
