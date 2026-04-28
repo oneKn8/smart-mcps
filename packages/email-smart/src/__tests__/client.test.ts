@@ -223,6 +223,27 @@ describe("EmailClient.sendMessage — propagates OAuth errors", () => {
   });
 });
 
+describe("EmailClient — lazy HOME resolution", () => {
+  it("constructor does not throw when HOME is unset; sendMessage throws ValidationError", async () => {
+    const previousHome = process.env.HOME;
+    delete process.env.HOME;
+    try {
+      // Constructor must NOT throw — HOME is resolved lazily.
+      const client = new EmailClient();
+
+      await expect(client.sendMessage("alice", "RAW")).rejects.toMatchObject({
+        name: "ValidationError",
+        message: expect.stringContaining(
+          "HOME environment variable is not set",
+        ),
+      });
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+    }
+  });
+});
+
 describe("EmailClient.sendMessage — refreshes expired token first", () => {
   it("triggers OAuth refresh when token is expired before sending", async () => {
     // Expiry just 10 seconds out → below 60s threshold → refresh.

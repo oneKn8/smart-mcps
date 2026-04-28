@@ -18,6 +18,7 @@ import {
 import { sendEmail } from "../tools/send.js";
 import type { EmailClient } from "../client.js";
 import type { EmailContext } from "../context.js";
+import * as auditModule from "../audit.js";
 
 let savedHome: string | undefined;
 let tmpHome: string;
@@ -318,6 +319,79 @@ describe("send_email — failure path", () => {
     });
 
     expect(fs.existsSync(auditPath(tmpHome))).toBe(false);
+  });
+});
+
+describe("send_email — transport gate", () => {
+  it("rejects accounts with transport=smtp before any side effect", async () => {
+    const smtpIdentity = [
+      "account: utd",
+      "email: utd@example.com",
+      "display_name: UTD",
+      "transport: smtp",
+    ].join("\n");
+    writeIdentity(tmpHome, "utd", smtpIdentity);
+    const { client, sendMock } = makeFakeClient();
+    const ctx = buildContext(client, tmpHome);
+
+    await expect(
+      sendEmail.handler(
+        sendEmail.inputSchema.parse({
+          account: "utd",
+          to: "bob@example.com",
+          subject: "Hi",
+          html: "<p>Hi</p>",
+          text: "Hi",
+          confirm: true,
+        }) as never,
+        ctx as never,
+      ),
+    ).rejects.toMatchObject({
+      name: "ValidationError",
+      message: expect.stringMatching(/smtp.*oauth only/s),
+    });
+
+    expect(sendMock).not.toHaveBeenCalled();
+    expect(fs.existsSync(auditPath(tmpHome))).toBe(false);
+  });
+});
+
+describe("send_email — audit append soft-fail", () => {
+  it("returns gmail_id with audit_warning when appendFileSync throws", async () => {
+    writeIdentity(tmpHome, "alice", aliceIdentity());
+    const { client } = makeFakeClient();
+    const ctx = buildContext(client, tmpHome);
+
+    const appendSpy = vi
+      .spyOn(auditModule, "appendAudit")
+      .mockImplementation(() => {
+        throw new Error("ENOSPC: disk full");
+      });
+
+    try {
+      const result = await sendEmail.handler(
+        sendEmail.inputSchema.parse({
+          account: "alice",
+          to: "bob@example.com",
+          subject: "Hi",
+          html: "<p>Hi</p>",
+          text: "Hi",
+          confirm: true,
+        }) as never,
+        ctx as never,
+      );
+
+      expect(result.gmail_id).toBe("msg_abc");
+      expect(result.thread_id).toBe("thr_xyz");
+      expect((result as { audit_warning?: string }).audit_warning).toEqual(
+        expect.stringContaining("audit append failed"),
+      );
+      expect((result as { audit_warning?: string }).audit_warning).toEqual(
+        expect.stringContaining("ENOSPC"),
+      );
+    } finally {
+      appendSpy.mockRestore();
+    }
   });
 });
 

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { defineTool, guardDestructive } from "smart-mcp-core";
+import { defineTool, guardDestructive, ValidationError } from "smart-mcp-core";
 import type { EmailContext } from "../context.js";
 import { loadIdentity, type Identity } from "../identities.js";
 import { buildRawMessage } from "../mime.js";
@@ -27,6 +27,12 @@ type SendEmailOutput = {
   to: string;
   subject: string;
   sent_at: string;
+  /**
+   * Present only when the email was successfully sent but the audit-log append
+   * failed (disk full, permissions, etc). Surfaces the failure to the caller
+   * without losing the gmail_id of the email that DID get sent.
+   */
+  audit_warning?: string;
 };
 
 function fromHeader(identity: Identity): string {
@@ -54,6 +60,16 @@ export const sendEmail = defineTool<SendEmailInput, SendEmailOutput, EmailContex
   handler: async (input, context) => {
     const identity = loadIdentity(input.account, context.home);
 
+    // Reject SMTP-transport identities at the gate. send_email currently only
+    // supports the OAuth-via-Gmail-API path; SMTP is a future-phase concern.
+    // Falling through to OAuth would surface a misleading "token not found"
+    // error pointing at the wrong remediation.
+    if (identity.transport !== "oauth") {
+      throw new ValidationError(
+        `account "${input.account}" uses transport "${identity.transport}"; send_email currently supports oauth only (smtp transport deferred to a future phase)`,
+      );
+    }
+
     const preview = buildPreview(input, identity);
     guardDestructive({ confirm: input.confirm, preview });
 
@@ -76,19 +92,32 @@ export const sendEmail = defineTool<SendEmailInput, SendEmailOutput, EmailContex
     // tool returns.
     const sentAt = new Date().toISOString();
 
-    appendAudit(
-      {
-        ts: sentAt,
-        account: input.account,
-        to: input.to,
-        cc: input.cc,
-        bcc: input.bcc,
-        subject: input.subject,
-        gmail_id: sendResult.id,
-        gmail_thread_id: sendResult.threadId,
-      },
-      context.home,
-    );
+    // Audit-append must NOT mask a successful send. If the JSONL write fails
+    // (disk full, permissions), surface the failure as `audit_warning` on the
+    // success response so the caller still gets the gmail_id back. Logging to
+    // stderr keeps the failure visible to the operator running the MCP.
+    let auditWarning: string | undefined;
+    try {
+      appendAudit(
+        {
+          ts: sentAt,
+          account: input.account,
+          to: input.to,
+          cc: input.cc,
+          bcc: input.bcc,
+          subject: input.subject,
+          gmail_id: sendResult.id,
+          gmail_thread_id: sendResult.threadId,
+        },
+        context.home,
+      );
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      auditWarning = `audit append failed: ${reason}`;
+      console.error(
+        `[email-smart] WARN: send_email succeeded (gmail_id=${sendResult.id}) but ${auditWarning}`,
+      );
+    }
 
     return {
       gmail_id: sendResult.id,
@@ -97,6 +126,7 @@ export const sendEmail = defineTool<SendEmailInput, SendEmailOutput, EmailContex
       to: input.to,
       subject: input.subject,
       sent_at: sentAt,
+      ...(auditWarning !== undefined ? { audit_warning: auditWarning } : {}),
     };
   },
 });

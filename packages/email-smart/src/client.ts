@@ -1,4 +1,4 @@
-import { AuthError, fetchJson } from "smart-mcp-core";
+import { AuthError, fetchJson, ValidationError } from "smart-mcp-core";
 import { GoogleOAuthClient } from "./oauth.js";
 
 const GMAIL_SEND_URL =
@@ -12,8 +12,27 @@ export type GmailSendResponse = {
 
 export class EmailClient {
   private readonly oauthClients = new Map<string, GoogleOAuthClient>();
+  private readonly home: string | undefined;
 
-  constructor(private readonly home: string = process.env.HOME!) {}
+  /**
+   * Constructor is side-effect-free. HOME is resolved lazily on first use so
+   * the server can boot in environments where HOME is provided later (or
+   * never — for testing). Matches `audit.ts` and `identities.ts` resolution.
+   */
+  constructor(home?: string) {
+    this.home = home;
+  }
+
+  private resolveHome(): string {
+    if (this.home !== undefined) return this.home;
+    const env = process.env.HOME;
+    if (!env) {
+      throw new ValidationError(
+        "HOME environment variable is not set; cannot locate ~/.santo-agent/oauth",
+      );
+    }
+    return env;
+  }
 
   /**
    * Lazy-instantiate (and cache) one GoogleOAuthClient per account so the
@@ -23,7 +42,7 @@ export class EmailClient {
   oauthFor(account: string): GoogleOAuthClient {
     let existing = this.oauthClients.get(account);
     if (existing === undefined) {
-      existing = new GoogleOAuthClient(account, this.home);
+      existing = new GoogleOAuthClient(account, this.resolveHome());
       this.oauthClients.set(account, existing);
     }
     return existing;
