@@ -11,12 +11,17 @@ afterAll(() => server.close());
 
 let savedToken: string | undefined;
 let savedTeamId: string | undefined;
+let savedHome: string | undefined;
 
 beforeEach(() => {
   savedToken = process.env.VERCEL_TOKEN;
   savedTeamId = process.env.VERCEL_TEAM_ID;
+  savedHome = process.env.HOME;
   delete process.env.VERCEL_TOKEN;
   delete process.env.VERCEL_TEAM_ID;
+  // Point HOME at a non-existent directory so the shared ~/.config/smart-mcps/.env
+  // fallback in loadCreds does not leak real-machine credentials into tests.
+  process.env.HOME = "/tmp/vercel-smart-test-no-home";
 });
 
 afterEach(() => {
@@ -24,6 +29,8 @@ afterEach(() => {
   else process.env.VERCEL_TOKEN = savedToken;
   if (savedTeamId === undefined) delete process.env.VERCEL_TEAM_ID;
   else process.env.VERCEL_TEAM_ID = savedTeamId;
+  if (savedHome === undefined) delete process.env.HOME;
+  else process.env.HOME = savedHome;
 });
 
 // Helper: stub /v2/teams to return zero teams (personal-only mode).
