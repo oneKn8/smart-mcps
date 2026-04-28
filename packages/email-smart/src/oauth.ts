@@ -23,6 +23,17 @@ type TokenRefreshResponse = {
   token_type?: string;
 };
 
+const STRING_FIELDS: ReadonlyArray<
+  Exclude<keyof AuthorizedUserFile, "scopes">
+> = [
+  "token",
+  "refresh_token",
+  "token_uri",
+  "client_id",
+  "client_secret",
+  "expiry",
+];
+
 export class GoogleOAuthClient {
   private cached: AuthorizedUserFile | undefined;
   private inFlight: Promise<string> | undefined;
@@ -39,7 +50,7 @@ export class GoogleOAuthClient {
   async getAccessToken(): Promise<string> {
     const file = this.loadFile();
     const expiryMs = Date.parse(file.expiry);
-    if (Number.isFinite(expiryMs) && expiryMs - Date.now() > CACHE_THRESHOLD_MS) {
+    if (expiryMs - Date.now() > CACHE_THRESHOLD_MS) {
       this.cached = file;
       return file.token;
     }
@@ -64,7 +75,54 @@ export class GoogleOAuthClient {
       );
     }
     const raw = fs.readFileSync(filePath, "utf-8");
-    return JSON.parse(raw) as AuthorizedUserFile;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      throw new AuthError(
+        `token file at ${filePath} is not valid JSON; re-run python3 ~/.santo-agent/bin/auth.py --account ${this.account}`,
+      );
+    }
+    return this.validateFile(parsed, filePath);
+  }
+
+  private validateFile(parsed: unknown, filePath: string): AuthorizedUserFile {
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      throw new AuthError(
+        `token file at ${filePath} is not a JSON object; re-run python3 ~/.santo-agent/bin/auth.py --account ${this.account}`,
+      );
+    }
+    const obj = parsed as Record<string, unknown>;
+    for (const field of STRING_FIELDS) {
+      if (typeof obj[field] !== "string") {
+        throw new AuthError(
+          `token file at ${filePath} missing or invalid field "${field}"; re-run python3 ~/.santo-agent/bin/auth.py --account ${this.account}`,
+        );
+      }
+    }
+    if (
+      !Array.isArray(obj.scopes) ||
+      !obj.scopes.every((s) => typeof s === "string")
+    ) {
+      throw new AuthError(
+        `token file at ${filePath} missing or invalid field "scopes"; re-run python3 ~/.santo-agent/bin/auth.py --account ${this.account}`,
+      );
+    }
+    const expiry = obj.expiry as string;
+    if (!Number.isFinite(Date.parse(expiry))) {
+      throw new AuthError(
+        `token file at ${filePath} has unparseable expiry "${expiry}"; re-run python3 ~/.santo-agent/bin/auth.py --account ${this.account}`,
+      );
+    }
+    return {
+      token: obj.token as string,
+      refresh_token: obj.refresh_token as string,
+      token_uri: obj.token_uri as string,
+      client_id: obj.client_id as string,
+      client_secret: obj.client_secret as string,
+      scopes: obj.scopes as string[],
+      expiry,
+    };
   }
 
   private async refresh(file: AuthorizedUserFile): Promise<string> {
@@ -109,6 +167,20 @@ export class GoogleOAuthClient {
     }
 
     const json = (await response.json()) as TokenRefreshResponse;
+    if (typeof json.access_token !== "string" || json.access_token.length === 0) {
+      throw new UpstreamError(
+        "OAuth refresh response invalid: missing or malformed access_token",
+      );
+    }
+    if (
+      typeof json.expires_in !== "number" ||
+      !Number.isFinite(json.expires_in) ||
+      json.expires_in <= 0
+    ) {
+      throw new UpstreamError(
+        "OAuth refresh response invalid: missing or malformed expires_in",
+      );
+    }
     const newExpiry = new Date(Date.now() + json.expires_in * 1000).toISOString();
     const updated: AuthorizedUserFile = {
       ...file,

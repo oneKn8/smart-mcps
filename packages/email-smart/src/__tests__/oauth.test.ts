@@ -13,7 +13,7 @@ import { vi } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { AuthError } from "smart-mcp-core";
+import { AuthError, UpstreamError } from "smart-mcp-core";
 import { GoogleOAuthClient } from "../oauth.js";
 
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
@@ -336,6 +336,180 @@ describe("GoogleOAuthClient.getAccessToken — errors", () => {
         "refresh token revoked; re-run bin/auth.py --account alice",
       );
     }
+  });
+});
+
+describe("GoogleOAuthClient.getAccessToken — token file validation", () => {
+  it("corrupt JSON file throws AuthError with file path + re-run hint", async () => {
+    const dir = path.join(tmpHome, ".santo-agent", "oauth");
+    fs.mkdirSync(dir, { recursive: true });
+    const filePath = path.join(dir, "alice.json");
+    fs.writeFileSync(filePath, "{ this is not valid json");
+    const client = new GoogleOAuthClient("alice", tmpHome);
+    try {
+      await client.getAccessToken();
+      throw new Error("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(AuthError);
+      expect((err as Error).message).toBe(
+        `token file at ${filePath} is not valid JSON; re-run python3 ~/.santo-agent/bin/auth.py --account alice`,
+      );
+    }
+  });
+
+  it("token file missing required field (scopes) throws AuthError naming the field", async () => {
+    const payload = fixtureFile({ expiry: "2026-04-28T12:05:00.000000Z" }) as Record<
+      string,
+      unknown
+    >;
+    delete payload.scopes;
+    const filePath = writeTokenFile(tmpHome, "alice", payload);
+    const client = new GoogleOAuthClient("alice", tmpHome);
+    try {
+      await client.getAccessToken();
+      throw new Error("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(AuthError);
+      expect((err as Error).message).toBe(
+        `token file at ${filePath} missing or invalid field "scopes"; re-run python3 ~/.santo-agent/bin/auth.py --account alice`,
+      );
+    }
+  });
+
+  it("token file with unparseable expiry throws AuthError with bad value + re-run hint", async () => {
+    const filePath = writeTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "not-a-date" }),
+    );
+    const client = new GoogleOAuthClient("alice", tmpHome);
+    try {
+      await client.getAccessToken();
+      throw new Error("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(AuthError);
+      expect((err as Error).message).toBe(
+        `token file at ${filePath} has unparseable expiry "not-a-date"; re-run python3 ~/.santo-agent/bin/auth.py --account alice`,
+      );
+    }
+  });
+});
+
+describe("GoogleOAuthClient.getAccessToken — refresh response validation", () => {
+  it("refresh response missing access_token throws UpstreamError", async () => {
+    writeTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({
+        token: "stale-token",
+        expiry: "2026-04-28T12:00:30.000000Z",
+      }),
+    );
+    server.use(
+      http.post(TOKEN_URL, () =>
+        HttpResponse.json({ expires_in: 3600 }),
+      ),
+    );
+    const client = new GoogleOAuthClient("alice", tmpHome);
+    try {
+      await client.getAccessToken();
+      throw new Error("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(UpstreamError);
+      expect((err as Error).message).toBe(
+        "OAuth refresh response invalid: missing or malformed access_token",
+      );
+    }
+  });
+
+  it("refresh response missing expires_in throws UpstreamError", async () => {
+    writeTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({
+        token: "stale-token",
+        expiry: "2026-04-28T12:00:30.000000Z",
+      }),
+    );
+    server.use(
+      http.post(TOKEN_URL, () =>
+        HttpResponse.json({ access_token: "fresh" }),
+      ),
+    );
+    const client = new GoogleOAuthClient("alice", tmpHome);
+    try {
+      await client.getAccessToken();
+      throw new Error("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(UpstreamError);
+      expect((err as Error).message).toBe(
+        "OAuth refresh response invalid: missing or malformed expires_in",
+      );
+    }
+  });
+
+  it("refresh response with non-positive expires_in throws UpstreamError", async () => {
+    writeTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({
+        token: "stale-token",
+        expiry: "2026-04-28T12:00:30.000000Z",
+      }),
+    );
+    server.use(
+      http.post(TOKEN_URL, () =>
+        HttpResponse.json({ access_token: "fresh", expires_in: 0 }),
+      ),
+    );
+    const client = new GoogleOAuthClient("alice", tmpHome);
+    try {
+      await client.getAccessToken();
+      throw new Error("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(UpstreamError);
+      expect((err as Error).message).toBe(
+        "OAuth refresh response invalid: missing or malformed expires_in",
+      );
+    }
+  });
+});
+
+describe("GoogleOAuthClient.getAccessToken — in-flight rejection then retry", () => {
+  it("clears in-flight on rejection so a subsequent call hits the network again and succeeds", async () => {
+    writeTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({
+        token: "stale-token",
+        expiry: "2026-04-28T12:00:30.000000Z",
+      }),
+    );
+    let calls = 0;
+    server.use(
+      http.post(TOKEN_URL, () => {
+        calls++;
+        if (calls === 1) {
+          return new HttpResponse("upstream boom", { status: 502 });
+        }
+        return HttpResponse.json({
+          access_token: "fresh-after-retry",
+          expires_in: 3600,
+        });
+      }),
+    );
+    vi.useRealTimers();
+    const client = new GoogleOAuthClient("alice", tmpHome);
+    let firstError: unknown;
+    try {
+      await client.getAccessToken();
+    } catch (err) {
+      firstError = err;
+    }
+    expect(firstError).toBeInstanceOf(UpstreamError);
+    const second = await client.getAccessToken();
+    expect(second).toBe("fresh-after-retry");
+    expect(calls).toBe(2);
   });
 });
 
