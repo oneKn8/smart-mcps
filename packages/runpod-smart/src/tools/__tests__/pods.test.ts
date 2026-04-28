@@ -534,6 +534,26 @@ describe("startPod — past confirm gate", () => {
       ),
     ).rejects.toBeInstanceOf(NotFoundError);
   });
+
+  it("propagates NotFoundError from startPod", async () => {
+    const client = makePodOpsClient({
+      startPod: vi.fn().mockRejectedValue(
+        new NotFoundError("Pod not found: pod_abc"),
+      ),
+    });
+    await expect(
+      startPod.handler(
+        startPod.inputSchema.parse({ pod_id: "pod_abc", confirm: true }),
+        { client: client as unknown as never },
+      ),
+    ).rejects.toBeInstanceOf(NotFoundError);
+    await expect(
+      startPod.handler(
+        startPod.inputSchema.parse({ pod_id: "pod_abc", confirm: true }),
+        { client: client as unknown as never },
+      ),
+    ).rejects.toThrow(/Pod not found/);
+  });
 });
 
 // =============================================================================
