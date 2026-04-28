@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { defineTool } from "smart-mcp-core";
 import type { RunpodContext } from "../context.js";
+import { nullableNumber, nullableString } from "./null-helpers.js";
 
 // Slim view of a Runpod Serverless Endpoint. Mirrors the camelCase convention
 // used by SlimPod / SlimTemplate. Upstream-only fields (env, gpuTypeIds,
@@ -18,14 +19,6 @@ type SlimEndpoint = {
   idleTimeout: number | null;
   createdAt: string | null;
 };
-
-function nullableString(value: unknown): string | null {
-  return typeof value === "string" ? value : null;
-}
-
-function nullableNumber(value: unknown): number | null {
-  return typeof value === "number" ? value : null;
-}
 
 function mapEndpoint(e: Record<string, unknown>): SlimEndpoint {
   return {

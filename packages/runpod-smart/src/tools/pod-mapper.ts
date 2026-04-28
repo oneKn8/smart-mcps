@@ -1,3 +1,5 @@
+import { nullableString } from "./null-helpers.js";
+
 export type SlimPod = {
   id: string;
   name: string | null;
@@ -20,10 +22,6 @@ function pickGpu(pod: Record<string, unknown>): { displayName: string; count: nu
   const rawCount = (pod as { gpuCount?: unknown }).gpuCount;
   const count = typeof rawCount === "number" ? rawCount : 0;
   return { displayName, count };
-}
-
-function nullableString(value: unknown): string | null {
-  return typeof value === "string" ? value : null;
 }
 
 export function mapPod(pod: Record<string, unknown>): SlimPod {

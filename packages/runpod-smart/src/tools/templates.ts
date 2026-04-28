@@ -1,6 +1,11 @@
 import { z } from "zod";
 import { defineTool } from "smart-mcp-core";
 import type { RunpodContext } from "../context.js";
+import {
+  nullableBoolean,
+  nullableNumber,
+  nullableString,
+} from "./null-helpers.js";
 
 // Slim view of a Runpod Template. Mirrors the camelCase convention used by
 // SlimPod so downstream consumers see one consistent shape across listings.
@@ -19,18 +24,6 @@ type SlimTemplate = {
   isPublic: boolean | null;
   category: string | null;
 };
-
-function nullableString(value: unknown): string | null {
-  return typeof value === "string" ? value : null;
-}
-
-function nullableNumber(value: unknown): number | null {
-  return typeof value === "number" ? value : null;
-}
-
-function nullableBoolean(value: unknown): boolean | null {
-  return typeof value === "boolean" ? value : null;
-}
 
 function mapTemplate(t: Record<string, unknown>): SlimTemplate {
   return {
