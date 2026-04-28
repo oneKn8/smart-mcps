@@ -74,6 +74,43 @@ export interface ListEndpointsResponse {
   endpoints: Endpoint[];
 }
 
+// Billing record shape per Runpod OpenAPI (BillingRecords, NetworkVolumeBillingRecords).
+// `amount` is always denominated in USD. The `podId` / `endpointId` /
+// `gpuTypeId` / `time` / `timeBilledMs` / `diskSpaceBilledGb` fields appear
+// conditionally based on the resource and `grouping` query param. We expose
+// them as an open Record because callers (cost_audit, daily_status) only need
+// `amount` + `podId`/`endpointId` keys, and the billing API may add fields
+// going forward.
+export type BillingRecord = Record<string, unknown> & {
+  amount?: number;
+  podId?: string;
+  endpointId?: string;
+  gpuTypeId?: string;
+  time?: string;
+  timeBilledMs?: number;
+  diskSpaceBilledGb?: number;
+};
+
+export interface BillingPodsResponse {
+  records: BillingRecord[];
+}
+
+export interface BillingEndpointsResponse {
+  records: BillingRecord[];
+}
+
+export interface BillingNetworkVolumesResponse {
+  records: BillingRecord[];
+}
+
+// Billing window options. Runpod's REST API uses startTime / endTime as ISO
+// 8601 date-time query params, but we accept them under more familiar
+// `from` / `to` keys at the client surface.
+export interface BillingWindow {
+  from?: string;
+  to?: string;
+}
+
 export class RunpodClient {
   private readonly creds: RunpodCreds;
 
@@ -155,6 +192,62 @@ export class RunpodClient {
         { token: this.creds.RUNPOD_API_KEY },
       );
       return { endpoints: body };
+    } catch (err) {
+      if (err instanceof AuthError) {
+        throw new AuthError(
+          "Runpod rejected the API key. Check RUNPOD_API_KEY.",
+          { detail: err.detail, cause: err },
+        );
+      }
+      throw err;
+    }
+  }
+
+  // ---------- Billing ----------
+  //
+  // All three endpoints return a bare array of BillingRecord per the Runpod
+  // OpenAPI spec. We wrap as { records } for symmetry with other listing
+  // methods. `from`/`to` map to `startTime`/`endTime` query params.
+
+  async getBillingPods(window: BillingWindow = {}): Promise<BillingPodsResponse> {
+    return this.fetchBilling(
+      "https://rest.runpod.io/v1/billing/pods",
+      window,
+    );
+  }
+
+  async getBillingEndpoints(
+    window: BillingWindow = {},
+  ): Promise<BillingEndpointsResponse> {
+    return this.fetchBilling(
+      "https://rest.runpod.io/v1/billing/endpoints",
+      window,
+    );
+  }
+
+  async getBillingNetworkVolumes(
+    window: BillingWindow = {},
+  ): Promise<BillingNetworkVolumesResponse> {
+    return this.fetchBilling(
+      "https://rest.runpod.io/v1/billing/networkvolumes",
+      window,
+    );
+  }
+
+  private async fetchBilling(
+    url: string,
+    window: BillingWindow,
+  ): Promise<{ records: BillingRecord[] }> {
+    const searchParams: Record<string, string | number | undefined> = {
+      startTime: window.from,
+      endTime: window.to,
+    };
+    try {
+      const body = await fetchJson<BillingRecord[]>(url, {
+        token: this.creds.RUNPOD_API_KEY,
+        searchParams,
+      });
+      return { records: body };
     } catch (err) {
       if (err instanceof AuthError) {
         throw new AuthError(

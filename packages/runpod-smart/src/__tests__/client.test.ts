@@ -681,3 +681,211 @@ describe("RunpodClient.terminatePod", () => {
     }
   });
 });
+
+// =============================================================================
+// Billing endpoints
+// =============================================================================
+//
+// All three billing endpoints return a bare array of BillingRecord objects per
+// the Runpod OpenAPI spec (https://rest.runpod.io/v1/openapi.json — schemas
+// `BillingRecords` and `NetworkVolumeBillingRecords`). Each record has an
+// `amount` field denominated in USD. Pods/endpoints additionally carry the
+// grouping key (podId/endpointId/gpuTypeId) depending on `grouping` query
+// param. Network volumes have no grouping. We treat each response as a
+// `Record<string, unknown>[]` and wrap it as `{ records }` for callers.
+describe("RunpodClient.getBillingPods", () => {
+  const mockRecords = [
+    {
+      amount: 12.34,
+      podId: "pod_abc",
+      time: "2026-04-26T00:00:00.000Z",
+      timeBilledMs: 86_400_000,
+    },
+    {
+      amount: 5.67,
+      podId: "pod_def",
+      time: "2026-04-26T00:00:00.000Z",
+      timeBilledMs: 50_000_000,
+    },
+  ];
+
+  it("calls GET /billing/pods with no query when no window provided", async () => {
+    process.env.RUNPOD_API_KEY = "test_key";
+    let seenAuth: string | null = null;
+    let seenUrl: string | null = null;
+    server.use(
+      http.get("https://rest.runpod.io/v1/billing/pods", ({ request }) => {
+        seenAuth = request.headers.get("authorization");
+        seenUrl = request.url;
+        return HttpResponse.json(mockRecords);
+      }),
+    );
+    const client = new RunpodClient();
+    await client.getBillingPods();
+    expect(seenAuth).toBe("Bearer test_key");
+    expect(seenUrl).toContain("https://rest.runpod.io/v1/billing/pods");
+    expect(seenUrl).not.toContain("startTime=");
+    expect(seenUrl).not.toContain("endTime=");
+  });
+
+  it("includes startTime and endTime when from/to provided", async () => {
+    process.env.RUNPOD_API_KEY = "test_key";
+    let seenUrl: string | null = null;
+    server.use(
+      http.get("https://rest.runpod.io/v1/billing/pods", ({ request }) => {
+        seenUrl = request.url;
+        return HttpResponse.json(mockRecords);
+      }),
+    );
+    const client = new RunpodClient();
+    await client.getBillingPods({
+      from: "2026-04-20T00:00:00.000Z",
+      to: "2026-04-27T00:00:00.000Z",
+    });
+    // URL encoding: ":" → "%3A", "." → "."
+    expect(seenUrl).toContain("startTime=2026-04-20T00");
+    expect(seenUrl).toContain("endTime=2026-04-27T00");
+  });
+
+  it("returns parsed body wrapped as { records }", async () => {
+    process.env.RUNPOD_API_KEY = "test_key";
+    server.use(
+      http.get("https://rest.runpod.io/v1/billing/pods", () =>
+        HttpResponse.json(mockRecords),
+      ),
+    );
+    const client = new RunpodClient();
+    const result = await client.getBillingPods();
+    expect(result.records).toHaveLength(2);
+    expect(result.records[0]?.podId).toBe("pod_abc");
+    expect(result.records[0]?.amount).toBe(12.34);
+  });
+
+  it("maps 401 to AuthError mentioning RUNPOD_API_KEY", async () => {
+    process.env.RUNPOD_API_KEY = "bad_key";
+    server.use(
+      http.get("https://rest.runpod.io/v1/billing/pods", () =>
+        HttpResponse.json({ error: "unauthorized" }, { status: 401 }),
+      ),
+    );
+    const client = new RunpodClient();
+    try {
+      await client.getBillingPods();
+      throw new Error("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(AuthError);
+      expect((err as Error).message).toContain("RUNPOD_API_KEY");
+    }
+  });
+
+  it("retries 429 then throws RateLimitError after retries exhausted", async () => {
+    process.env.RUNPOD_API_KEY = "test_key";
+    let calls = 0;
+    server.use(
+      http.get("https://rest.runpod.io/v1/billing/pods", () => {
+        calls++;
+        return HttpResponse.json({ error: "slow down" }, { status: 429 });
+      }),
+    );
+    const client = new RunpodClient();
+    await expect(client.getBillingPods()).rejects.toBeInstanceOf(
+      RateLimitError,
+    );
+    expect(calls).toBe(4);
+  });
+});
+
+describe("RunpodClient.getBillingEndpoints", () => {
+  const mockRecords = [
+    {
+      amount: 3.21,
+      endpointId: "ep_abc",
+      time: "2026-04-26T00:00:00.000Z",
+    },
+  ];
+
+  it("calls GET /billing/endpoints and wraps response as { records }", async () => {
+    process.env.RUNPOD_API_KEY = "test_key";
+    let seenUrl: string | null = null;
+    server.use(
+      http.get("https://rest.runpod.io/v1/billing/endpoints", ({ request }) => {
+        seenUrl = request.url;
+        return HttpResponse.json(mockRecords);
+      }),
+    );
+    const client = new RunpodClient();
+    const result = await client.getBillingEndpoints({
+      from: "2026-04-20T00:00:00.000Z",
+      to: "2026-04-27T00:00:00.000Z",
+    });
+    expect(seenUrl).toContain("/v1/billing/endpoints");
+    expect(seenUrl).toContain("startTime=2026-04-20T00");
+    expect(result.records).toHaveLength(1);
+    expect(result.records[0]?.endpointId).toBe("ep_abc");
+  });
+
+  it("maps 401 to AuthError mentioning RUNPOD_API_KEY", async () => {
+    process.env.RUNPOD_API_KEY = "bad_key";
+    server.use(
+      http.get("https://rest.runpod.io/v1/billing/endpoints", () =>
+        HttpResponse.json({ error: "unauthorized" }, { status: 401 }),
+      ),
+    );
+    const client = new RunpodClient();
+    try {
+      await client.getBillingEndpoints();
+      throw new Error("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(AuthError);
+      expect((err as Error).message).toContain("RUNPOD_API_KEY");
+    }
+  });
+});
+
+describe("RunpodClient.getBillingNetworkVolumes", () => {
+  const mockRecords = [
+    {
+      amount: 1.5,
+      diskSpaceBilledGb: 50,
+      time: "2026-04-26T00:00:00.000Z",
+    },
+  ];
+
+  it("calls GET /billing/networkvolumes and wraps response as { records }", async () => {
+    process.env.RUNPOD_API_KEY = "test_key";
+    let seenUrl: string | null = null;
+    server.use(
+      http.get(
+        "https://rest.runpod.io/v1/billing/networkvolumes",
+        ({ request }) => {
+          seenUrl = request.url;
+          return HttpResponse.json(mockRecords);
+        },
+      ),
+    );
+    const client = new RunpodClient();
+    const result = await client.getBillingNetworkVolumes({
+      from: "2026-04-20T00:00:00.000Z",
+      to: "2026-04-27T00:00:00.000Z",
+    });
+    expect(seenUrl).toContain("/v1/billing/networkvolumes");
+    expect(result.records).toHaveLength(1);
+    expect(result.records[0]?.amount).toBe(1.5);
+  });
+
+  it("retries 429 then throws RateLimitError after retries exhausted", async () => {
+    process.env.RUNPOD_API_KEY = "test_key";
+    let calls = 0;
+    server.use(
+      http.get("https://rest.runpod.io/v1/billing/networkvolumes", () => {
+        calls++;
+        return HttpResponse.json({ error: "slow down" }, { status: 429 });
+      }),
+    );
+    const client = new RunpodClient();
+    await expect(
+      client.getBillingNetworkVolumes(),
+    ).rejects.toBeInstanceOf(RateLimitError);
+    expect(calls).toBe(4);
+  });
+});
