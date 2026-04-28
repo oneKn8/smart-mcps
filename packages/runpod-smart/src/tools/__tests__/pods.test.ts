@@ -7,6 +7,7 @@ import {
   startPod,
   stopPod,
   terminatePod,
+  launchPod,
 } from "../pods.js";
 
 type FakeClient = {
@@ -792,5 +793,319 @@ describe("terminatePod — past confirm gate", () => {
         { client: client as unknown as never },
       ),
     ).rejects.toBeInstanceOf(NotFoundError);
+  });
+});
+
+// =============================================================================
+// launch_pod
+// =============================================================================
+
+type FakeLaunchClient = {
+  createPod: ReturnType<typeof vi.fn>;
+  defaultGpu?: string;
+};
+
+function makeLaunchClient(
+  overrides: Partial<FakeLaunchClient> = {},
+): FakeLaunchClient {
+  const created = {
+    id: "pod_new",
+    name: "fresh",
+    image: "runpod/pytorch:2.1.0",
+    desiredStatus: "CREATED",
+    costPerHr: 0.74,
+    adjustedCostPerHr: 0.74,
+    gpu: { displayName: "RTX 4090" },
+    gpuCount: 1,
+    lastStartedAt: null,
+  };
+  return {
+    createPod: vi.fn().mockResolvedValue(created),
+    defaultGpu: undefined,
+    ...overrides,
+  };
+}
+
+describe("launchPod — metadata + schema", () => {
+  it("has correct name and description", () => {
+    expect(launchPod.name).toBe("launch_pod");
+    expect(launchPod.description).toBe(
+      "Launch a new GPU pod with image, GPU type, and resource config.",
+    );
+    expect(launchPod.inputSchema).toBeInstanceOf(z.ZodType);
+  });
+
+  it("rejects empty name", () => {
+    expect(() =>
+      launchPod.inputSchema.parse({ name: "", image: "x" }),
+    ).toThrow();
+  });
+
+  it("rejects empty image", () => {
+    expect(() =>
+      launchPod.inputSchema.parse({ name: "x", image: "" }),
+    ).toThrow();
+  });
+
+  it("rejects gpu_count: 0 (min 1)", () => {
+    expect(() =>
+      launchPod.inputSchema.parse({ name: "x", image: "y", gpu_count: 0 }),
+    ).toThrow();
+  });
+
+  it("rejects gpu_count: 9 (max 8)", () => {
+    expect(() =>
+      launchPod.inputSchema.parse({ name: "x", image: "y", gpu_count: 9 }),
+    ).toThrow();
+  });
+
+  it("rejects container_disk_gb: 4 (min 5)", () => {
+    expect(() =>
+      launchPod.inputSchema.parse({
+        name: "x",
+        image: "y",
+        container_disk_gb: 4,
+      }),
+    ).toThrow();
+  });
+
+  it("applies defaults when fields are omitted", () => {
+    const parsed = launchPod.inputSchema.parse({
+      name: "x",
+      image: "y",
+    }) as {
+      gpu_count: number;
+      cloud_type: string;
+      container_disk_gb: number;
+      volume_gb: number;
+      volume_mount_path: string;
+      ports: string[];
+      interruptible: boolean;
+      confirm: boolean;
+    };
+    expect(parsed.gpu_count).toBe(1);
+    expect(parsed.cloud_type).toBe("SECURE");
+    expect(parsed.container_disk_gb).toBe(50);
+    expect(parsed.volume_gb).toBe(0);
+    expect(parsed.volume_mount_path).toBe("/workspace");
+    expect(parsed.ports).toEqual(["8888/http", "22/tcp"]);
+    expect(parsed.interruptible).toBe(false);
+    expect(parsed.confirm).toBe(false);
+  });
+});
+
+describe("launchPod — confirm gate", () => {
+  it("throws ConfirmRequiredError when confirm is false (default)", async () => {
+    const client = makeLaunchClient();
+    await expect(
+      launchPod.handler(
+        launchPod.inputSchema.parse({
+          name: "fresh",
+          image: "runpod/pytorch:2.1.0",
+        }),
+        { client: client as unknown as never },
+      ),
+    ).rejects.toBeInstanceOf(ConfirmRequiredError);
+    expect(client.createPod).not.toHaveBeenCalled();
+  });
+
+  it("preview text contains name, gpu, count, cloud_type, and cost-deferred phrasing", async () => {
+    const client = makeLaunchClient();
+    try {
+      await launchPod.handler(
+        launchPod.inputSchema.parse({
+          name: "fresh",
+          image: "runpod/pytorch:2.1.0",
+          gpu: "NVIDIA RTX A6000",
+          gpu_count: 2,
+          cloud_type: "COMMUNITY",
+        }),
+        { client: client as unknown as never },
+      );
+      throw new Error("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(ConfirmRequiredError);
+      const preview = (err as ConfirmRequiredError).preview;
+      expect(preview).toContain("fresh");
+      expect(preview).toContain("NVIDIA RTX A6000");
+      expect(preview).toContain("x2");
+      expect(preview).toContain("COMMUNITY");
+      expect(preview).toContain("cost shown after creation");
+    }
+  });
+});
+
+describe("launchPod — default-GPU resolution", () => {
+  it("uses input.gpu when provided (overrides env and fallback)", async () => {
+    const client = makeLaunchClient({
+      defaultGpu: "NVIDIA RTX A6000",
+    });
+    await launchPod.handler(
+      launchPod.inputSchema.parse({
+        name: "fresh",
+        image: "x",
+        gpu: "NVIDIA H100 80GB HBM3",
+        confirm: true,
+      }),
+      { client: client as unknown as never },
+    );
+    const body = client.createPod.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(body.gpuTypeIds).toEqual(["NVIDIA H100 80GB HBM3"]);
+  });
+
+  it("falls back to client.defaultGpu when input.gpu is omitted", async () => {
+    const client = makeLaunchClient({
+      defaultGpu: "NVIDIA RTX A6000",
+    });
+    await launchPod.handler(
+      launchPod.inputSchema.parse({
+        name: "fresh",
+        image: "x",
+        confirm: true,
+      }),
+      { client: client as unknown as never },
+    );
+    const body = client.createPod.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(body.gpuTypeIds).toEqual(["NVIDIA RTX A6000"]);
+  });
+
+  it("falls back to hardcoded RTX 4090 when neither input.gpu nor defaultGpu is set", async () => {
+    const client = makeLaunchClient({ defaultGpu: undefined });
+    await launchPod.handler(
+      launchPod.inputSchema.parse({
+        name: "fresh",
+        image: "x",
+        confirm: true,
+      }),
+      { client: client as unknown as never },
+    );
+    const body = client.createPod.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(body.gpuTypeIds).toEqual(["NVIDIA GeForce RTX 4090"]);
+  });
+});
+
+describe("launchPod — body mapping (snake → camel)", () => {
+  it("maps all snake_case fields to camelCase wire shape", async () => {
+    const client = makeLaunchClient();
+    await launchPod.handler(
+      launchPod.inputSchema.parse({
+        name: "fresh",
+        image: "runpod/pytorch:2.1.0",
+        gpu: "NVIDIA GeForce RTX 4090",
+        gpu_count: 2,
+        cloud_type: "SECURE",
+        container_disk_gb: 100,
+        volume_gb: 200,
+        volume_mount_path: "/data",
+        ports: ["8888/http", "22/tcp"],
+        env: { FOO: "bar" },
+        template_id: "tmpl_xyz",
+        interruptible: true,
+        confirm: true,
+      }),
+      { client: client as unknown as never },
+    );
+    const body = client.createPod.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(body).toEqual({
+      name: "fresh",
+      imageName: "runpod/pytorch:2.1.0",
+      gpuTypeIds: ["NVIDIA GeForce RTX 4090"],
+      gpuCount: 2,
+      cloudType: "SECURE",
+      containerDiskInGb: 100,
+      volumeInGb: 200,
+      volumeMountPath: "/data",
+      ports: ["8888/http", "22/tcp"],
+      env: { FOO: "bar" },
+      templateId: "tmpl_xyz",
+      interruptible: true,
+    });
+    // computeType is implied default — not sent
+    expect(body).not.toHaveProperty("computeType");
+  });
+
+  it("omits volumeInGb and volumeMountPath when volume_gb is 0", async () => {
+    const client = makeLaunchClient();
+    await launchPod.handler(
+      launchPod.inputSchema.parse({
+        name: "fresh",
+        image: "x",
+        confirm: true,
+      }),
+      { client: client as unknown as never },
+    );
+    const body = client.createPod.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(body).not.toHaveProperty("volumeInGb");
+    expect(body).not.toHaveProperty("volumeMountPath");
+  });
+
+  it("omits env when not provided", async () => {
+    const client = makeLaunchClient();
+    await launchPod.handler(
+      launchPod.inputSchema.parse({
+        name: "fresh",
+        image: "x",
+        confirm: true,
+      }),
+      { client: client as unknown as never },
+    );
+    const body = client.createPod.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(body).not.toHaveProperty("env");
+  });
+
+  it("omits templateId when not provided", async () => {
+    const client = makeLaunchClient();
+    await launchPod.handler(
+      launchPod.inputSchema.parse({
+        name: "fresh",
+        image: "x",
+        confirm: true,
+      }),
+      { client: client as unknown as never },
+    );
+    const body = client.createPod.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(body).not.toHaveProperty("templateId");
+  });
+});
+
+describe("launchPod — output shape", () => {
+  it("returns SlimPod fields plus connect_hint (exact key set)", async () => {
+    const client = makeLaunchClient();
+    const result = (await launchPod.handler(
+      launchPod.inputSchema.parse({
+        name: "fresh",
+        image: "x",
+        confirm: true,
+      }),
+      { client: client as unknown as never },
+    )) as Record<string, unknown>;
+    const keys = Object.keys(result).sort();
+    expect(keys).toEqual(
+      [
+        "id",
+        "name",
+        "status",
+        "image",
+        "gpu",
+        "costPerHr",
+        "adjustedCostPerHr",
+        "lastStartedAt",
+        "connect_hint",
+      ].sort(),
+    );
+  });
+
+  it("connect_hint contains the pod id and runpodctl exec invocation", async () => {
+    const client = makeLaunchClient();
+    const result = (await launchPod.handler(
+      launchPod.inputSchema.parse({
+        name: "fresh",
+        image: "x",
+        confirm: true,
+      }),
+      { client: client as unknown as never },
+    )) as { connect_hint: string };
+    expect(result.connect_hint).toContain("pod_new");
+    expect(result.connect_hint).toContain("runpodctl exec --pod pod_new bash");
   });
 });

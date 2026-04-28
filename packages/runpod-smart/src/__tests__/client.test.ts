@@ -334,6 +334,136 @@ describe("RunpodClient.stopPod", () => {
   });
 });
 
+describe("RunpodClient.createPod", () => {
+  const mockCreated = {
+    id: "pod_new",
+    name: "fresh",
+    image: "runpod/pytorch:2.1.0",
+    desiredStatus: "CREATED",
+    costPerHr: 0.74,
+    adjustedCostPerHr: 0.74,
+    gpu: { displayName: "RTX 4090" },
+    gpuCount: 1,
+  };
+
+  it("POSTs /pods with bearer header and returns parsed pod", async () => {
+    process.env.RUNPOD_API_KEY = "test_key";
+    let seenAuth: string | null = null;
+    let seenMethod: string | null = null;
+    let seenUrl: string | null = null;
+    server.use(
+      http.post("https://rest.runpod.io/v1/pods", ({ request }) => {
+        seenAuth = request.headers.get("authorization");
+        seenMethod = request.method;
+        seenUrl = request.url;
+        return HttpResponse.json(mockCreated);
+      }),
+    );
+    const client = new RunpodClient();
+    const result = await client.createPod({ name: "fresh", imageName: "runpod/pytorch:2.1.0" });
+    expect(seenAuth).toBe("Bearer test_key");
+    expect(seenMethod).toBe("POST");
+    expect(seenUrl).toContain("https://rest.runpod.io/v1/pods");
+    expect(result.id).toBe("pod_new");
+  });
+
+  it("JSON-encodes the body exactly as passed", async () => {
+    process.env.RUNPOD_API_KEY = "test_key";
+    let seenBody: unknown = null;
+    server.use(
+      http.post("https://rest.runpod.io/v1/pods", async ({ request }) => {
+        seenBody = await request.json();
+        return HttpResponse.json(mockCreated);
+      }),
+    );
+    const client = new RunpodClient();
+    const body = {
+      name: "fresh",
+      imageName: "runpod/pytorch:2.1.0",
+      gpuTypeIds: ["NVIDIA GeForce RTX 4090"],
+      gpuCount: 2,
+      cloudType: "SECURE",
+      containerDiskInGb: 100,
+    };
+    await client.createPod(body);
+    expect(seenBody).toEqual(body);
+  });
+
+  it("returns the parsed pod response", async () => {
+    process.env.RUNPOD_API_KEY = "test_key";
+    server.use(
+      http.post("https://rest.runpod.io/v1/pods", () =>
+        HttpResponse.json(mockCreated),
+      ),
+    );
+    const client = new RunpodClient();
+    const result = await client.createPod({ name: "fresh", imageName: "x" });
+    expect(result).toMatchObject({
+      id: "pod_new",
+      name: "fresh",
+      desiredStatus: "CREATED",
+    });
+  });
+
+  it("maps 401 to AuthError mentioning RUNPOD_API_KEY", async () => {
+    process.env.RUNPOD_API_KEY = "bad_key";
+    server.use(
+      http.post("https://rest.runpod.io/v1/pods", () =>
+        HttpResponse.json({ error: "unauthorized" }, { status: 401 }),
+      ),
+    );
+    const client = new RunpodClient();
+    try {
+      await client.createPod({ name: "x", imageName: "y" });
+      throw new Error("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(AuthError);
+      expect((err as Error).message).toContain("RUNPOD_API_KEY");
+    }
+  });
+
+  it("retries 429 then throws RateLimitError after retries exhausted", async () => {
+    process.env.RUNPOD_API_KEY = "test_key";
+    let calls = 0;
+    server.use(
+      http.post("https://rest.runpod.io/v1/pods", () => {
+        calls++;
+        return HttpResponse.json({ error: "slow down" }, { status: 429 });
+      }),
+    );
+    const client = new RunpodClient();
+    await expect(
+      client.createPod({ name: "x", imageName: "y" }),
+    ).rejects.toBeInstanceOf(RateLimitError);
+    expect(calls).toBe(4);
+  });
+});
+
+describe("RunpodClient — RUNPOD_DEFAULT_GPU optional cred", () => {
+  let savedDefault: string | undefined;
+  beforeEach(() => {
+    savedDefault = process.env.RUNPOD_DEFAULT_GPU;
+    delete process.env.RUNPOD_DEFAULT_GPU;
+  });
+  afterEach(() => {
+    if (savedDefault === undefined) delete process.env.RUNPOD_DEFAULT_GPU;
+    else process.env.RUNPOD_DEFAULT_GPU = savedDefault;
+  });
+
+  it("exposes defaultGpu as undefined when RUNPOD_DEFAULT_GPU is unset", () => {
+    process.env.RUNPOD_API_KEY = "test_key";
+    const client = new RunpodClient();
+    expect(client.defaultGpu).toBeUndefined();
+  });
+
+  it("exposes defaultGpu when RUNPOD_DEFAULT_GPU is set", () => {
+    process.env.RUNPOD_API_KEY = "test_key";
+    process.env.RUNPOD_DEFAULT_GPU = "NVIDIA RTX A6000";
+    const client = new RunpodClient();
+    expect(client.defaultGpu).toBe("NVIDIA RTX A6000");
+  });
+});
+
 describe("RunpodClient.terminatePod", () => {
   it("DELETEs /pods/<id> and returns void on 204", async () => {
     process.env.RUNPOD_API_KEY = "test_key";

@@ -2,9 +2,16 @@ import { loadCreds, fetchJson, AuthError, NotFoundError } from "smart-mcp-core";
 
 export type RunpodCreds = {
   RUNPOD_API_KEY: string;
+  RUNPOD_DEFAULT_GPU?: string;
 };
 
-type RunpodCredsRecord = Record<"RUNPOD_API_KEY", string>;
+type RunpodCredsRecord = Record<"RUNPOD_API_KEY" | "RUNPOD_DEFAULT_GPU", string>;
+
+// Pod creation body. The Runpod REST API accepts many optional fields
+// (see https://rest.runpod.io/v1/openapi.json#/POST /pods). We keep this
+// type open so the tool layer can construct the precise wire shape without
+// the client having to mirror every field.
+export type PodCreateBody = Record<string, unknown>;
 
 // Pod shape mirrors a useful subset of fields documented in the Runpod
 // OpenAPI spec (https://rest.runpod.io/v1/openapi.json). The wire payload may
@@ -38,7 +45,16 @@ export class RunpodClient {
       (loadCreds<RunpodCredsRecord>({
         serviceName: "runpod-smart",
         required: ["RUNPOD_API_KEY"],
+        optional: ["RUNPOD_DEFAULT_GPU"],
       }) as RunpodCreds);
+  }
+
+  // The optional default GPU id used when callers don't specify one.
+  // Resolution order in tools is: explicit input → this getter → hardcoded
+  // fallback constant. Exposed as a getter (rather than the full creds
+  // record) so the API key never leaks out of the client.
+  get defaultGpu(): string | undefined {
+    return this.creds.RUNPOD_DEFAULT_GPU;
   }
 
   // ---------- Pod listing ----------
@@ -59,6 +75,26 @@ export class RunpodClient {
         },
       );
       return { pods: body };
+    } catch (err) {
+      if (err instanceof AuthError) {
+        throw new AuthError(
+          "Runpod rejected the API key. Check RUNPOD_API_KEY.",
+          { detail: err.detail, cause: err },
+        );
+      }
+      throw err;
+    }
+  }
+
+  // ---------- Pod creation ----------
+
+  async createPod(body: PodCreateBody): Promise<Pod> {
+    try {
+      return await fetchJson<Pod>("https://rest.runpod.io/v1/pods", {
+        method: "POST",
+        token: this.creds.RUNPOD_API_KEY,
+        body,
+      });
     } catch (err) {
       if (err instanceof AuthError) {
         throw new AuthError(
