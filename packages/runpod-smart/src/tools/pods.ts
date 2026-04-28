@@ -183,13 +183,16 @@ export const launchPod = defineTool<LaunchPodInput, LaunchPodOutput, RunpodConte
     // pre-flight pricing endpoint). Be honest in the preview rather than
     // fabricate a number from a stale GPU price table.
     const preview =
-      `Will launch ${input.name} on ${resolvedGpu}x${input.gpu_count} ` +
-      `in ${input.cloud_type} cloud (cost shown after creation)`;
+      `Will launch ${input.name} from ${input.image} on ${resolvedGpu}x${input.gpu_count} ` +
+      `in ${input.cloud_type} cloud, ${input.container_disk_gb}GB disk ` +
+      `(cost shown after creation)`;
     guardDestructive({ confirm: input.confirm, preview });
 
-    // Build the wire payload. We omit fields whose default is "no-op" rather
-    // than sending defaults explicitly — keeps requests minimal and lets the
-    // upstream API's own defaults govern in case they change.
+    // Defaults from the zod schema are resolved at parse time and sent explicitly.
+    // Conditionally omit fields where 0/undefined is meaningless to send:
+    // - volume_gb=0: skip volumeInGb + volumeMountPath
+    // - env undefined: skip env
+    // - template_id undefined: skip templateId
     const body: Record<string, unknown> = {
       name: input.name,
       imageName: input.image,

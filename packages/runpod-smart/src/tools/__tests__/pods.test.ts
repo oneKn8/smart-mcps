@@ -909,7 +909,7 @@ describe("launchPod — confirm gate", () => {
     expect(client.createPod).not.toHaveBeenCalled();
   });
 
-  it("preview text contains name, gpu, count, cloud_type, and cost-deferred phrasing", async () => {
+  it("preview text contains name, image, gpu, count, cloud_type, disk, and cost-deferred phrasing", async () => {
     const client = makeLaunchClient();
     try {
       await launchPod.handler(
@@ -919,6 +919,7 @@ describe("launchPod — confirm gate", () => {
           gpu: "NVIDIA RTX A6000",
           gpu_count: 2,
           cloud_type: "COMMUNITY",
+          container_disk_gb: 75,
         }),
         { client: client as unknown as never },
       );
@@ -927,9 +928,11 @@ describe("launchPod — confirm gate", () => {
       expect(err).toBeInstanceOf(ConfirmRequiredError);
       const preview = (err as ConfirmRequiredError).preview;
       expect(preview).toContain("fresh");
+      expect(preview).toContain("runpod/pytorch:2.1.0");
       expect(preview).toContain("NVIDIA RTX A6000");
       expect(preview).toContain("x2");
       expect(preview).toContain("COMMUNITY");
+      expect(preview).toContain("75GB");
       expect(preview).toContain("cost shown after creation");
     }
   });
