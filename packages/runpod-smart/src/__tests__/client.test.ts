@@ -464,6 +464,184 @@ describe("RunpodClient — RUNPOD_DEFAULT_GPU optional cred", () => {
   });
 });
 
+describe("RunpodClient.listTemplates", () => {
+  const mockTemplates = [
+    {
+      id: "30zmvf89kd",
+      name: "PyTorch 2.1",
+      imageName: "runpod/pytorch:2.1.0",
+      containerDiskInGb: 50,
+      volumeInGb: 0,
+      isServerless: false,
+      isPublic: true,
+      category: "NVIDIA",
+    },
+    {
+      id: "tpl_other",
+      name: "vLLM",
+      imageName: "runpod/vllm:latest",
+      containerDiskInGb: 100,
+      volumeInGb: 50,
+      isServerless: true,
+      isPublic: false,
+      category: "NVIDIA",
+    },
+  ];
+
+  it("calls GET https://rest.runpod.io/v1/templates with bearer header", async () => {
+    process.env.RUNPOD_API_KEY = "test_key";
+    let seenAuth: string | null = null;
+    let seenUrl: string | null = null;
+    server.use(
+      http.get("https://rest.runpod.io/v1/templates", ({ request }) => {
+        seenAuth = request.headers.get("authorization");
+        seenUrl = request.url;
+        return HttpResponse.json(mockTemplates);
+      }),
+    );
+    const client = new RunpodClient();
+    await client.listTemplates();
+    expect(seenAuth).toBe("Bearer test_key");
+    expect(seenUrl).toContain("https://rest.runpod.io/v1/templates");
+  });
+
+  it("returns parsed body normalized to { templates: Template[] }", async () => {
+    process.env.RUNPOD_API_KEY = "test_key";
+    server.use(
+      http.get("https://rest.runpod.io/v1/templates", () =>
+        HttpResponse.json(mockTemplates),
+      ),
+    );
+    const client = new RunpodClient();
+    const result = await client.listTemplates();
+    expect(result.templates).toHaveLength(2);
+    expect(result.templates[0]?.id).toBe("30zmvf89kd");
+    expect(result.templates[1]?.id).toBe("tpl_other");
+  });
+
+  it("maps 401 to AuthError mentioning RUNPOD_API_KEY", async () => {
+    process.env.RUNPOD_API_KEY = "bad_key";
+    server.use(
+      http.get("https://rest.runpod.io/v1/templates", () =>
+        HttpResponse.json({ error: "unauthorized" }, { status: 401 }),
+      ),
+    );
+    const client = new RunpodClient();
+    try {
+      await client.listTemplates();
+      throw new Error("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(AuthError);
+      expect((err as Error).message).toContain("RUNPOD_API_KEY");
+    }
+  });
+
+  it("retries 429 then throws RateLimitError after retries exhausted", async () => {
+    process.env.RUNPOD_API_KEY = "test_key";
+    let calls = 0;
+    server.use(
+      http.get("https://rest.runpod.io/v1/templates", () => {
+        calls++;
+        return HttpResponse.json({ error: "slow down" }, { status: 429 });
+      }),
+    );
+    const client = new RunpodClient();
+    await expect(client.listTemplates()).rejects.toBeInstanceOf(RateLimitError);
+    expect(calls).toBe(4);
+  });
+});
+
+describe("RunpodClient.listEndpoints", () => {
+  const mockEndpoints = [
+    {
+      id: "ep_abc",
+      name: "llama-prod",
+      templateId: "tpl_xyz",
+      gpuCount: 1,
+      workersMin: 0,
+      workersMax: 3,
+      idleTimeout: 5,
+      scalerType: "QUEUE_DELAY",
+      scalerValue: 4,
+      createdAt: "2026-04-01T12:00:00.000Z",
+    },
+    {
+      id: "ep_def",
+      name: "whisper",
+      templateId: "tpl_abc",
+      gpuCount: 1,
+      workersMin: 1,
+      workersMax: 5,
+      idleTimeout: 10,
+      scalerType: "REQUEST_COUNT",
+      scalerValue: 1,
+      createdAt: "2026-04-15T18:00:00.000Z",
+    },
+  ];
+
+  it("calls GET https://rest.runpod.io/v1/endpoints with bearer header", async () => {
+    process.env.RUNPOD_API_KEY = "test_key";
+    let seenAuth: string | null = null;
+    let seenUrl: string | null = null;
+    server.use(
+      http.get("https://rest.runpod.io/v1/endpoints", ({ request }) => {
+        seenAuth = request.headers.get("authorization");
+        seenUrl = request.url;
+        return HttpResponse.json(mockEndpoints);
+      }),
+    );
+    const client = new RunpodClient();
+    await client.listEndpoints();
+    expect(seenAuth).toBe("Bearer test_key");
+    expect(seenUrl).toContain("https://rest.runpod.io/v1/endpoints");
+  });
+
+  it("returns parsed body normalized to { endpoints: Endpoint[] }", async () => {
+    process.env.RUNPOD_API_KEY = "test_key";
+    server.use(
+      http.get("https://rest.runpod.io/v1/endpoints", () =>
+        HttpResponse.json(mockEndpoints),
+      ),
+    );
+    const client = new RunpodClient();
+    const result = await client.listEndpoints();
+    expect(result.endpoints).toHaveLength(2);
+    expect(result.endpoints[0]?.id).toBe("ep_abc");
+    expect(result.endpoints[1]?.id).toBe("ep_def");
+  });
+
+  it("maps 401 to AuthError mentioning RUNPOD_API_KEY", async () => {
+    process.env.RUNPOD_API_KEY = "bad_key";
+    server.use(
+      http.get("https://rest.runpod.io/v1/endpoints", () =>
+        HttpResponse.json({ error: "unauthorized" }, { status: 401 }),
+      ),
+    );
+    const client = new RunpodClient();
+    try {
+      await client.listEndpoints();
+      throw new Error("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(AuthError);
+      expect((err as Error).message).toContain("RUNPOD_API_KEY");
+    }
+  });
+
+  it("retries 429 then throws RateLimitError after retries exhausted", async () => {
+    process.env.RUNPOD_API_KEY = "test_key";
+    let calls = 0;
+    server.use(
+      http.get("https://rest.runpod.io/v1/endpoints", () => {
+        calls++;
+        return HttpResponse.json({ error: "slow down" }, { status: 429 });
+      }),
+    );
+    const client = new RunpodClient();
+    await expect(client.listEndpoints()).rejects.toBeInstanceOf(RateLimitError);
+    expect(calls).toBe(4);
+  });
+});
+
 describe("RunpodClient.terminatePod", () => {
   it("DELETEs /pods/<id> and returns void on 204", async () => {
     process.env.RUNPOD_API_KEY = "test_key";

@@ -36,6 +36,44 @@ export interface ListPodsOptions {
   desiredStatus?: string;
 }
 
+// Template shape mirrors a useful subset of fields documented in the Runpod
+// OpenAPI spec (https://rest.runpod.io/v1/openapi.json#/components/schemas/Template).
+// Additional upstream fields (env, dockerEntrypoint, readme, earned, etc.)
+// are preserved via the open record extension for forward compatibility.
+export type Template = Record<string, unknown> & {
+  id: string;
+  name?: string;
+  imageName?: string;
+  containerDiskInGb?: number;
+  volumeInGb?: number;
+  isServerless?: boolean;
+  isPublic?: boolean;
+  category?: string;
+};
+
+export interface ListTemplatesResponse {
+  templates: Template[];
+}
+
+// Endpoint shape mirrors a useful subset of fields documented in the Runpod
+// OpenAPI spec (https://rest.runpod.io/v1/openapi.json#/components/schemas/Endpoint).
+// Additional upstream fields (env, gpuTypeIds, dataCenterIds, networkVolumeId,
+// scaler config, workers count, etc.) are preserved via the open record
+// extension for forward compatibility.
+export type Endpoint = Record<string, unknown> & {
+  id: string;
+  name?: string;
+  templateId?: string;
+  workersMin?: number;
+  workersMax?: number;
+  idleTimeout?: number;
+  createdAt?: string;
+};
+
+export interface ListEndpointsResponse {
+  endpoints: Endpoint[];
+}
+
 export class RunpodClient {
   private readonly creds: RunpodCreds;
 
@@ -75,6 +113,48 @@ export class RunpodClient {
         },
       );
       return { pods: body };
+    } catch (err) {
+      if (err instanceof AuthError) {
+        throw new AuthError(
+          "Runpod rejected the API key. Check RUNPOD_API_KEY.",
+          { detail: err.detail, cause: err },
+        );
+      }
+      throw err;
+    }
+  }
+
+  // ---------- Template + endpoint listing ----------
+
+  async listTemplates(): Promise<ListTemplatesResponse> {
+    try {
+      // Runpod's GET /templates returns a bare array; wrap to {templates}
+      // for consistency with listPods/listEndpoints.
+      const body = await fetchJson<Template[]>(
+        "https://rest.runpod.io/v1/templates",
+        { token: this.creds.RUNPOD_API_KEY },
+      );
+      return { templates: body };
+    } catch (err) {
+      if (err instanceof AuthError) {
+        throw new AuthError(
+          "Runpod rejected the API key. Check RUNPOD_API_KEY.",
+          { detail: err.detail, cause: err },
+        );
+      }
+      throw err;
+    }
+  }
+
+  async listEndpoints(): Promise<ListEndpointsResponse> {
+    try {
+      // Runpod's GET /endpoints returns a bare array; wrap to {endpoints}
+      // for consistency with listPods/listTemplates.
+      const body = await fetchJson<Endpoint[]>(
+        "https://rest.runpod.io/v1/endpoints",
+        { token: this.creds.RUNPOD_API_KEY },
+      );
+      return { endpoints: body };
     } catch (err) {
       if (err instanceof AuthError) {
         throw new AuthError(
