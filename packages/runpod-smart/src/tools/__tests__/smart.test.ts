@@ -1,7 +1,14 @@
-import { describe, it, expect, vi } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  vi,
+  beforeEach,
+  afterEach,
+} from "vitest";
 import { z } from "zod";
 import { ConfirmRequiredError } from "smart-mcp-core";
-import { spinTrainingPod, TRAINING_IMAGES } from "../smart.js";
+import { spinTrainingPod, TRAINING_IMAGES, killIdlePods } from "../smart.js";
 
 type FakeLaunchClient = {
   createPod: ReturnType<typeof vi.fn>;
@@ -258,5 +265,333 @@ describe("spinTrainingPod — output shape", () => {
     );
     expect(result.id).toBe("pod_train");
     expect(result.connect_hint).toContain("pod_train");
+  });
+});
+
+// =============================================================================
+// killIdlePods
+// =============================================================================
+
+type FakeKillClient = {
+  listPods: ReturnType<typeof vi.fn>;
+  stopPod: ReturnType<typeof vi.fn>;
+};
+
+function makeKillClient(overrides: Partial<FakeKillClient> = {}): FakeKillClient {
+  return {
+    listPods: vi.fn().mockResolvedValue({ pods: [] }),
+    stopPod: vi.fn().mockResolvedValue({ id: "stopped" }),
+    ...overrides,
+  };
+}
+
+// Fixed reference time: 2026-04-27T12:00:00Z
+const NOW_ISO = "2026-04-27T12:00:00Z";
+const NOW_MS = Date.parse(NOW_ISO);
+const HOUR_MS = 3600 * 1000;
+
+function hoursAgo(h: number): string {
+  return new Date(NOW_MS - h * HOUR_MS).toISOString();
+}
+
+beforeEach(() => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date(NOW_ISO));
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+describe("killIdlePods — metadata", () => {
+  it("has correct name and description", () => {
+    expect(killIdlePods.name).toBe("kill_idle_pods");
+    expect(killIdlePods.description).toBe(
+      "Stop pods running > N hours without recent activity.",
+    );
+    expect(killIdlePods.inputSchema).toBeInstanceOf(z.ZodType);
+  });
+});
+
+describe("killIdlePods — schema", () => {
+  it("applies defaults: older_than_hours=24, dry_run=true, confirm=false", () => {
+    const parsed = killIdlePods.inputSchema.parse({}) as {
+      older_than_hours: number;
+      dry_run: boolean;
+      confirm: boolean;
+    };
+    expect(parsed.older_than_hours).toBe(24);
+    expect(parsed.dry_run).toBe(true);
+    expect(parsed.confirm).toBe(false);
+  });
+
+  it("rejects older_than_hours: 0 (min 1)", () => {
+    expect(() =>
+      killIdlePods.inputSchema.parse({ older_than_hours: 0 }),
+    ).toThrow();
+  });
+
+  it("rejects older_than_hours: 721 (max 720)", () => {
+    expect(() =>
+      killIdlePods.inputSchema.parse({ older_than_hours: 721 }),
+    ).toThrow();
+  });
+
+  it("rejects non-integer older_than_hours", () => {
+    expect(() =>
+      killIdlePods.inputSchema.parse({ older_than_hours: 1.5 }),
+    ).toThrow();
+  });
+});
+
+describe("killIdlePods — listPods filter", () => {
+  it("calls client.listPods with desiredStatus=RUNNING", async () => {
+    const client = makeKillClient();
+    await killIdlePods.handler(
+      killIdlePods.inputSchema.parse({}),
+      { client: client as unknown as never },
+    );
+    expect(client.listPods).toHaveBeenCalledTimes(1);
+    expect(client.listPods).toHaveBeenCalledWith({ desiredStatus: "RUNNING" });
+  });
+});
+
+describe("killIdlePods — idleness math", () => {
+  it("filters by lastStartedAt < now - older_than_hours", async () => {
+    const client = makeKillClient({
+      listPods: vi.fn().mockResolvedValue({
+        pods: [
+          { id: "fresh", name: "fresh", lastStartedAt: hoursAgo(1), costPerHr: 0.5 },
+          { id: "old1", name: "old1", lastStartedAt: hoursAgo(25), costPerHr: 0.5 },
+          { id: "old2", name: "old2", lastStartedAt: hoursAgo(100), costPerHr: 1.0 },
+        ],
+      }),
+    });
+    const result = (await killIdlePods.handler(
+      killIdlePods.inputSchema.parse({ older_than_hours: 24 }),
+      { client: client as unknown as never },
+    )) as { scanned: number; candidates: Array<{ id: string }> };
+    expect(result.scanned).toBe(3);
+    expect(result.candidates.map((c) => c.id).sort()).toEqual(["old1", "old2"]);
+  });
+
+  it("skips pods with no lastStartedAt", async () => {
+    const client = makeKillClient({
+      listPods: vi.fn().mockResolvedValue({
+        pods: [
+          { id: "no-start", name: "no-start", costPerHr: 0.5 },
+          { id: "old", name: "old", lastStartedAt: hoursAgo(50), costPerHr: 0.5 },
+        ],
+      }),
+    });
+    const result = (await killIdlePods.handler(
+      killIdlePods.inputSchema.parse({}),
+      { client: client as unknown as never },
+    )) as { candidates: Array<{ id: string }> };
+    expect(result.candidates.map((c) => c.id)).toEqual(["old"]);
+  });
+
+  it("skips pods with malformed lastStartedAt", async () => {
+    const client = makeKillClient({
+      listPods: vi.fn().mockResolvedValue({
+        pods: [
+          { id: "bad", name: "bad", lastStartedAt: "not-a-date", costPerHr: 0.5 },
+          { id: "old", name: "old", lastStartedAt: hoursAgo(50), costPerHr: 0.5 },
+        ],
+      }),
+    });
+    const result = (await killIdlePods.handler(
+      killIdlePods.inputSchema.parse({}),
+      { client: client as unknown as never },
+    )) as { candidates: Array<{ id: string }> };
+    expect(result.candidates.map((c) => c.id)).toEqual(["old"]);
+  });
+});
+
+describe("killIdlePods — dry_run path", () => {
+  it("default dry_run returns candidates with empty stopped[]", async () => {
+    const client = makeKillClient({
+      listPods: vi.fn().mockResolvedValue({
+        pods: [
+          { id: "old", name: "old", lastStartedAt: hoursAgo(50), costPerHr: 0.7 },
+        ],
+      }),
+    });
+    const result = (await killIdlePods.handler(
+      killIdlePods.inputSchema.parse({}),
+      { client: client as unknown as never },
+    )) as {
+      scanned: number;
+      candidates: Array<{ id: string }>;
+      stopped: Array<unknown>;
+    };
+    expect(result.candidates).toHaveLength(1);
+    expect(result.stopped).toEqual([]);
+    expect(client.stopPod).not.toHaveBeenCalled();
+  });
+
+  it("dry_run=true with confirm=true still does not stop", async () => {
+    const client = makeKillClient({
+      listPods: vi.fn().mockResolvedValue({
+        pods: [
+          { id: "old", name: "old", lastStartedAt: hoursAgo(50), costPerHr: 0.7 },
+        ],
+      }),
+    });
+    const result = (await killIdlePods.handler(
+      killIdlePods.inputSchema.parse({ dry_run: true, confirm: true }),
+      { client: client as unknown as never },
+    )) as { stopped: Array<unknown> };
+    expect(result.stopped).toEqual([]);
+    expect(client.stopPod).not.toHaveBeenCalled();
+  });
+});
+
+describe("killIdlePods — confirm gate", () => {
+  it("dry_run=false with confirm=false throws ConfirmRequiredError with preview", async () => {
+    const client = makeKillClient({
+      listPods: vi.fn().mockResolvedValue({
+        pods: [
+          { id: "old1", name: "old1", lastStartedAt: hoursAgo(50), costPerHr: 0.7 },
+          { id: "old2", name: "old2", lastStartedAt: hoursAgo(100), costPerHr: 1.3 },
+        ],
+      }),
+    });
+    let caught: unknown;
+    try {
+      await killIdlePods.handler(
+        killIdlePods.inputSchema.parse({ dry_run: false, confirm: false }),
+        { client: client as unknown as never },
+      );
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(ConfirmRequiredError);
+    const preview = (caught as ConfirmRequiredError).preview;
+    expect(preview).toContain("2");
+    expect(preview).toContain("24h");
+    expect(preview).toContain("2.00");
+    expect(client.stopPod).not.toHaveBeenCalled();
+  });
+});
+
+describe("killIdlePods — destructive path", () => {
+  it("dry_run=false + confirm=true stops each candidate sequentially", async () => {
+    const callOrder: string[] = [];
+    const stopPod = vi.fn(async (id: string) => {
+      callOrder.push(id);
+      return { id };
+    });
+    const client = makeKillClient({
+      listPods: vi.fn().mockResolvedValue({
+        pods: [
+          { id: "a", name: "a", lastStartedAt: hoursAgo(50), costPerHr: 0.5 },
+          { id: "b", name: "b", lastStartedAt: hoursAgo(60), costPerHr: 0.7 },
+          { id: "c", name: "c", lastStartedAt: hoursAgo(70), costPerHr: 1.0 },
+        ],
+      }),
+      stopPod,
+    });
+    const result = (await killIdlePods.handler(
+      killIdlePods.inputSchema.parse({ dry_run: false, confirm: true }),
+      { client: client as unknown as never },
+    )) as { stopped: Array<{ id: string; ok: boolean }> };
+    expect(callOrder).toEqual(["a", "b", "c"]);
+    expect(result.stopped).toEqual([
+      { id: "a", ok: true },
+      { id: "b", ok: true },
+      { id: "c", ok: true },
+    ]);
+  });
+
+  it("partial failure: continues after error and reports per-pod ok flag", async () => {
+    const stopPod = vi.fn(async (id: string) => {
+      if (id === "b") throw new Error("pod busy");
+      return { id };
+    });
+    const client = makeKillClient({
+      listPods: vi.fn().mockResolvedValue({
+        pods: [
+          { id: "a", name: "a", lastStartedAt: hoursAgo(50), costPerHr: 0.5 },
+          { id: "b", name: "b", lastStartedAt: hoursAgo(60), costPerHr: 0.7 },
+          { id: "c", name: "c", lastStartedAt: hoursAgo(70), costPerHr: 1.0 },
+        ],
+      }),
+      stopPod,
+    });
+    const result = (await killIdlePods.handler(
+      killIdlePods.inputSchema.parse({ dry_run: false, confirm: true }),
+      { client: client as unknown as never },
+    )) as { stopped: Array<{ id: string; ok: boolean; error?: string }> };
+    expect(result.stopped).toEqual([
+      { id: "a", ok: true },
+      { id: "b", ok: false, error: "pod busy" },
+      { id: "c", ok: true },
+    ]);
+    expect(stopPod).toHaveBeenCalledTimes(3);
+  });
+
+  it("empty candidates: returns empty stopped without throwing", async () => {
+    const client = makeKillClient({
+      listPods: vi.fn().mockResolvedValue({
+        pods: [
+          { id: "fresh", name: "fresh", lastStartedAt: hoursAgo(1), costPerHr: 0.5 },
+        ],
+      }),
+    });
+    const result = (await killIdlePods.handler(
+      killIdlePods.inputSchema.parse({ dry_run: false, confirm: false }),
+      { client: client as unknown as never },
+    )) as {
+      scanned: number;
+      candidates: Array<unknown>;
+      stopped: Array<unknown>;
+      total_savings_estimate_per_hr: number;
+    };
+    expect(result.scanned).toBe(1);
+    expect(result.candidates).toEqual([]);
+    expect(result.stopped).toEqual([]);
+    expect(result.total_savings_estimate_per_hr).toBe(0);
+    expect(client.stopPod).not.toHaveBeenCalled();
+  });
+});
+
+describe("killIdlePods — output detail", () => {
+  it("total_savings_estimate_per_hr sums candidate costPerHr", async () => {
+    const client = makeKillClient({
+      listPods: vi.fn().mockResolvedValue({
+        pods: [
+          { id: "a", name: "a", lastStartedAt: hoursAgo(50), costPerHr: 0.5 },
+          { id: "b", name: "b", lastStartedAt: hoursAgo(60), costPerHr: 1.25 },
+          { id: "fresh", name: "fresh", lastStartedAt: hoursAgo(1), costPerHr: 99 },
+        ],
+      }),
+    });
+    const result = (await killIdlePods.handler(
+      killIdlePods.inputSchema.parse({}),
+      { client: client as unknown as never },
+    )) as { total_savings_estimate_per_hr: number };
+    expect(result.total_savings_estimate_per_hr).toBeCloseTo(1.75, 5);
+  });
+
+  it("hours_running rounds to 1 decimal place", async () => {
+    const client = makeKillClient({
+      listPods: vi.fn().mockResolvedValue({
+        pods: [
+          {
+            id: "p",
+            name: "p",
+            // 25.36 hours ago -> rounds to 25.4
+            lastStartedAt: new Date(NOW_MS - 25.36 * HOUR_MS).toISOString(),
+            costPerHr: 0.5,
+          },
+        ],
+      }),
+    });
+    const result = (await killIdlePods.handler(
+      killIdlePods.inputSchema.parse({}),
+      { client: client as unknown as never },
+    )) as { candidates: Array<{ hours_running: number }> };
+    expect(result.candidates[0]?.hours_running).toBe(25.4);
   });
 });

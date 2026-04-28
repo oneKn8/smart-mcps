@@ -1,8 +1,9 @@
 import { z } from "zod";
-import { defineTool } from "smart-mcp-core";
+import { defineTool, guardDestructive } from "smart-mcp-core";
 import type { RunpodContext } from "../context.js";
 import { launchPod } from "./pods.js";
 import type { SlimPod } from "./pod-mapper.js";
+import { nullableString } from "./null-helpers.js";
 
 // =============================================================================
 // spin_training_pod — smart shortcut over launch_pod
@@ -100,5 +101,156 @@ export const spinTrainingPod = defineTool<
     });
 
     return await launchPod.handler(launchInput, context);
+  },
+});
+
+// =============================================================================
+// kill_idle_pods — destructive bulk-stop shortcut
+// =============================================================================
+//
+// Lists RUNNING pods, filters those whose `lastStartedAt` is older than
+// `older_than_hours` ago, and (with confirm=true and dry_run=false) issues
+// sequential stopPod calls. The tool follows a two-step preview/apply pattern:
+//
+//   1. Default call (dry_run=true) → returns the candidate list and the
+//      total per-hour savings estimate, but never touches anything. The
+//      caller inspects, then decides.
+//   2. Apply call (dry_run=false, confirm=true) → walks the candidate list
+//      and stops each pod sequentially. Failures don't abort the loop;
+//      each pod gets its own { ok, error? } entry in `stopped`.
+//
+// Edge cases:
+// - dry_run=true wins over confirm. If both are set, we still don't stop.
+// - Pods missing `lastStartedAt` (or with malformed timestamps) can't be
+//   judged for idleness, so they're silently skipped from the candidate set.
+// - Empty candidate set on an apply call short-circuits the confirm gate
+//   (stopping zero pods isn't destructive).
+
+const killIdlePodsInputSchema = z.object({
+  older_than_hours: z.number().int().min(1).max(720).optional().default(24),
+  dry_run: z.boolean().optional().default(true),
+  confirm: z.boolean().optional().default(false),
+});
+
+type KillIdlePodsInput = z.infer<typeof killIdlePodsInputSchema>;
+
+type KillIdlePodCandidate = {
+  id: string;
+  name: string | null;
+  started_at: string | null;
+  hours_running: number;
+  costPerHr: number;
+};
+
+type KillIdlePodStopped = {
+  id: string;
+  ok: boolean;
+  error?: string;
+};
+
+type KillIdlePodsOutput = {
+  scanned: number;
+  candidates: KillIdlePodCandidate[];
+  stopped: KillIdlePodStopped[];
+  total_savings_estimate_per_hr: number;
+};
+
+export const killIdlePods = defineTool<
+  KillIdlePodsInput,
+  KillIdlePodsOutput,
+  RunpodContext
+>({
+  name: "kill_idle_pods",
+  description: "Stop pods running > N hours without recent activity.",
+  // Cast required: schema's input type is wider than the resolved output
+  // type (every field is `.optional().default(...)`).
+  inputSchema: killIdlePodsInputSchema as unknown as z.ZodType<KillIdlePodsInput>,
+  handler: async (input, context) => {
+    const now = Date.now();
+    const cutoff = now - input.older_than_hours * 3600 * 1000;
+
+    const { pods } = await context.client.listPods({ desiredStatus: "RUNNING" });
+
+    const candidates: KillIdlePodCandidate[] = [];
+    for (const pod of pods) {
+      const record = pod as Record<string, unknown>;
+      const startedRaw = record.lastStartedAt;
+      // No timestamp -> can't judge idleness; skip rather than guess.
+      if (typeof startedRaw !== "string") continue;
+      const startedMs = Date.parse(startedRaw);
+      if (Number.isNaN(startedMs)) continue;
+      // Not old enough yet.
+      if (startedMs >= cutoff) continue;
+
+      // Round hours_running to 1 decimal place.
+      const hoursRunning =
+        Math.round(((now - startedMs) / 3600 / 1000) * 10) / 10;
+
+      candidates.push({
+        id: typeof record.id === "string" ? record.id : "",
+        name: nullableString(record.name),
+        started_at: startedRaw,
+        hours_running: hoursRunning,
+        costPerHr: typeof record.costPerHr === "number" ? record.costPerHr : 0,
+      });
+    }
+
+    const total_savings_estimate_per_hr = candidates.reduce(
+      (sum, c) => sum + c.costPerHr,
+      0,
+    );
+    const scanned = pods.length;
+
+    // dry_run wins. Even if confirm=true, dry_run=true means preview only.
+    if (input.dry_run) {
+      return {
+        scanned,
+        candidates,
+        stopped: [],
+        total_savings_estimate_per_hr,
+      };
+    }
+
+    // Apply path. Empty candidate set short-circuits the confirm gate —
+    // stopping zero pods isn't destructive, no need to round-trip the user.
+    if (candidates.length === 0) {
+      return {
+        scanned,
+        candidates,
+        stopped: [],
+        total_savings_estimate_per_hr,
+      };
+    }
+
+    guardDestructive({
+      confirm: input.confirm,
+      preview:
+        `Will stop ${candidates.length} pod(s) idle > ${input.older_than_hours}h, ` +
+        `saving ~$${total_savings_estimate_per_hr.toFixed(2)}/hr`,
+    });
+
+    // Sequential awaits: a parallel Promise.all would race the upstream API
+    // and obscure per-pod failures. Sequential is also kinder on rate limits
+    // and produces a stable callback order for tests.
+    const stopped: KillIdlePodStopped[] = [];
+    for (const candidate of candidates) {
+      try {
+        await context.client.stopPod(candidate.id);
+        stopped.push({ id: candidate.id, ok: true });
+      } catch (err) {
+        stopped.push({
+          id: candidate.id,
+          ok: false,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    return {
+      scanned,
+      candidates,
+      stopped,
+      total_savings_estimate_per_hr,
+    };
   },
 });
