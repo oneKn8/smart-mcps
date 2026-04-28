@@ -49,17 +49,16 @@ export class RunpodClient {
     };
 
     try {
-      // Runpod's GET /v1/pods returns a bare Pod[] array per OpenAPI spec.
-      // We normalize to { pods: Pod[] } so tools can rely on a stable shape.
-      const body = await fetchJson<Pod[] | ListPodsResponse>(
+      // Runpod's GET /pods returns a bare array; we wrap to {pods} for
+      // ergonomic downstream consumption.
+      const body = await fetchJson<Pod[]>(
         "https://rest.runpod.io/v1/pods",
         {
           token: this.creds.RUNPOD_API_KEY,
           searchParams,
         },
       );
-      if (Array.isArray(body)) return { pods: body };
-      return body;
+      return { pods: body };
     } catch (err) {
       if (err instanceof AuthError) {
         throw new AuthError(
