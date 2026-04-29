@@ -22,6 +22,9 @@ type WeatherCredsRecord = Record<
 
 const OPEN_METEO_GEOCODE = "https://geocoding-api.open-meteo.com/v1/search";
 const OPEN_METEO_FORECAST = "https://api.open-meteo.com/v1/forecast";
+const OPEN_METEO_ARCHIVE = "https://archive-api.open-meteo.com/v1/archive";
+const OPEN_METEO_AIR_QUALITY =
+  "https://air-quality-api.open-meteo.com/v1/air-quality";
 
 // NWS requires every request to identify the caller via User-Agent. Reuse
 // across all NWS-bound calls so api.weather.gov can rate-limit per app.
@@ -124,6 +127,32 @@ export type DailyEntry = {
   wind_speed_max: number;
   weather_code: number;
   uv_index_max: number;
+};
+
+// Slim shape for one day of historical (ERA5 reanalysis) observations.
+// The archive endpoint exposes only daily aggregates in our query, no
+// hourly. Fields are normalised the same way as DailyEntry.
+export type HistoricalEntry = {
+  date: string;
+  temp_max: number;
+  temp_min: number;
+  precipitation_sum: number;
+  wind_speed_max: number;
+};
+
+// Slim shape for the air-quality "current" snapshot. Pollutant fields are
+// renamed from upstream's verbose names (nitrogen_dioxide → no2,
+// sulphur_dioxide → so2, carbon_monoxide → co) so the LLM caller deals with
+// the canonical short codes.
+export type AirQualitySnapshot = {
+  time: string;
+  aqi_us: number;
+  pm2_5: number;
+  pm10: number;
+  ozone: number;
+  no2: number;
+  so2: number;
+  co: number;
 };
 
 // Open-Meteo geocoding response shape (slim). The upstream payload carries
@@ -400,8 +429,112 @@ export class WeatherClient {
     this.cache.set(key, out, TTL.daily);
     return out;
   }
+
+  // Historical daily observations from the ERA5 reanalysis archive. Same
+  // zip-on-parallel-arrays pattern as getDaily, but pulled from the archive
+  // endpoint and bounded by start_date/end_date (inclusive). Cached with
+  // TTL.historical (infinite) since past observations are immutable. Range
+  // bounds and the ERA5 ~5-day reanalysis lag are validated at the tool
+  // layer, not here — the client just forwards the dates upstream.
+  async getHistorical(args: {
+    lat: number;
+    lng: number;
+    units: Units;
+    start_date: string;
+    end_date: string;
+  }): Promise<{ entries: HistoricalEntry[]; timezone: string }> {
+    const key = cacheKey("getHistorical", args);
+    const cached = this.cache.get<{
+      entries: HistoricalEntry[];
+      timezone: string;
+    }>(key);
+    if (cached) return cached;
+
+    const data = await fetchJson<{
+      timezone: string;
+      daily: {
+        time: string[];
+        temperature_2m_max: number[];
+        temperature_2m_min: number[];
+        precipitation_sum: number[];
+        wind_speed_10m_max: number[];
+      };
+    }>(OPEN_METEO_ARCHIVE, {
+      searchParams: {
+        latitude: String(args.lat),
+        longitude: String(args.lng),
+        timezone: "auto",
+        start_date: args.start_date,
+        end_date: args.end_date,
+        daily:
+          "temperature_2m_max,temperature_2m_min,precipitation_sum,wind_speed_10m_max",
+        ...unitParams(args.units),
+      },
+    });
+
+    const zipped = zip(data.daily);
+    const entries: HistoricalEntry[] = zipped.map((r) => ({
+      date: r.time,
+      temp_max: r.temperature_2m_max,
+      temp_min: r.temperature_2m_min,
+      precipitation_sum: r.precipitation_sum,
+      wind_speed_max: r.wind_speed_10m_max,
+    }));
+
+    const out = { entries, timezone: data.timezone };
+    this.cache.set(key, out, TTL.historical);
+    return out;
+  }
+
+  // Air quality snapshot for a coordinate. Returns the EPA-style US AQI plus
+  // raw pollutant concentrations (PM2.5, PM10, ozone, NO2, SO2, CO). The
+  // air-quality endpoint reports concentrations only in µg/m³ — it does NOT
+  // accept temperature_unit / windspeed_unit / precipitation_unit, so we
+  // intentionally do NOT pass unitParams here. Cached for TTL.airQuality
+  // (30 min).
+  async getAirQuality(args: {
+    lat: number;
+    lng: number;
+  }): Promise<AirQualitySnapshot> {
+    const key = cacheKey("getAirQuality", args);
+    const cached = this.cache.get<AirQualitySnapshot>(key);
+    if (cached) return cached;
+
+    const data = await fetchJson<{
+      current: Record<string, unknown>;
+    }>(OPEN_METEO_AIR_QUALITY, {
+      searchParams: {
+        latitude: String(args.lat),
+        longitude: String(args.lng),
+        timezone: "auto",
+        current:
+          "us_aqi,pm2_5,pm10,ozone,nitrogen_dioxide,sulphur_dioxide,carbon_monoxide",
+      },
+    });
+
+    const c = data.current;
+    const out: AirQualitySnapshot = {
+      time: c.time as string,
+      aqi_us: c.us_aqi as number,
+      pm2_5: c.pm2_5 as number,
+      pm10: c.pm10 as number,
+      ozone: c.ozone as number,
+      no2: c.nitrogen_dioxide as number,
+      so2: c.sulphur_dioxide as number,
+      co: c.carbon_monoxide as number,
+    };
+
+    this.cache.set(key, out, TTL.airQuality);
+    return out;
+  }
 }
 
 // Re-export so other modules (or future tools) can import the constant
 // without re-deriving it.
-export { NWS_USER_AGENT, OPEN_METEO_GEOCODE, OPEN_METEO_FORECAST };
+export {
+  NWS_USER_AGENT,
+  OPEN_METEO_GEOCODE,
+  OPEN_METEO_FORECAST,
+  OPEN_METEO_ARCHIVE,
+  OPEN_METEO_AIR_QUALITY,
+};

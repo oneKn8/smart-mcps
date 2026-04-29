@@ -6,6 +6,7 @@ import {
   afterAll,
   afterEach,
   beforeEach,
+  vi,
 } from "vitest";
 import { setupServer } from "msw/node";
 import { http, HttpResponse } from "msw";
@@ -729,5 +730,234 @@ describe("WeatherClient.getDaily", () => {
     });
     expect(result.entries).toHaveLength(1);
     expect(calls).toBe(2);
+  });
+});
+
+const ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive";
+
+const mockHistorical2 = {
+  timezone: "America/Chicago",
+  daily: {
+    time: ["2026-04-01", "2026-04-02"],
+    temperature_2m_max: [75.4, 80.1],
+    temperature_2m_min: [55.2, 58.7],
+    precipitation_sum: [0.12, 0],
+    wind_speed_10m_max: [11.5, 14.2],
+  },
+};
+
+describe("WeatherClient.getHistorical", () => {
+  it("maps archive response to slim HistoricalEntry shape (5 keys per entry)", async () => {
+    server.use(http.get(ARCHIVE_URL, () => HttpResponse.json(mockHistorical2)));
+    const client = new WeatherClient();
+    const result = await client.getHistorical({
+      lat: 32.7767,
+      lng: -96.797,
+      units: "imperial",
+      start_date: "2026-04-01",
+      end_date: "2026-04-02",
+    });
+    expect(result.timezone).toBe("America/Chicago");
+    expect(result.entries).toHaveLength(2);
+    expect(result.entries[0]).toEqual({
+      date: "2026-04-01",
+      temp_max: 75.4,
+      temp_min: 55.2,
+      precipitation_sum: 0.12,
+      wind_speed_max: 11.5,
+    });
+    expect(Object.keys(result.entries[0]!).sort()).toEqual([
+      "date",
+      "precipitation_sum",
+      "temp_max",
+      "temp_min",
+      "wind_speed_max",
+    ]);
+  });
+
+  it("sends start_date, end_date, daily fields, units, and timezone=auto", async () => {
+    let seenUrl: string | null = null;
+    server.use(
+      http.get(ARCHIVE_URL, ({ request }) => {
+        seenUrl = request.url;
+        return HttpResponse.json(mockHistorical2);
+      }),
+    );
+    const client = new WeatherClient();
+    await client.getHistorical({
+      lat: 32.7767,
+      lng: -96.797,
+      units: "imperial",
+      start_date: "2026-04-01",
+      end_date: "2026-04-02",
+    });
+    const url = new URL(seenUrl!);
+    expect(url.searchParams.get("start_date")).toBe("2026-04-01");
+    expect(url.searchParams.get("end_date")).toBe("2026-04-02");
+    expect(url.searchParams.get("timezone")).toBe("auto");
+    expect(url.searchParams.get("daily")).toBe(
+      "temperature_2m_max,temperature_2m_min,precipitation_sum,wind_speed_10m_max",
+    );
+    expect(url.searchParams.get("temperature_unit")).toBe("fahrenheit");
+    expect(url.searchParams.get("windspeed_unit")).toBe("mph");
+    expect(url.searchParams.get("precipitation_unit")).toBe("inch");
+  });
+
+  it("caches with TTL.historical (infinite): second call hits cache even after long delay", async () => {
+    let calls = 0;
+    server.use(
+      http.get(ARCHIVE_URL, () => {
+        calls++;
+        return HttpResponse.json(mockHistorical2);
+      }),
+    );
+    const client = new WeatherClient();
+    const args = {
+      lat: 32.7767,
+      lng: -96.797,
+      units: "imperial" as const,
+      start_date: "2026-04-01",
+      end_date: "2026-04-02",
+    };
+    await client.getHistorical(args);
+    // Advance the clock by 100 years; TTL.historical is infinite, so the
+    // entry must still be served from cache.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2126-04-01T00:00:00Z"));
+    await client.getHistorical(args);
+    vi.useRealTimers();
+    expect(calls).toBe(1);
+  });
+
+  it("returns empty entries when daily.time array is empty", async () => {
+    server.use(
+      http.get(ARCHIVE_URL, () =>
+        HttpResponse.json({
+          timezone: "America/Chicago",
+          daily: {
+            time: [],
+            temperature_2m_max: [],
+            temperature_2m_min: [],
+            precipitation_sum: [],
+            wind_speed_10m_max: [],
+          },
+        }),
+      ),
+    );
+    const client = new WeatherClient();
+    const result = await client.getHistorical({
+      lat: 32.7767,
+      lng: -96.797,
+      units: "metric",
+      start_date: "2026-04-01",
+      end_date: "2026-04-02",
+    });
+    expect(result.entries).toEqual([]);
+    expect(result.timezone).toBe("America/Chicago");
+  });
+});
+
+const AIR_QUALITY_URL =
+  "https://air-quality-api.open-meteo.com/v1/air-quality";
+
+const mockAirQuality = {
+  current: {
+    time: "2026-04-29T14:00",
+    us_aqi: 42,
+    pm2_5: 12.3,
+    pm10: 18.5,
+    ozone: 65.0,
+    nitrogen_dioxide: 22.4,
+    sulphur_dioxide: 1.2,
+    carbon_monoxide: 200,
+  },
+};
+
+describe("WeatherClient.getAirQuality", () => {
+  it("maps air-quality response to slim AirQualitySnapshot shape (8 keys, with field renames)", async () => {
+    server.use(
+      http.get(AIR_QUALITY_URL, () => HttpResponse.json(mockAirQuality)),
+    );
+    const client = new WeatherClient();
+    const result = await client.getAirQuality({
+      lat: 32.7767,
+      lng: -96.797,
+    });
+    expect(result).toEqual({
+      time: "2026-04-29T14:00",
+      aqi_us: 42,
+      pm2_5: 12.3,
+      pm10: 18.5,
+      ozone: 65.0,
+      no2: 22.4,
+      so2: 1.2,
+      co: 200,
+    });
+    expect(Object.keys(result).sort()).toEqual([
+      "aqi_us",
+      "co",
+      "no2",
+      "ozone",
+      "pm10",
+      "pm2_5",
+      "so2",
+      "time",
+    ]);
+  });
+
+  it("sends current=us_aqi,pm2_5,... and timezone=auto", async () => {
+    let seenUrl: string | null = null;
+    server.use(
+      http.get(AIR_QUALITY_URL, ({ request }) => {
+        seenUrl = request.url;
+        return HttpResponse.json(mockAirQuality);
+      }),
+    );
+    const client = new WeatherClient();
+    await client.getAirQuality({ lat: 32.7767, lng: -96.797 });
+    const url = new URL(seenUrl!);
+    expect(url.searchParams.get("current")).toBe(
+      "us_aqi,pm2_5,pm10,ozone,nitrogen_dioxide,sulphur_dioxide,carbon_monoxide",
+    );
+    expect(url.searchParams.get("timezone")).toBe("auto");
+  });
+
+  it("does NOT send unit query params (air-quality endpoint takes no units)", async () => {
+    let seenUrl: string | null = null;
+    server.use(
+      http.get(AIR_QUALITY_URL, ({ request }) => {
+        seenUrl = request.url;
+        return HttpResponse.json(mockAirQuality);
+      }),
+    );
+    const client = new WeatherClient();
+    await client.getAirQuality({ lat: 32.7767, lng: -96.797 });
+    const url = new URL(seenUrl!);
+    expect(url.searchParams.has("temperature_unit")).toBe(false);
+    expect(url.searchParams.has("windspeed_unit")).toBe(false);
+    expect(url.searchParams.has("precipitation_unit")).toBe(false);
+  });
+
+  it("caches with TTL.airQuality (30 min): expires after 30 min advance", async () => {
+    let calls = 0;
+    server.use(
+      http.get(AIR_QUALITY_URL, () => {
+        calls++;
+        return HttpResponse.json(mockAirQuality);
+      }),
+    );
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-29T12:00:00Z"));
+    const client = new WeatherClient();
+    await client.getAirQuality({ lat: 32.7767, lng: -96.797 });
+    // Just before the 30-min cache window expires — still cached.
+    vi.setSystemTime(new Date("2026-04-29T12:29:00Z"));
+    await client.getAirQuality({ lat: 32.7767, lng: -96.797 });
+    expect(calls).toBe(1);
+    // Past 30 min — must hit the network again.
+    vi.setSystemTime(new Date("2026-04-29T12:31:00Z"));
+    await client.getAirQuality({ lat: 32.7767, lng: -96.797 });
+    expect(calls).toBe(2);
+    vi.useRealTimers();
   });
 });
