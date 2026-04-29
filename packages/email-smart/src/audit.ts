@@ -11,10 +11,18 @@ export type AuditEntry = {
   subject: string;
   gmail_id: string;
   gmail_thread_id: string;
+  /**
+   * Number of attachments included in the send. Only set by send_with_attachment
+   * tool; legacy send_email entries (and Python writer entries) omit it. Reader
+   * tolerates absence.
+   */
+  attachment_count?: number;
 };
 
 // Field order matches what Python `bin/send-email.py` writes so JSONL grep /
-// column-position queries work uniformly across Python + TS senders.
+// column-position queries work uniformly across Python + TS senders. The
+// optional `attachment_count` field is appended only when present (not in
+// AUDIT_FIELDS so reader treats Python entries without it as valid).
 const AUDIT_FIELDS = [
   "ts",
   "account",
@@ -55,7 +63,7 @@ export function appendAudit(entry: AuditEntry, home?: string): void {
   const dir = auditDir(root);
   fs.mkdirSync(dir, { recursive: true });
 
-  const ordered: Record<string, string> = {
+  const ordered: Record<string, string | number> = {
     ts: entry.ts,
     account: entry.account,
     to: entry.to,
@@ -65,6 +73,16 @@ export function appendAudit(entry: AuditEntry, home?: string): void {
     gmail_id: entry.gmail_id,
     gmail_thread_id: entry.gmail_thread_id,
   };
+
+  // Append attachment_count ONLY when set to a positive integer. Keeps the
+  // on-disk JSONL shape identical to Python's writer for non-attachment sends
+  // so audit-log reader tooling that hard-codes 8 keys continues to match.
+  if (
+    typeof entry.attachment_count === "number" &&
+    entry.attachment_count > 0
+  ) {
+    ordered.attachment_count = entry.attachment_count;
+  }
 
   fs.appendFileSync(auditFile(root), JSON.stringify(ordered) + "\n");
 }
@@ -103,7 +121,7 @@ function coerceEntry(value: unknown): AuditEntry | undefined {
   for (const field of AUDIT_FIELDS) {
     if (typeof obj[field] !== "string") return undefined;
   }
-  return {
+  const entry: AuditEntry = {
     ts: obj.ts as string,
     account: obj.account as string,
     to: obj.to as string,
@@ -113,4 +131,10 @@ function coerceEntry(value: unknown): AuditEntry | undefined {
     gmail_id: obj.gmail_id as string,
     gmail_thread_id: obj.gmail_thread_id as string,
   };
+  // attachment_count is optional. Only carry it through when it's a number;
+  // Python entries and pre-attachment-feature TS entries lack the field.
+  if (typeof obj.attachment_count === "number") {
+    entry.attachment_count = obj.attachment_count;
+  }
+  return entry;
 }
