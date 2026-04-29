@@ -91,9 +91,10 @@ export async function createMcpServer<Context>(
 }
 
 // Minimal zod -> JSON Schema converter (handles the common shapes we use:
-// objects, strings, numbers, booleans, arrays, optionals, defaults, enums).
+// objects, strings, numbers, booleans, arrays, optionals, defaults, enums,
+// and refinements/transforms via ZodEffects unwrap).
 // For exotic schemas, write the JSON Schema by hand and pass via a wrapper.
-function zodToJsonSchema(schema: ZodTypeAny): Record<string, unknown> {
+export function zodToJsonSchema(schema: ZodTypeAny): Record<string, unknown> {
   const def = (schema as unknown as { _def: { typeName: string } })._def;
   const typeName = def.typeName;
 
@@ -121,6 +122,13 @@ function zodToJsonSchema(schema: ZodTypeAny): Record<string, unknown> {
   }
   if (typeName === "ZodOptional" || typeName === "ZodDefault") {
     const inner = (schema as unknown as { _def: { innerType: ZodTypeAny } })._def.innerType;
+    return zodToJsonSchema(inner);
+  }
+  if (typeName === "ZodEffects") {
+    // .refine() / .transform() / .superRefine() wrap the underlying schema in
+    // ZodEffects. Unwrap and recurse so the JSON Schema reflects the inner
+    // shape — refinements are handler-side checks, not representable here.
+    const inner = (schema as unknown as { _def: { schema: ZodTypeAny } })._def.schema;
     return zodToJsonSchema(inner);
   }
   if (typeName === "ZodEnum") {
