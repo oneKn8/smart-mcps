@@ -11,6 +11,8 @@ import { umbrellaCheck } from "./umbrella.js";
 import { frostAlert } from "./frost.js";
 import { heatAdvisory } from "./heat.js";
 import { outdoorWindow } from "./outdoor.js";
+import { compareLocations } from "./compare.js";
+import { sunsetCheck } from "./sunset.js";
 
 export const tools = [
   geocode,
@@ -25,4 +27,6 @@ export const tools = [
   frostAlert,
   heatAdvisory,
   outdoorWindow,
+  compareLocations,
+  sunsetCheck,
 ] as unknown as ToolDefinition<unknown, unknown, WeatherContext>[];
