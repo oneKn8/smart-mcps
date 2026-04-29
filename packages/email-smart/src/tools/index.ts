@@ -17,6 +17,8 @@ import {
   trashByQuery,
   applyLabelByQuery,
 } from "./modify.js";
+import { listLabels } from "./labels.js";
+import { dailyStatus, inboxZeroDryRun } from "./smart.js";
 
 export const tools: ToolDefinition<unknown, unknown, EmailContext>[] = [
   sendEmail as unknown as ToolDefinition<unknown, unknown, EmailContext>,
@@ -34,4 +36,7 @@ export const tools: ToolDefinition<unknown, unknown, EmailContext>[] = [
   archiveByQuery as unknown as ToolDefinition<unknown, unknown, EmailContext>,
   trashByQuery as unknown as ToolDefinition<unknown, unknown, EmailContext>,
   applyLabelByQuery as unknown as ToolDefinition<unknown, unknown, EmailContext>,
+  listLabels as unknown as ToolDefinition<unknown, unknown, EmailContext>,
+  dailyStatus as unknown as ToolDefinition<unknown, unknown, EmailContext>,
+  inboxZeroDryRun as unknown as ToolDefinition<unknown, unknown, EmailContext>,
 ];

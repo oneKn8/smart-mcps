@@ -237,3 +237,51 @@ describe("EmailClient.listLabels", () => {
     expect(result).toEqual([]);
   });
 });
+
+describe("EmailClient.getLabel", () => {
+  it("GETs /users/me/labels/{id} and returns label with counts", async () => {
+    let capturedAuth: string | null = null;
+    server.use(
+      http.get(`${GMAIL_BASE}/users/me/labels/INBOX`, ({ request }) => {
+        capturedAuth = request.headers.get("authorization");
+        return HttpResponse.json({
+          id: "INBOX",
+          name: "INBOX",
+          type: "system",
+          messagesTotal: 1234,
+          messagesUnread: 12,
+          threadsTotal: 999,
+          threadsUnread: 7,
+        });
+      }),
+    );
+
+    const client = new EmailClient(tmpHome);
+    const result = await client.getLabel("alice", "INBOX");
+    expect(capturedAuth).toBe("Bearer test-access-token");
+    expect(result).toEqual({
+      id: "INBOX",
+      name: "INBOX",
+      type: "system",
+      messagesTotal: 1234,
+      messagesUnread: 12,
+      threadsUnread: 7,
+    });
+  });
+
+  it("omits count fields when Gmail does not return them", async () => {
+    server.use(
+      http.get(`${GMAIL_BASE}/users/me/labels/Label_5`, () =>
+        HttpResponse.json({ id: "Label_5", name: "Custom", type: "user" }),
+      ),
+    );
+
+    const client = new EmailClient(tmpHome);
+    const result = await client.getLabel("alice", "Label_5");
+    expect(result).toEqual({
+      id: "Label_5",
+      name: "Custom",
+      type: "user",
+    });
+  });
+});

@@ -40,6 +40,12 @@ export type GmailLabel = {
   type: string;
 };
 
+export type GmailLabelDetail = GmailLabel & {
+  messagesTotal?: number;
+  messagesUnread?: number;
+  threadsUnread?: number;
+};
+
 export type BatchModifyOpts = {
   ids: string[];
   addLabelIds?: string[];
@@ -245,6 +251,38 @@ export class EmailClient {
         out.push({ id: label.id, name: label.name, type: label.type });
       }
     }
+    return out;
+  }
+
+  /**
+   * GET /users/me/labels/{id} — single label resource. Gmail returns
+   * `messagesTotal` / `messagesUnread` / `threadsUnread` only on this
+   * endpoint, not on the list endpoint, so callers needing counts must
+   * fetch labels individually.
+   */
+  async getLabel(account: string, id: string): Promise<GmailLabelDetail> {
+    const accessToken = await this.oauthFor(account).getAccessToken();
+    const raw = await fetchJson<{
+      id?: unknown;
+      name?: unknown;
+      type?: unknown;
+      messagesTotal?: unknown;
+      messagesUnread?: unknown;
+      threadsUnread?: unknown;
+    }>(`${GMAIL_API_BASE}/users/me/labels/${encodeURIComponent(id)}`, {
+      token: accessToken,
+    });
+    const out: GmailLabelDetail = {
+      id: typeof raw.id === "string" ? raw.id : id,
+      name: typeof raw.name === "string" ? raw.name : "",
+      type: typeof raw.type === "string" ? raw.type : "user",
+    };
+    if (typeof raw.messagesTotal === "number")
+      out.messagesTotal = raw.messagesTotal;
+    if (typeof raw.messagesUnread === "number")
+      out.messagesUnread = raw.messagesUnread;
+    if (typeof raw.threadsUnread === "number")
+      out.threadsUnread = raw.threadsUnread;
     return out;
   }
 }
