@@ -100,7 +100,7 @@ export class EmailClient {
         token: accessToken,
       });
     } catch (err) {
-      throw mapSendError(err, account);
+      throw mapGmailAuthError(err, account);
     }
   }
 
@@ -120,14 +120,19 @@ export class EmailClient {
       pageToken: opts.pageToken,
       labelIds: opts.labelIds,
     };
-    const raw = await fetchJson<{
+    let raw: {
       messages?: GmailMessageRef[];
       nextPageToken?: string;
       resultSizeEstimate?: number;
-    }>(`${GMAIL_API_BASE}/users/me/messages`, {
-      token: accessToken,
-      searchParams,
-    });
+    };
+    try {
+      raw = await fetchJson(`${GMAIL_API_BASE}/users/me/messages`, {
+        token: accessToken,
+        searchParams,
+      });
+    } catch (err) {
+      throw mapGmailAuthError(err, account);
+    }
     return {
       messages: raw.messages ?? [],
       ...(raw.nextPageToken !== undefined
@@ -148,13 +153,17 @@ export class EmailClient {
     format: GmailMessageFormat = "metadata",
   ): Promise<unknown> {
     const accessToken = await this.oauthFor(account).getAccessToken();
-    return fetchJson<unknown>(
-      `${GMAIL_API_BASE}/users/me/messages/${encodeURIComponent(id)}`,
-      {
-        token: accessToken,
-        searchParams: { format },
-      },
-    );
+    try {
+      return await fetchJson<unknown>(
+        `${GMAIL_API_BASE}/users/me/messages/${encodeURIComponent(id)}`,
+        {
+          token: accessToken,
+          searchParams: { format },
+        },
+      );
+    } catch (err) {
+      throw mapGmailAuthError(err, account);
+    }
   }
 
   /**
@@ -166,15 +175,23 @@ export class EmailClient {
     format: GmailMessageFormat = "metadata",
   ): Promise<GmailThreadResponse> {
     const accessToken = await this.oauthFor(account).getAccessToken();
-    const raw = await fetchJson<{
+    let raw: {
       id?: string;
       snippet?: string;
       historyId?: string;
       messages?: unknown[];
-    }>(`${GMAIL_API_BASE}/users/me/threads/${encodeURIComponent(id)}`, {
-      token: accessToken,
-      searchParams: { format },
-    });
+    };
+    try {
+      raw = await fetchJson(
+        `${GMAIL_API_BASE}/users/me/threads/${encodeURIComponent(id)}`,
+        {
+          token: accessToken,
+          searchParams: { format },
+        },
+      );
+    } catch (err) {
+      throw mapGmailAuthError(err, account);
+    }
     return {
       id: raw.id ?? id,
       ...(raw.snippet !== undefined ? { snippet: raw.snippet } : {}),
@@ -206,7 +223,7 @@ export class EmailClient {
         },
       );
     } catch (err) {
-      throw mapModifyError(err, account);
+      throw mapGmailAuthError(err, account);
     }
   }
 
@@ -226,7 +243,7 @@ export class EmailClient {
         },
       );
     } catch (err) {
-      throw mapModifyError(err, account);
+      throw mapGmailAuthError(err, account);
     }
   }
 
@@ -238,9 +255,16 @@ export class EmailClient {
    */
   async listLabels(account: string): Promise<GmailLabel[]> {
     const accessToken = await this.oauthFor(account).getAccessToken();
-    const raw = await fetchJson<{
+    let raw: {
       labels?: Array<{ id?: unknown; name?: unknown; type?: unknown }>;
-    }>(`${GMAIL_API_BASE}/users/me/labels`, { token: accessToken });
+    };
+    try {
+      raw = await fetchJson(`${GMAIL_API_BASE}/users/me/labels`, {
+        token: accessToken,
+      });
+    } catch (err) {
+      throw mapGmailAuthError(err, account);
+    }
     const out: GmailLabel[] = [];
     for (const label of raw.labels ?? []) {
       if (
@@ -262,16 +286,22 @@ export class EmailClient {
    */
   async getLabel(account: string, id: string): Promise<GmailLabelDetail> {
     const accessToken = await this.oauthFor(account).getAccessToken();
-    const raw = await fetchJson<{
+    let raw: {
       id?: unknown;
       name?: unknown;
       type?: unknown;
       messagesTotal?: unknown;
       messagesUnread?: unknown;
       threadsUnread?: unknown;
-    }>(`${GMAIL_API_BASE}/users/me/labels/${encodeURIComponent(id)}`, {
-      token: accessToken,
-    });
+    };
+    try {
+      raw = await fetchJson(
+        `${GMAIL_API_BASE}/users/me/labels/${encodeURIComponent(id)}`,
+        { token: accessToken },
+      );
+    } catch (err) {
+      throw mapGmailAuthError(err, account);
+    }
     const out: GmailLabelDetail = {
       id: typeof raw.id === "string" ? raw.id : id,
       name: typeof raw.name === "string" ? raw.name : "",
@@ -288,35 +318,12 @@ export class EmailClient {
 }
 
 /**
- * Friendlier error messages for Gmail batch modify failures. Mirrors
- * mapSendError: 403 promotes to scope-insufficient hint, 401 to re-auth hint.
- */
-function mapModifyError(err: unknown, account: string): unknown {
-  if (!(err instanceof AuthError)) return err;
-  const msg = err.message;
-  if (msg.includes("→ 403")) {
-    return new AuthError(
-      `scope insufficient for account ${account} — re-run python3 ~/.santo-agent/bin/auth.py --account ${account} after expanding scope to gmail.modify`,
-      { cause: err },
-    );
-  }
-  if (msg.includes("→ 401")) {
-    return new AuthError(
-      `access token rejected for account ${account}; re-run python3 ~/.santo-agent/bin/auth.py --account ${account}`,
-      { cause: err },
-    );
-  }
-  return err;
-}
-
-/**
- * Friendlier error messages for Gmail send failures. fetchJson maps 401/403
+ * Friendlier error messages for Gmail API failures. fetchJson maps 401/403
  * to AuthError with a generic "<METHOD> <URL> → <status>" message; we promote
- * 403 in particular to a specific scope-insufficient hint with the exact
- * `bin/auth.py` re-auth command, since that's the most common failure when a
- * caller has only `gmail.readonly` and tries to send.
+ * 403 to a specific scope-insufficient hint with the exact `bin/auth.py`
+ * re-auth command. Used uniformly across send/read/modify methods.
  */
-function mapSendError(err: unknown, account: string): unknown {
+function mapGmailAuthError(err: unknown, account: string): unknown {
   if (!(err instanceof AuthError)) return err;
   const msg = err.message;
   if (msg.includes("→ 403")) {
