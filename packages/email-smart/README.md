@@ -1,17 +1,20 @@
 # email-smart
 
-Multi-account Gmail MCP — send + inbox read + reversible bulk modify. Wraps the existing `~/.santo-agent/` OAuth token jar. Part of the [smart-mcps](../../README.md) monorepo. Built on `smart-mcp-core`.
+Multi-account Gmail MCP — send + inbox read + reversible bulk modify + drafts + bulk-unsubscribe. Wraps the existing `~/.santo-agent/` OAuth token jar. Part of the [smart-mcps](../../README.md) monorepo. Built on `smart-mcp-core`.
 
 Scope: `gmail.modify` only. Never `gmail.delete` or full-mailbox.
 
-## Tools (18)
+## Tools (27)
 
-### Send (2)
+### Send (5)
 
 | Name | Type | Summary |
 |---|---|---|
 | `send_email` | DESTRUCTIVE | Send HTML+text email via Gmail (multi-account). |
 | `send_with_template` | DESTRUCTIVE | Send templated HTML email with variable substitution. |
+| `send_with_attachment` | DESTRUCTIVE | Send email with file attachments (multipart/mixed, 25MB cap). |
+| `compose_thread` | DESTRUCTIVE | Reply to a message — auto-sets In-Reply-To/References for thread continuity. |
+| `bulk_send` | DESTRUCTIVE | Send same body to multiple recipients with rate limit + per-recipient vars. |
 
 ### Identities + audit (4, read-only)
 
@@ -47,9 +50,25 @@ Scope: `gmail.modify` only. Never `gmail.delete` or full-mailbox.
 |---|---|
 | `list_labels` | List all Gmail labels for account (with counts). |
 | `daily_status` | Today's send count + unread inbox + recent failures. |
-| `inbox_zero_dry_run` | Preview noise-clearing actions on inbox. |
+| `inbox_zero_dry_run` | Preview noise-clearing actions on inbox (uses Gmail's CATEGORY_PROMOTIONS/UPDATES signal). |
 
-All DESTRUCTIVE tools require `confirm: true`. Bulk modify tools default to `dry_run: true` (returns a preview without applying); pass `dry_run: false` plus `confirm: true` to actually mutate.
+### Bulk unsubscribe (1, DESTRUCTIVE — `dry_run` + `confirm`)
+
+| Name | Summary |
+|---|---|
+| `bulk_unsubscribe` | Parse List-Unsubscribe headers, hit URL/mailto (RFC 8058 one-click), optionally archive. |
+
+### Drafts (5)
+
+| Name | Type | Summary |
+|---|---|---|
+| `create_draft` | safe | Create a Gmail draft (does not send). |
+| `list_drafts` | read | List Gmail drafts (slim shape). |
+| `send_draft` | DESTRUCTIVE | Send an existing Gmail draft by ID. |
+| `update_draft` | safe | Update an existing Gmail draft. |
+| `delete_draft` | DESTRUCTIVE | Permanently delete a Gmail draft (NOT recoverable from Trash). |
+
+All DESTRUCTIVE tools require `confirm: true`. Bulk modify + `bulk_unsubscribe` default to `dry_run: true` (returns a preview without applying); pass `dry_run: false` plus `confirm: true` to actually mutate.
 
 `account` is required on every tool — no silent default. Mirrors the santo-agent hard rule.
 

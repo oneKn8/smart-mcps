@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import { tools } from "../tools/index.js";
 
 describe("tools/index — wire", () => {
-  it("exports exactly 18 tools", () => {
-    expect(tools).toHaveLength(18);
+  it("exports exactly 27 tools", () => {
+    expect(tools).toHaveLength(27);
   });
 
   it("all tool names are unique", () => {
@@ -30,26 +30,42 @@ describe("tools/index — wire", () => {
     expect(new Set(descriptions).size).toBe(descriptions.length);
   });
 
-  it("contains the expected 18 tool names", () => {
+  it("contains the expected 27 tool names", () => {
     const expected = [
+      // Send (5)
       "send_email",
       "send_with_template",
+      "send_with_attachment",
+      "compose_thread",
+      "bulk_send",
+      // Identities + audit (4)
       "list_identities",
       "get_identity",
       "list_recent_sends",
       "search_audit",
+      // Inbox read (5)
       "list_inbox",
       "search_emails",
       "read_email",
       "get_thread",
       "bulk_read_messages",
+      // Bulk modify (4) destructive
       "mark_read_by_query",
       "archive_by_query",
       "trash_by_query",
       "apply_label_by_query",
+      // Labels + smart (3)
       "list_labels",
       "daily_status",
       "inbox_zero_dry_run",
+      // Bulk unsubscribe (1)
+      "bulk_unsubscribe",
+      // Drafts (5)
+      "create_draft",
+      "list_drafts",
+      "send_draft",
+      "update_draft",
+      "delete_draft",
     ].sort();
     expect(tools.map((t) => t.name).sort()).toEqual(expected);
   });
