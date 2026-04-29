@@ -1,2 +1,11 @@
-// Phase 3 placeholder. Real entry comes in Task 11 (wire-up).
-export default {};
+#!/usr/bin/env node
+import { createMcpServer } from "smart-mcp-core";
+import { tools } from "./tools/index.js";
+import { buildContext, type EmailContext } from "./context.js";
+
+await createMcpServer<EmailContext>({
+  name: "email-smart",
+  version: "0.1.0",
+  tools,
+  context: buildContext(),
+});
