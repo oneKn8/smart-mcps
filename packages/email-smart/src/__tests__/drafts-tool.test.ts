@@ -68,6 +68,7 @@ type FakeClient = {
   updateDraftMock: ReturnType<typeof vi.fn>;
   sendDraftMock: ReturnType<typeof vi.fn>;
   deleteDraftMock: ReturnType<typeof vi.fn>;
+  getMessageMock: ReturnType<typeof vi.fn>;
 };
 
 function makeFakeClient(overrides: {
@@ -91,6 +92,7 @@ function makeFakeClient(overrides: {
     id: string,
   ) => Promise<{ id: string; threadId: string; labelIds: string[] }>;
   deleteDraft?: (account: string, id: string) => Promise<void>;
+  getMessage?: (account: string, id: string, format: string) => Promise<unknown>;
 } = {}): FakeClient {
   const createDraftMock = vi.fn(
     overrides.createDraft ??
@@ -145,6 +147,22 @@ function makeFakeClient(overrides: {
       })),
   );
   const deleteDraftMock = vi.fn(overrides.deleteDraft ?? (async () => {}));
+  const getMessageMock = vi.fn(
+    overrides.getMessage ??
+      (async () => ({
+        id: "msg_sent_999",
+        threadId: "thr_111",
+        labelIds: ["SENT"],
+        payload: {
+          headers: [
+            { name: "From", value: "Alice Example <alice@example.com>" },
+            { name: "To", value: "bob@example.com" },
+            { name: "Cc", value: "carol@example.com" },
+            { name: "Subject", value: "Sync" },
+          ],
+        },
+      })),
+  );
 
   const client = {
     createDraft: createDraftMock,
@@ -153,6 +171,7 @@ function makeFakeClient(overrides: {
     updateDraft: updateDraftMock,
     sendDraft: sendDraftMock,
     deleteDraft: deleteDraftMock,
+    getMessage: getMessageMock,
   } as unknown as EmailClient;
 
   return {
@@ -163,6 +182,7 @@ function makeFakeClient(overrides: {
     updateDraftMock,
     sendDraftMock,
     deleteDraftMock,
+    getMessageMock,
   };
 }
 
@@ -452,7 +472,7 @@ describe("send_draft — confirm gate", () => {
     } catch (err) {
       expect(err).toBeInstanceOf(ConfirmRequiredError);
       expect((err as ConfirmRequiredError).preview).toBe(
-        'Will SEND draft draft_abc from Alice Example <alice@example.com>: "Hello" → bob@example.com',
+        "Will SEND draft draft_abc from Alice Example <alice@example.com>",
       );
     }
   });
@@ -461,23 +481,10 @@ describe("send_draft — confirm gate", () => {
 describe("send_draft — happy path", () => {
   it("calls client.sendDraft and appends audit log entry on success", async () => {
     writeIdentity(tmpHome, "alice", aliceIdentity());
-    const fake = makeFakeClient({
-      getDraft: async () => ({
-        id: "draft_abc",
-        message: {
-          id: "msg_xyz",
-          threadId: "thr_111",
-          payload: {
-            headers: [
-              { name: "From", value: "Alice Example <alice@example.com>" },
-              { name: "To", value: "bob@example.com" },
-              { name: "Cc", value: "carol@example.com" },
-              { name: "Subject", value: "Sync" },
-            ],
-          },
-        },
-      }),
-    });
+    // No getDraft pre-flight — handler skips it to avoid Gmail propagation lag.
+    // After sendDraft, handler calls getMessage(format=metadata) to source
+    // audit-log subject/to/cc/bcc from the now-permanent SENT message.
+    const fake = makeFakeClient();
     const ctx = buildContext(fake.client, tmpHome);
 
     const result = await sendDraft.handler(
@@ -554,10 +561,12 @@ describe("send_draft — happy path", () => {
 });
 
 describe("send_draft — error paths", () => {
-  it("propagates NotFoundError when draft does not exist", async () => {
+  it("propagates NotFoundError when sendDraft itself reports the draft missing", async () => {
     writeIdentity(tmpHome, "alice", aliceIdentity());
+    // No getDraft pre-flight — NotFoundError now surfaces from the actual
+    // sendDraft client call, not a preview fetch.
     const fake = makeFakeClient({
-      getDraft: async (_a, id) => {
+      sendDraft: async (_a, id) => {
         throw new NotFoundError(`draft not found: ${id}`);
       },
     });
@@ -574,7 +583,8 @@ describe("send_draft — error paths", () => {
       ),
     ).rejects.toBeInstanceOf(NotFoundError);
 
-    expect(fake.sendDraftMock).not.toHaveBeenCalled();
+    expect(fake.sendDraftMock).toHaveBeenCalledTimes(1);
+    expect(fake.getDraftMock).not.toHaveBeenCalled();
   });
 
   it("rejects accounts with transport=smtp before any side effect", async () => {
@@ -748,7 +758,7 @@ describe("delete_draft — confirm gate", () => {
     } catch (err) {
       expect(err).toBeInstanceOf(ConfirmRequiredError);
       expect((err as ConfirmRequiredError).preview).toBe(
-        'Will PERMANENTLY DELETE draft draft_abc (not recoverable from Trash). Subject: "Hello"',
+        "Will PERMANENTLY DELETE draft draft_abc (not recoverable from Trash)",
       );
     }
   });
@@ -779,10 +789,12 @@ describe("delete_draft — happy path", () => {
 });
 
 describe("delete_draft — error paths", () => {
-  it("propagates NotFoundError when draft does not exist", async () => {
+  it("propagates NotFoundError when deleteDraft itself reports the draft missing", async () => {
     writeIdentity(tmpHome, "alice", aliceIdentity());
+    // No getDraft pre-flight — NotFoundError now surfaces from the actual
+    // deleteDraft client call.
     const fake = makeFakeClient({
-      getDraft: async (_a, id) => {
+      deleteDraft: async (_a, id) => {
         throw new NotFoundError(`draft not found: ${id}`);
       },
     });
@@ -799,7 +811,8 @@ describe("delete_draft — error paths", () => {
       ),
     ).rejects.toBeInstanceOf(NotFoundError);
 
-    expect(fake.deleteDraftMock).not.toHaveBeenCalled();
+    expect(fake.deleteDraftMock).toHaveBeenCalledTimes(1);
+    expect(fake.getDraftMock).not.toHaveBeenCalled();
   });
 
   it("rejects accounts with transport=smtp before any side effect", async () => {

@@ -212,8 +212,21 @@ describe("EmailClient.getDraft", () => {
     expect(capturedUrl).toContain("format=full");
   });
 
-  it("maps 404 → NotFoundError with friendly draft id message", async () => {
+  it("maps 404 → NotFoundError with friendly draft id message (after retry exhaustion)", async () => {
+    // getDraft retries on 404 to handle Gmail draft propagation lag; the
+    // retry loop uses real setTimeout, so fake timers must be disabled.
+    // Once on real time, the fixture token's expiry is in the past, so we
+    // also need to mock the OAuth refresh endpoint.
+    vi.useRealTimers();
     server.use(
+      http.post(TOKEN_URL, () =>
+        HttpResponse.json({
+          access_token: "refreshed-token",
+          expires_in: 3600,
+          token_type: "Bearer",
+          scope: "https://www.googleapis.com/auth/gmail.modify",
+        }),
+      ),
       http.get(`${GMAIL_BASE}/users/me/drafts/missing_draft`, () =>
         HttpResponse.json(
           { error: { code: 404, message: "Not Found" } },
@@ -226,7 +239,7 @@ describe("EmailClient.getDraft", () => {
     const promise = client.getDraft("alice", "missing_draft");
     await expect(promise).rejects.toBeInstanceOf(NotFoundError);
     await expect(promise).rejects.toThrow(/draft not found: missing_draft/);
-  });
+  }, 10_000);
 });
 
 describe("EmailClient.updateDraft", () => {
@@ -282,13 +295,15 @@ describe("EmailClient.updateDraft", () => {
 });
 
 describe("EmailClient.sendDraft", () => {
-  it("POSTs /users/me/drafts/{id}/send and returns GmailSendResponse with labelIds", async () => {
+  it("POSTs /users/me/drafts/send with {id} body and returns GmailSendResponse with labelIds", async () => {
     let capturedAuth: string | null = null;
+    let capturedBody: unknown;
     server.use(
       http.post(
-        `${GMAIL_BASE}/users/me/drafts/draft_abc/send`,
-        ({ request }) => {
+        `${GMAIL_BASE}/users/me/drafts/send`,
+        async ({ request }) => {
           capturedAuth = request.headers.get("authorization");
+          capturedBody = await request.json();
           return HttpResponse.json({
             id: "msg_sent_999",
             threadId: "thr_111",
@@ -301,6 +316,7 @@ describe("EmailClient.sendDraft", () => {
     const client = new EmailClient(tmpHome);
     const result = await client.sendDraft("alice", "draft_abc");
     expect(capturedAuth).toBe("Bearer test-access-token");
+    expect(capturedBody).toEqual({ id: "draft_abc" });
     expect(result).toEqual({
       id: "msg_sent_999",
       threadId: "thr_111",
@@ -308,9 +324,19 @@ describe("EmailClient.sendDraft", () => {
     });
   });
 
-  it("maps 404 → NotFoundError with friendly draft id message", async () => {
+  it("maps 404 → NotFoundError with friendly draft id message (after retry exhaustion)", async () => {
+    // sendDraft retries on 404 to handle Gmail draft propagation lag.
+    vi.useRealTimers();
     server.use(
-      http.post(`${GMAIL_BASE}/users/me/drafts/missing_draft/send`, () =>
+      http.post(TOKEN_URL, () =>
+        HttpResponse.json({
+          access_token: "refreshed-token",
+          expires_in: 3600,
+          token_type: "Bearer",
+          scope: "https://www.googleapis.com/auth/gmail.modify",
+        }),
+      ),
+      http.post(`${GMAIL_BASE}/users/me/drafts/send`, () =>
         HttpResponse.json(
           { error: { code: 404, message: "Not Found" } },
           { status: 404 },
@@ -322,7 +348,7 @@ describe("EmailClient.sendDraft", () => {
     const promise = client.sendDraft("alice", "missing_draft");
     await expect(promise).rejects.toBeInstanceOf(NotFoundError);
     await expect(promise).rejects.toThrow(/draft not found: missing_draft/);
-  });
+  }, 15_000);
 });
 
 describe("EmailClient.deleteDraft", () => {
@@ -347,8 +373,18 @@ describe("EmailClient.deleteDraft", () => {
     expect(result).toBeUndefined();
   });
 
-  it("maps 404 → NotFoundError with friendly draft id message", async () => {
+  it("maps 404 → NotFoundError with friendly draft id message (after retry exhaustion)", async () => {
+    // deleteDraft retries on 404 to handle Gmail draft propagation lag.
+    vi.useRealTimers();
     server.use(
+      http.post(TOKEN_URL, () =>
+        HttpResponse.json({
+          access_token: "refreshed-token",
+          expires_in: 3600,
+          token_type: "Bearer",
+          scope: "https://www.googleapis.com/auth/gmail.modify",
+        }),
+      ),
       http.delete(`${GMAIL_BASE}/users/me/drafts/missing_draft`, () =>
         HttpResponse.json(
           { error: { code: 404, message: "Not Found" } },
@@ -361,5 +397,5 @@ describe("EmailClient.deleteDraft", () => {
     const promise = client.deleteDraft("alice", "missing_draft");
     await expect(promise).rejects.toBeInstanceOf(NotFoundError);
     await expect(promise).rejects.toThrow(/draft not found: missing_draft/);
-  });
+  }, 15_000);
 });

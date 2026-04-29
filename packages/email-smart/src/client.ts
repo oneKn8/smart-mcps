@@ -9,6 +9,43 @@ import { GoogleOAuthClient } from "./oauth.js";
 const GMAIL_API_BASE = "https://gmail.googleapis.com/gmail/v1";
 const GMAIL_SEND_URL = `${GMAIL_API_BASE}/users/me/messages/send`;
 
+// Gmail draft propagation: drafts.create / drafts.update return an id but the
+// GET / POST/send / DELETE endpoints can 404 on that id for several seconds.
+// Retry 404s with linear-backoff. 4 × 750ms covers a ~3s observed lag.
+const DRAFT_OP_RETRIES = 4;
+const DRAFT_OP_BACKOFF_MS = 750;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/**
+ * Wrap a draft-keyed Gmail call with NotFoundError retry. Used by getDraft,
+ * sendDraft, and deleteDraft — all of which can 404 immediately after the
+ * draft is created or updated, even though the draft genuinely exists.
+ */
+async function retryOn404<T>(
+  op: () => Promise<T>,
+  account: string,
+  id: string,
+): Promise<T> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < DRAFT_OP_RETRIES; attempt++) {
+    try {
+      return await op();
+    } catch (err) {
+      if (!(err instanceof NotFoundError)) {
+        throw wrapDraftError(err, account, id);
+      }
+      lastErr = err;
+      if (attempt < DRAFT_OP_RETRIES - 1) {
+        await sleep(DRAFT_OP_BACKOFF_MS * (attempt + 1));
+      }
+    }
+  }
+  throw wrapDraftError(lastErr, account, id);
+}
+
 export type GmailSendResponse = {
   id: string;
   threadId: string;
@@ -430,17 +467,18 @@ export class EmailClient {
     format: GmailMessageFormat = "metadata",
   ): Promise<unknown> {
     const accessToken = await this.oauthFor(account).getAccessToken();
-    try {
-      return await fetchJson<unknown>(
-        `${GMAIL_API_BASE}/users/me/drafts/${encodeURIComponent(id)}`,
-        {
-          token: accessToken,
-          searchParams: { format },
-        },
-      );
-    } catch (err) {
-      throw wrapDraftError(err, account, id);
-    }
+    return retryOn404(
+      () =>
+        fetchJson<unknown>(
+          `${GMAIL_API_BASE}/users/me/drafts/${encodeURIComponent(id)}`,
+          {
+            token: accessToken,
+            searchParams: { format },
+          },
+        ),
+      account,
+      id,
+    );
   }
 
   /**
@@ -484,18 +522,23 @@ export class EmailClient {
    */
   async sendDraft(account: string, id: string): Promise<GmailSendResponse> {
     const accessToken = await this.oauthFor(account).getAccessToken();
-    try {
-      return await fetchJson<GmailSendResponse>(
-        `${GMAIL_API_BASE}/users/me/drafts/${encodeURIComponent(id)}/send`,
-        {
-          method: "POST",
-          body: {},
-          token: accessToken,
-        },
-      );
-    } catch (err) {
-      throw wrapDraftError(err, account, id);
-    }
+    // Gmail's drafts.send is a top-level endpoint; the draft id goes in the
+    // body, NOT the path. (`POST /drafts/{id}/send` returns 404 — that path
+    // does not exist.) Retry-on-404 still useful in case the body-id has
+    // not yet propagated.
+    return retryOn404(
+      () =>
+        fetchJson<GmailSendResponse>(
+          `${GMAIL_API_BASE}/users/me/drafts/send`,
+          {
+            method: "POST",
+            body: { id },
+            token: accessToken,
+          },
+        ),
+      account,
+      id,
+    );
   }
 
   /**
@@ -504,17 +547,18 @@ export class EmailClient {
    */
   async deleteDraft(account: string, id: string): Promise<void> {
     const accessToken = await this.oauthFor(account).getAccessToken();
-    try {
-      await fetchJson<unknown>(
-        `${GMAIL_API_BASE}/users/me/drafts/${encodeURIComponent(id)}`,
-        {
-          method: "DELETE",
-          token: accessToken,
-        },
-      );
-    } catch (err) {
-      throw wrapDraftError(err, account, id);
-    }
+    await retryOn404(
+      () =>
+        fetchJson<unknown>(
+          `${GMAIL_API_BASE}/users/me/drafts/${encodeURIComponent(id)}`,
+          {
+            method: "DELETE",
+            token: accessToken,
+          },
+        ),
+      account,
+      id,
+    );
   }
 }
 

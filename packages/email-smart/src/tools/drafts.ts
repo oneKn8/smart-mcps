@@ -214,9 +214,19 @@ function readDraftHeaders(rawDraft: unknown): {
   subject: string;
 } {
   const message = unwrapDraftMessage(rawDraft);
+  return readMessageHeaders(message);
+}
+
+function readMessageHeaders(rawMessage: unknown): {
+  from: string;
+  to: string;
+  cc: string;
+  bcc: string;
+  subject: string;
+} {
   const payload =
-    typeof message === "object" && message !== null
-      ? ((message as Record<string, unknown>)["payload"] ?? {})
+    typeof rawMessage === "object" && rawMessage !== null
+      ? ((rawMessage as Record<string, unknown>)["payload"] ?? {})
       : {};
   const rawHeaders =
     typeof payload === "object" && payload !== null
@@ -247,17 +257,12 @@ export const sendDraft = defineTool<
     const identity = loadIdentity(input.account, context.home);
     rejectSmtp(identity, input.account, "send_draft");
 
-    // Fetch draft metadata to build a faithful preview AND to source the
-    // audit-log subject/to/cc/bcc fields. NotFoundError propagates verbatim
-    // (already friendly: "draft not found: <id>").
-    const rawDraft = await context.client.getDraft(
-      input.account,
-      input.draft_id,
-      "metadata",
-    );
-    const headers = readDraftHeaders(rawDraft);
-
-    const preview = `Will SEND draft ${input.draft_id} from ${fromHeader(identity)}: "${headers.subject}" → ${headers.to}`;
+    // Confirm gate runs WITHOUT a getDraft pre-flight: Gmail's drafts.get is
+    // eventually consistent and freshly-created draft IDs can 404 for
+    // seconds even though the draft exists. We trust the caller's draft_id
+    // and fetch headers AFTER send (when the message is permanent) for the
+    // audit log.
+    const preview = `Will SEND draft ${input.draft_id} from ${fromHeader(identity)}`;
     guardDestructive({ confirm: input.confirm, preview });
 
     const sendResult = await context.client.sendDraft(
@@ -266,6 +271,21 @@ export const sendDraft = defineTool<
     );
 
     const sentAt = new Date().toISOString();
+
+    // Best-effort: fetch the now-sent message for audit headers. Sent
+    // messages are immediately addressable (no propagation lag). Failure
+    // here is non-fatal — we still audit with what we have.
+    let headers = { from: "", to: "", cc: "", bcc: "", subject: "" };
+    try {
+      const sentMsg = await context.client.getMessage(
+        input.account,
+        sendResult.id,
+        "metadata",
+      );
+      headers = readMessageHeaders(sentMsg);
+    } catch {
+      // ignore — audit just gets sparse fields
+    }
 
     // Audit-append must NOT mask a successful send. Mirror send_email's soft-
     // fail wrap so callers still receive gmail_id when the JSONL append fails.
@@ -400,16 +420,11 @@ export const deleteDraft = defineTool<
     const identity = loadIdentity(input.account, context.home);
     rejectSmtp(identity, input.account, "delete_draft");
 
-    // getDraft for preview context AND to surface 404 before the destructive
-    // confirm gate. NotFoundError propagates verbatim.
-    const rawDraft = await context.client.getDraft(
-      input.account,
-      input.draft_id,
-      "metadata",
-    );
-    const headers = readDraftHeaders(rawDraft);
-
-    const preview = `Will PERMANENTLY DELETE draft ${input.draft_id} (not recoverable from Trash). Subject: "${headers.subject}"`;
+    // Skip getDraft pre-flight for the same reason send_draft does: Gmail's
+    // drafts.get can 404 on freshly-created drafts due to propagation lag.
+    // Trust the caller's draft_id; the gate description is generic but
+    // load-bearing (says "permanent, not recoverable").
+    const preview = `Will PERMANENTLY DELETE draft ${input.draft_id} (not recoverable from Trash)`;
     guardDestructive({ confirm: input.confirm, preview });
 
     await context.client.deleteDraft(input.account, input.draft_id);
