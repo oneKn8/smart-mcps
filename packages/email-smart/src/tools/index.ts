@@ -11,6 +11,12 @@ import {
   getThread,
   bulkReadMessages,
 } from "./inbox.js";
+import {
+  markReadByQuery,
+  archiveByQuery,
+  trashByQuery,
+  applyLabelByQuery,
+} from "./modify.js";
 
 export const tools: ToolDefinition<unknown, unknown, EmailContext>[] = [
   sendEmail as unknown as ToolDefinition<unknown, unknown, EmailContext>,
@@ -24,4 +30,8 @@ export const tools: ToolDefinition<unknown, unknown, EmailContext>[] = [
   readEmail as unknown as ToolDefinition<unknown, unknown, EmailContext>,
   getThread as unknown as ToolDefinition<unknown, unknown, EmailContext>,
   bulkReadMessages as unknown as ToolDefinition<unknown, unknown, EmailContext>,
+  markReadByQuery as unknown as ToolDefinition<unknown, unknown, EmailContext>,
+  archiveByQuery as unknown as ToolDefinition<unknown, unknown, EmailContext>,
+  trashByQuery as unknown as ToolDefinition<unknown, unknown, EmailContext>,
+  applyLabelByQuery as unknown as ToolDefinition<unknown, unknown, EmailContext>,
 ];

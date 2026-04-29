@@ -34,6 +34,18 @@ export type GmailThreadResponse = {
   messages: unknown[];
 };
 
+export type GmailLabel = {
+  id: string;
+  name: string;
+  type: string;
+};
+
+export type BatchModifyOpts = {
+  ids: string[];
+  addLabelIds?: string[];
+  removeLabelIds?: string[];
+};
+
 export class EmailClient {
   private readonly oauthClients = new Map<string, GoogleOAuthClient>();
   private readonly home: string | undefined;
@@ -164,6 +176,99 @@ export class EmailClient {
       messages: raw.messages ?? [],
     };
   }
+
+  /**
+   * POST /users/me/messages/batchModify — bulk apply/remove label IDs across
+   * up to 1000 message IDs. Gmail returns 204 No Content on success;
+   * fetchJson surfaces that as undefined. 403 is mapped to a scope-insufficient
+   * AuthError pointing at the re-auth command.
+   */
+  async batchModify(account: string, opts: BatchModifyOpts): Promise<void> {
+    const accessToken = await this.oauthFor(account).getAccessToken();
+    const body: Record<string, unknown> = { ids: opts.ids };
+    if (opts.addLabelIds !== undefined) body["addLabelIds"] = opts.addLabelIds;
+    if (opts.removeLabelIds !== undefined)
+      body["removeLabelIds"] = opts.removeLabelIds;
+
+    try {
+      await fetchJson<unknown>(
+        `${GMAIL_API_BASE}/users/me/messages/batchModify`,
+        {
+          method: "POST",
+          body,
+          token: accessToken,
+        },
+      );
+    } catch (err) {
+      throw mapModifyError(err, account);
+    }
+  }
+
+  /**
+   * POST /users/me/messages/batchTrash — bulk move up to 1000 message IDs
+   * into Trash. Gmail returns 204 No Content on success.
+   */
+  async batchTrash(account: string, ids: string[]): Promise<void> {
+    const accessToken = await this.oauthFor(account).getAccessToken();
+    try {
+      await fetchJson<unknown>(
+        `${GMAIL_API_BASE}/users/me/messages/batchTrash`,
+        {
+          method: "POST",
+          body: { ids },
+          token: accessToken,
+        },
+      );
+    } catch (err) {
+      throw mapModifyError(err, account);
+    }
+  }
+
+  /**
+   * GET /users/me/labels — list of all label resources for the account. Used
+   * by tools that need to resolve a human-readable label name to its Gmail
+   * label ID. Gmail omits `labels` on accounts with no user labels; we
+   * normalize to an empty array.
+   */
+  async listLabels(account: string): Promise<GmailLabel[]> {
+    const accessToken = await this.oauthFor(account).getAccessToken();
+    const raw = await fetchJson<{
+      labels?: Array<{ id?: unknown; name?: unknown; type?: unknown }>;
+    }>(`${GMAIL_API_BASE}/users/me/labels`, { token: accessToken });
+    const out: GmailLabel[] = [];
+    for (const label of raw.labels ?? []) {
+      if (
+        typeof label?.id === "string" &&
+        typeof label?.name === "string" &&
+        typeof label?.type === "string"
+      ) {
+        out.push({ id: label.id, name: label.name, type: label.type });
+      }
+    }
+    return out;
+  }
+}
+
+/**
+ * Friendlier error messages for Gmail batch modify failures. Mirrors
+ * mapSendError: 403 promotes to scope-insufficient hint, 401 to re-auth hint.
+ */
+function mapModifyError(err: unknown, account: string): unknown {
+  if (!(err instanceof AuthError)) return err;
+  const msg = err.message;
+  if (msg.includes("→ 403")) {
+    return new AuthError(
+      `scope insufficient for account ${account} — re-run python3 ~/.santo-agent/bin/auth.py --account ${account} after expanding scope to gmail.modify`,
+      { cause: err },
+    );
+  }
+  if (msg.includes("→ 401")) {
+    return new AuthError(
+      `access token rejected for account ${account}; re-run python3 ~/.santo-agent/bin/auth.py --account ${account}`,
+      { cause: err },
+    );
+  }
+  return err;
 }
 
 /**
