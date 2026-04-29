@@ -10,6 +10,7 @@ import { dailyBrief } from "./brief.js";
 import { umbrellaCheck } from "./umbrella.js";
 import { frostAlert } from "./frost.js";
 import { heatAdvisory } from "./heat.js";
+import { outdoorWindow } from "./outdoor.js";
 
 export const tools = [
   geocode,
@@ -23,4 +24,5 @@ export const tools = [
   umbrellaCheck,
   frostAlert,
   heatAdvisory,
+  outdoorWindow,
 ] as unknown as ToolDefinition<unknown, unknown, WeatherContext>[];

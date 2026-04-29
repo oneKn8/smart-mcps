@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import {
   formatTemp,
   formatWind,
@@ -6,7 +6,19 @@ import {
   formatPrecipitation,
   formatPressure,
   formatVisibility,
+  formatHourLabel,
 } from "../format.js";
+
+// Pin TZ for formatHourLabel tests so suffix-less ISO strings parse to the
+// same local hour on every machine.
+const ORIGINAL_TZ = process.env.TZ;
+beforeAll(() => {
+  process.env.TZ = "America/Chicago";
+});
+afterAll(() => {
+  if (ORIGINAL_TZ === undefined) delete process.env.TZ;
+  else process.env.TZ = ORIGINAL_TZ;
+});
 
 describe("formatTemp", () => {
   it("rounds and adds F suffix in imperial", () => {
@@ -58,5 +70,23 @@ describe("formatVisibility", () => {
 
   it("converts metres to km in metric", () => {
     expect(formatVisibility(8000, "metric")).toBe("8.0km");
+  });
+});
+
+describe("formatHourLabel", () => {
+  it("renders hour 0 as 'midnight'", () => {
+    expect(formatHourLabel("2026-04-29T00:00")).toBe("midnight");
+  });
+
+  it("renders hour 12 as 'noon'", () => {
+    expect(formatHourLabel("2026-04-29T12:00")).toBe("noon");
+  });
+
+  it("renders sub-noon hours with 'am' suffix", () => {
+    expect(formatHourLabel("2026-04-29T07:00")).toBe("7am");
+  });
+
+  it("renders post-noon hours with 'pm' suffix", () => {
+    expect(formatHourLabel("2026-04-29T15:00")).toBe("3pm");
   });
 });
