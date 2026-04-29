@@ -3,12 +3,7 @@ import { defineTool } from "smart-mcp-core";
 import type { WeatherContext } from "../context.js";
 import { locationInput } from "./location-input.js";
 import { weatherCodeLabel } from "./weather-codes.js";
-import {
-  formatTemp,
-  formatWind,
-  formatPercent,
-  formatPrecipitation,
-} from "./format.js";
+import { formatTemp, formatWind, formatPercent } from "./format.js";
 import { resolveLocation } from "../location-resolver.js";
 
 // Composed shortcut: returns "what's it doing right now, today, and tomorrow?"

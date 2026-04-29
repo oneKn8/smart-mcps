@@ -38,6 +38,20 @@ export function formatPressure(value: number): string {
   return `${Math.round(value)}hPa`;
 }
 
+// Renders an ISO-local hour string like "2026-04-29T17:00" as a friendly
+// "5pm" / "noon" / "midnight" label. Open-Meteo returns local time when the
+// request uses `timezone=auto`, so JavaScript's local-time Date parsing of a
+// suffix-less ISO string is what we want here. Tests pin TZ=America/Chicago
+// so the labels are deterministic across machines.
+export function formatHourLabel(iso: string): string {
+  const date = new Date(iso);
+  const hour = date.getHours();
+  if (hour === 0) return "midnight";
+  if (hour === 12) return "noon";
+  if (hour < 12) return `${hour}am`;
+  return `${hour - 12}pm`;
+}
+
 export function formatVisibility(value: number, units: Units): string {
   // Open-Meteo returns visibility in feet for imperial units and metres for
   // metric units (verified against the live forecast endpoint — the

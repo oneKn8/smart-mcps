@@ -2,7 +2,7 @@ import { z } from "zod";
 import { defineTool } from "smart-mcp-core";
 import type { WeatherContext } from "../context.js";
 import { locationInput } from "./location-input.js";
-import { formatPrecipitation } from "./format.js";
+import { formatPrecipitation, formatHourLabel } from "./format.js";
 import { resolveLocation } from "../location-resolver.js";
 
 // Composed shortcut: should I bring an umbrella in the next 6-48 hours? Wraps
@@ -29,20 +29,6 @@ type Output = {
   hours_with_rain: number;
   summary: string;
 };
-
-// Renders an ISO-local hour string like "2026-04-29T17:00" as a friendly
-// "5pm" / "noon" / "midnight" label. Open-Meteo returns local time when the
-// request uses `timezone=auto`, so JavaScript's local-time Date parsing of a
-// suffix-less ISO string is what we want here. Tests pin TZ=America/Chicago
-// so the labels are deterministic across machines.
-function formatHourLabel(iso: string): string {
-  const date = new Date(iso);
-  const hour = date.getHours();
-  if (hour === 0) return "midnight";
-  if (hour === 12) return "noon";
-  if (hour < 12) return `${hour}am`;
-  return `${hour - 12}pm`;
-}
 
 // Rain-rule threshold for total precip in the user's unit system. Imperial
 // uses 0.1in (a meaningful drizzle), metric uses 2.5mm (the same physical
