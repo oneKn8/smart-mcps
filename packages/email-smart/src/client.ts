@@ -1,4 +1,9 @@
-import { AuthError, fetchJson, ValidationError } from "smart-mcp-core";
+import {
+  AuthError,
+  NotFoundError,
+  fetchJson,
+  ValidationError,
+} from "smart-mcp-core";
 import { GoogleOAuthClient } from "./oauth.js";
 
 const GMAIL_API_BASE = "https://gmail.googleapis.com/gmail/v1";
@@ -50,6 +55,24 @@ export type BatchModifyOpts = {
   ids: string[];
   addLabelIds?: string[];
   removeLabelIds?: string[];
+};
+
+export type GmailDraftRef = {
+  id: string;
+  messageId: string;
+  threadId: string;
+};
+
+export type GmailDraftListResponse = {
+  drafts: GmailDraftRef[];
+  nextPageToken?: string;
+  resultSizeEstimate: number;
+};
+
+export type ListDraftsOpts = {
+  q?: string;
+  maxResults?: number;
+  pageToken?: string;
 };
 
 export class EmailClient {
@@ -315,6 +338,196 @@ export class EmailClient {
       out.threadsUnread = raw.threadsUnread;
     return out;
   }
+
+  /**
+   * POST /users/me/drafts — create a new draft from a base64url-encoded MIME
+   * message. Gmail returns `{ id, message: { id, threadId } }`; we flatten to
+   * the slim `GmailDraftRef` shape so callers don't need to navigate the
+   * outer wrapping.
+   */
+  async createDraft(account: string, raw: string): Promise<GmailDraftRef> {
+    const accessToken = await this.oauthFor(account).getAccessToken();
+    let response: { id?: unknown; message?: { id?: unknown; threadId?: unknown } };
+    try {
+      response = await fetchJson(`${GMAIL_API_BASE}/users/me/drafts`, {
+        method: "POST",
+        body: { message: { raw } },
+        token: accessToken,
+      });
+    } catch (err) {
+      throw mapGmailAuthError(err, account);
+    }
+    return {
+      id: typeof response.id === "string" ? response.id : "",
+      messageId:
+        typeof response.message?.id === "string" ? response.message.id : "",
+      threadId:
+        typeof response.message?.threadId === "string"
+          ? response.message.threadId
+          : "",
+    };
+  }
+
+  /**
+   * GET /users/me/drafts — list draft refs with optional Gmail query and
+   * pagination. Gmail omits `drafts` on zero-match responses; we normalize to
+   * an empty array. Each entry's `message` wrapping is flattened to the slim
+   * `GmailDraftRef` shape.
+   */
+  async listDrafts(
+    account: string,
+    opts: ListDraftsOpts = {},
+  ): Promise<GmailDraftListResponse> {
+    const accessToken = await this.oauthFor(account).getAccessToken();
+    const searchParams: Record<string, string | number | boolean | undefined> = {
+      q: opts.q,
+      maxResults: opts.maxResults,
+      pageToken: opts.pageToken,
+    };
+    let raw: {
+      drafts?: Array<{
+        id?: unknown;
+        message?: { id?: unknown; threadId?: unknown };
+      }>;
+      nextPageToken?: string;
+      resultSizeEstimate?: number;
+    };
+    try {
+      raw = await fetchJson(`${GMAIL_API_BASE}/users/me/drafts`, {
+        token: accessToken,
+        searchParams,
+      });
+    } catch (err) {
+      throw mapGmailAuthError(err, account);
+    }
+    const drafts: GmailDraftRef[] = [];
+    for (const d of raw.drafts ?? []) {
+      drafts.push({
+        id: typeof d.id === "string" ? d.id : "",
+        messageId: typeof d.message?.id === "string" ? d.message.id : "",
+        threadId:
+          typeof d.message?.threadId === "string" ? d.message.threadId : "",
+      });
+    }
+    return {
+      drafts,
+      ...(raw.nextPageToken !== undefined
+        ? { nextPageToken: raw.nextPageToken }
+        : {}),
+      resultSizeEstimate: raw.resultSizeEstimate ?? 0,
+    };
+  }
+
+  /**
+   * GET /users/me/drafts/{id} — single draft resource. `format` controls the
+   * payload depth of the wrapped message (same enum as messages.get). Default
+   * `metadata` returns headers + snippet. Returns the raw response so callers
+   * decide what to extract.
+   */
+  async getDraft(
+    account: string,
+    id: string,
+    format: GmailMessageFormat = "metadata",
+  ): Promise<unknown> {
+    const accessToken = await this.oauthFor(account).getAccessToken();
+    try {
+      return await fetchJson<unknown>(
+        `${GMAIL_API_BASE}/users/me/drafts/${encodeURIComponent(id)}`,
+        {
+          token: accessToken,
+          searchParams: { format },
+        },
+      );
+    } catch (err) {
+      throw wrapDraftError(err, account, id);
+    }
+  }
+
+  /**
+   * PUT /users/me/drafts/{id} — replace the draft's MIME body. Same request
+   * and response shape as `createDraft`; mapped to the slim `GmailDraftRef`.
+   */
+  async updateDraft(
+    account: string,
+    id: string,
+    raw: string,
+  ): Promise<GmailDraftRef> {
+    const accessToken = await this.oauthFor(account).getAccessToken();
+    let response: { id?: unknown; message?: { id?: unknown; threadId?: unknown } };
+    try {
+      response = await fetchJson(
+        `${GMAIL_API_BASE}/users/me/drafts/${encodeURIComponent(id)}`,
+        {
+          method: "PUT",
+          body: { message: { raw } },
+          token: accessToken,
+        },
+      );
+    } catch (err) {
+      throw wrapDraftError(err, account, id);
+    }
+    return {
+      id: typeof response.id === "string" ? response.id : "",
+      messageId:
+        typeof response.message?.id === "string" ? response.message.id : "",
+      threadId:
+        typeof response.message?.threadId === "string"
+          ? response.message.threadId
+          : "",
+    };
+  }
+
+  /**
+   * POST /users/me/drafts/{id}/send — promote a draft to a sent message.
+   * Returns the same shape as `sendMessage` (id is the new message id, plus
+   * threadId and labelIds).
+   */
+  async sendDraft(account: string, id: string): Promise<GmailSendResponse> {
+    const accessToken = await this.oauthFor(account).getAccessToken();
+    try {
+      return await fetchJson<GmailSendResponse>(
+        `${GMAIL_API_BASE}/users/me/drafts/${encodeURIComponent(id)}/send`,
+        {
+          method: "POST",
+          body: {},
+          token: accessToken,
+        },
+      );
+    } catch (err) {
+      throw wrapDraftError(err, account, id);
+    }
+  }
+
+  /**
+   * DELETE /users/me/drafts/{id} — permanently delete a draft. Gmail returns
+   * 204 No Content on success.
+   */
+  async deleteDraft(account: string, id: string): Promise<void> {
+    const accessToken = await this.oauthFor(account).getAccessToken();
+    try {
+      await fetchJson<unknown>(
+        `${GMAIL_API_BASE}/users/me/drafts/${encodeURIComponent(id)}`,
+        {
+          method: "DELETE",
+          token: accessToken,
+        },
+      );
+    } catch (err) {
+      throw wrapDraftError(err, account, id);
+    }
+  }
+}
+
+/**
+ * Same as `mapGmailAuthError` for 401/403, but additionally rewrites
+ * NotFoundError messages to include the draft id for friendlier surface to
+ * MCP callers. Used by per-id draft methods (get/update/send/delete).
+ */
+function wrapDraftError(err: unknown, account: string, id: string): unknown {
+  if (err instanceof NotFoundError) {
+    return new NotFoundError(`draft not found: ${id}`, { cause: err });
+  }
+  return mapGmailAuthError(err, account);
 }
 
 /**
