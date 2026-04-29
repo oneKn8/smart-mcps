@@ -360,12 +360,12 @@ describe("inbox_zero_dry_run tool", () => {
     });
   });
 
-  it("does not flag domains with fewer than 5 messages as noisy", async () => {
+  it("does not flag domains below the noisy threshold (NOISY_DOMAIN_MIN=3)", async () => {
     const { context, client } = makeContext(tmpHome);
-    const ids = ["a1", "a2", "a3", "a4"];
+    const ids = ["a1", "a2"];
     client.listMessages.mockResolvedValue({
       messages: ids.map((id) => ({ id, threadId: `thr_${id}` })),
-      resultSizeEstimate: 4,
+      resultSizeEstimate: 2,
     });
     client.getMessage.mockImplementation(async (_a, id: string) =>
       makeRaw({
@@ -382,7 +382,40 @@ describe("inbox_zero_dry_run tool", () => {
       context,
     );
     expect(result.noisy_senders).toEqual([]);
-    expect(result.scanned).toBe(4);
+    expect(result.scanned).toBe(2);
+  });
+
+  it("surfaces total_unread in output and uses 'unread overall' framing when scan window is clean but unread is large", async () => {
+    const { context, client } = makeContext(tmpHome);
+    // First call (in:inbox): 1 benign message in window. Second call (is:unread): 14155 total.
+    client.listMessages.mockImplementation(async (_account, opts: { q?: string; maxResults?: number }) => {
+      if (opts.q === "is:unread") {
+        return { messages: [], resultSizeEstimate: 14155 };
+      }
+      return {
+        messages: [{ id: "ok", threadId: "thr_ok" }],
+        resultSizeEstimate: 1,
+      };
+    });
+    client.getMessage.mockResolvedValue(
+      makeRaw({
+        id: "ok",
+        from: "person@personal.com",
+        subject: "Lunch?",
+        date: new Date("2026-04-28T11:00:00.000Z").toUTCString(),
+        labels: ["INBOX"],
+      }),
+    );
+
+    const result = await inboxZeroDryRun.handler(
+      { account: "alice", max: 1 },
+      context,
+    );
+    expect(result.total_unread).toBe(14155);
+    expect(result.noisy_senders).toEqual([]);
+    expect(result.stale_unread).toEqual([]);
+    expect(result.suggested_actions.some((s) => s.includes("14155 unread overall"))).toBe(true);
+    expect(result.suggested_actions.some((s) => s === "Inbox is healthy" || s.startsWith("Inbox is healthy"))).toBe(false);
   });
 
   it("returns 'Inbox is healthy' suggestion when no noise and no stale", async () => {
@@ -410,6 +443,7 @@ describe("inbox_zero_dry_run tool", () => {
     expect(result.suggested_actions.some((s) => s.includes("healthy"))).toBe(
       true,
     );
+    expect(result.total_unread).toBe(1);
   });
 
   it("uses default max=200 when not provided", async () => {

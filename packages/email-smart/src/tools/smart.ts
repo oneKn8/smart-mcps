@@ -114,10 +114,14 @@ type StaleEntry = {
 type InboxZeroDryRunOutput = {
   account: string;
   scanned: number;
+  total_unread: number;
   noisy_senders: NoisySender[];
   stale_unread: StaleEntry[];
   suggested_actions: string[];
 };
+
+const NOISY_DOMAIN_MIN = 3;
+const HEALTHY_UNREAD_MAX = 50;
 
 const NEWSLETTER_KEYWORDS = [
   "newsletter",
@@ -146,6 +150,15 @@ function matchesNewsletterHeuristic(subject: string): boolean {
   return NEWSLETTER_KEYWORDS.some((kw) => lower.includes(kw));
 }
 
+// Gmail's auto-categorization is the strongest noise signal — anything Gmail
+// itself bucketed as Promotions or Updates is almost always marketing.
+const NOISE_LABELS = new Set(["CATEGORY_PROMOTIONS", "CATEGORY_UPDATES"]);
+
+function looksLikeNoise(msg: SlimMessage): boolean {
+  if (matchesNewsletterHeuristic(msg.subject)) return true;
+  return msg.labels.some((l) => NOISE_LABELS.has(l));
+}
+
 export const inboxZeroDryRun = defineTool<
   InboxZeroDryRunInput,
   InboxZeroDryRunOutput,
@@ -157,13 +170,23 @@ export const inboxZeroDryRun = defineTool<
   inputSchema:
     inboxZeroDryRunInputSchema as unknown as z.ZodType<InboxZeroDryRunInput>,
   handler: async (input, context) => {
-    const list = await context.client.listMessages(input.account, {
-      q: "in:inbox",
-      maxResults: input.max,
-    });
+    // Pull both the inbox window AND the total unread count in parallel —
+    // the heuristic only sees the most-recent N, so the absolute unread
+    // figure is critical context the suggested_actions must surface.
+    const [inboxList, unreadList] = await Promise.all([
+      context.client.listMessages(input.account, {
+        q: "in:inbox",
+        maxResults: input.max,
+      }),
+      context.client.listMessages(input.account, {
+        q: "is:unread",
+        maxResults: 1,
+      }),
+    ]);
+    const totalUnread = unreadList.resultSizeEstimate ?? 0;
 
     const slims: SlimMessage[] = [];
-    for (const ref of list.messages) {
+    for (const ref of inboxList.messages) {
       const raw = await context.client.getMessage(
         input.account,
         ref.id,
@@ -183,11 +206,8 @@ export const inboxZeroDryRun = defineTool<
 
     const noisy: NoisySender[] = [];
     for (const [domain, msgs] of byDomain) {
-      if (msgs.length < 5) continue;
-      const newsletterMatch = msgs.some((m) =>
-        matchesNewsletterHeuristic(m.subject),
-      );
-      if (!newsletterMatch) continue;
+      if (msgs.length < NOISY_DOMAIN_MIN) continue;
+      if (!msgs.some(looksLikeNoise)) continue;
       noisy.push({
         from_domain: domain,
         count: msgs.length,
@@ -195,6 +215,8 @@ export const inboxZeroDryRun = defineTool<
         suggested_query: `from:@${domain} in:inbox`,
       });
     }
+    // Sort noisiest-first for human readability.
+    noisy.sort((a, b) => b.count - a.count);
 
     // Stale: UNREAD label and date older than 30 days.
     const staleCutoff = Date.now() - 30 * 86400 * 1000;
@@ -220,13 +242,25 @@ export const inboxZeroDryRun = defineTool<
         `${stale.length} stale unread message(s) older than 30 days — consider mark_read_by_query with q='is:unread older_than:30d'`,
       );
     }
+    // Honest framing: "healthy" only when total_unread is small AND nothing
+    // suspicious in the scanned window. Otherwise tell the user the scan
+    // didn't find anything but the absolute unread count is non-trivial.
     if (noisy.length === 0 && stale.length === 0) {
-      suggested.push("Inbox is healthy");
+      if (totalUnread <= HEALTHY_UNREAD_MAX) {
+        suggested.push(`Inbox is healthy (${totalUnread} unread)`);
+      } else {
+        suggested.push(
+          `${totalUnread} unread overall, but nothing matched the noise heuristic in the most recent ${slims.length} message(s); try a larger max or a targeted query like 'is:unread older_than:30d'`,
+        );
+      }
+    } else {
+      suggested.push(`${totalUnread} unread total across all labels`);
     }
 
     return {
       account: input.account,
       scanned: slims.length,
+      total_unread: totalUnread,
       noisy_senders: noisy,
       stale_unread: stale,
       suggested_actions: suggested,
