@@ -79,8 +79,11 @@ describe("get_air_quality — AQI category boundaries", () => {
     [51, "Moderate"],
     [100, "Moderate"],
     [101, "Unhealthy for Sensitive Groups"],
+    [150, "Unhealthy for Sensitive Groups"],
+    [151, "Unhealthy"],
     [200, "Unhealthy"],
     [201, "Very Unhealthy"],
+    [300, "Very Unhealthy"],
     [301, "Hazardous"],
   ];
   for (const [aqi, expected] of cases) {

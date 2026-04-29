@@ -170,6 +170,43 @@ describe("get_historical — handler date validation", () => {
       ),
     ).rejects.toThrow(/cannot exceed 366 days/);
   });
+
+  it("allows end_date exactly 5 days in the past (ERA5 lag edge)", async () => {
+    // Today = 2026-04-29. Cutoff = 2026-04-24. end_date = 2026-04-24 should
+    // pass the strict `>` check (not `>=`). Hits the allowed-edge boundary.
+    const { ctx } = makeCtx({
+      entries: [entry({ date: "2026-04-24", temp_max: 78, temp_min: 58 })],
+    });
+    const result = await getHistorical.handler(
+      {
+        lat: 32.7767,
+        lng: -96.797,
+        start_date: "2026-04-20",
+        end_date: "2026-04-24",
+      },
+      ctx,
+    );
+    expect(result.daily).toBeDefined();
+  });
+
+  it("allows date range of exactly 366 days", async () => {
+    // Range cap is `> 366`, so a 366-day span must pass. Math: end - start in
+    // days = 366 when start=2024-04-19, end=2025-04-20 (UTC midnight diff).
+    // Both dates safely before the 2026-04-24 ERA5 cutoff.
+    const { ctx } = makeCtx({
+      entries: [entry({ date: "2024-04-19", temp_max: 70, temp_min: 50 })],
+    });
+    const result = await getHistorical.handler(
+      {
+        lat: 32.7767,
+        lng: -96.797,
+        start_date: "2024-04-19",
+        end_date: "2025-04-20",
+      },
+      ctx,
+    );
+    expect(result.daily).toBeDefined();
+  });
 });
 
 describe("get_historical — output formatting", () => {
