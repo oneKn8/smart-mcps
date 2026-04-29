@@ -961,3 +961,120 @@ describe("WeatherClient.getAirQuality", () => {
     vi.useRealTimers();
   });
 });
+
+const NWS_ALERTS_URL = "https://api.weather.gov/alerts/active";
+
+const mockNwsAlerts = {
+  features: [
+    {
+      id: "https://api.weather.gov/alerts/urn:oid:2.49.0.1.840.0.abc",
+      properties: {
+        event: "Tornado Warning",
+        severity: "Extreme",
+        urgency: "Immediate",
+        certainty: "Observed",
+        headline: "Tornado Warning issued April 29 at 2:00PM CDT",
+        expires: "2026-04-29T14:30:00-05:00",
+        areaDesc: "Dallas, TX; Tarrant, TX",
+        description: "ignored",
+        instruction: "ignored",
+      },
+    },
+    {
+      id: "https://api.weather.gov/alerts/urn:oid:2.49.0.1.840.0.def",
+      properties: {
+        event: "Severe Thunderstorm Watch",
+        severity: "Severe",
+        urgency: "Expected",
+        certainty: "Likely",
+        headline: "Severe Thunderstorm Watch until 8PM CDT",
+        expires: "2026-04-29T20:00:00-05:00",
+        areaDesc: "Collin, TX",
+      },
+    },
+  ],
+};
+
+describe("WeatherClient.getNwsAlerts", () => {
+  it("maps NWS GeoJSON features to slim NwsAlert[] (renames areaDesc → areas)", async () => {
+    server.use(
+      http.get(NWS_ALERTS_URL, () => HttpResponse.json(mockNwsAlerts)),
+    );
+    const client = new WeatherClient();
+    const result = await client.getNwsAlerts(32.7767, -96.797);
+    expect(result.alerts).toHaveLength(2);
+    expect(result.alerts[0]).toEqual({
+      id: "https://api.weather.gov/alerts/urn:oid:2.49.0.1.840.0.abc",
+      event: "Tornado Warning",
+      severity: "Extreme",
+      urgency: "Immediate",
+      certainty: "Observed",
+      headline: "Tornado Warning issued April 29 at 2:00PM CDT",
+      expires: "2026-04-29T14:30:00-05:00",
+      areas: "Dallas, TX; Tarrant, TX",
+    });
+    expect(Object.keys(result.alerts[0]!).sort()).toEqual([
+      "areas",
+      "certainty",
+      "event",
+      "expires",
+      "headline",
+      "id",
+      "severity",
+      "urgency",
+    ]);
+  });
+
+  it("returns { alerts: [] } when the response has no features field", async () => {
+    server.use(
+      http.get(NWS_ALERTS_URL, () => HttpResponse.json({ type: "FeatureCollection" })),
+    );
+    const client = new WeatherClient();
+    const result = await client.getNwsAlerts(32.7767, -96.797);
+    expect(result).toEqual({ alerts: [] });
+  });
+
+  it("sends the required User-Agent and Accept: application/geo+json headers", async () => {
+    let seenHeaders: Headers | null = null;
+    server.use(
+      http.get(NWS_ALERTS_URL, ({ request }) => {
+        seenHeaders = request.headers;
+        return HttpResponse.json(mockNwsAlerts);
+      }),
+    );
+    const client = new WeatherClient();
+    await client.getNwsAlerts(32.7767, -96.797);
+    expect(seenHeaders!.get("user-agent")).toBe(
+      "smart-mcps weather-smart (capcat774@gmail.com)",
+    );
+    expect(seenHeaders!.get("accept")).toBe("application/geo+json");
+  });
+
+  it("encodes point=lat,lng in the query string", async () => {
+    let seenUrl: string | null = null;
+    server.use(
+      http.get(NWS_ALERTS_URL, ({ request }) => {
+        seenUrl = request.url;
+        return HttpResponse.json(mockNwsAlerts);
+      }),
+    );
+    const client = new WeatherClient();
+    await client.getNwsAlerts(32.7767, -96.797);
+    const url = new URL(seenUrl!);
+    expect(url.searchParams.get("point")).toBe("32.7767,-96.797");
+  });
+
+  it("does NOT cache: two consecutive calls hit the network twice", async () => {
+    let calls = 0;
+    server.use(
+      http.get(NWS_ALERTS_URL, () => {
+        calls++;
+        return HttpResponse.json(mockNwsAlerts);
+      }),
+    );
+    const client = new WeatherClient();
+    await client.getNwsAlerts(32.7767, -96.797);
+    await client.getNwsAlerts(32.7767, -96.797);
+    expect(calls).toBe(2);
+  });
+});

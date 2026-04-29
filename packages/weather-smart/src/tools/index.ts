@@ -5,6 +5,7 @@ import { getCurrent } from "./current.js";
 import { getForecast, getHourly } from "./forecast.js";
 import { getHistorical } from "./historical.js";
 import { getAirQuality } from "./air-quality.js";
+import { getAlerts } from "./alerts.js";
 
 export const tools = [
   geocode,
@@ -13,4 +14,5 @@ export const tools = [
   getHourly,
   getHistorical,
   getAirQuality,
+  getAlerts,
 ] as unknown as ToolDefinition<unknown, unknown, WeatherContext>[];

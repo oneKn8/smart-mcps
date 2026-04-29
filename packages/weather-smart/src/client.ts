@@ -25,6 +25,7 @@ const OPEN_METEO_FORECAST = "https://api.open-meteo.com/v1/forecast";
 const OPEN_METEO_ARCHIVE = "https://archive-api.open-meteo.com/v1/archive";
 const OPEN_METEO_AIR_QUALITY =
   "https://air-quality-api.open-meteo.com/v1/air-quality";
+const NWS_ALERTS_ACTIVE = "https://api.weather.gov/alerts/active";
 
 // NWS requires every request to identify the caller via User-Agent. Reuse
 // across all NWS-bound calls so api.weather.gov can rate-limit per app.
@@ -153,6 +154,23 @@ export type AirQualitySnapshot = {
   no2: number;
   so2: number;
   co: number;
+};
+
+// Slim shape for one active NWS weather alert. The upstream GeoJSON
+// `features[].properties` payload carries dozens of fields (description,
+// instruction, parameters, references, etc.); this projection keeps just
+// the identifying + decision-relevant ones. `areas` is renamed from
+// upstream's `areaDesc` for terseness, and `id` is taken from the feature
+// envelope (a stable URL like `urn:oid:2.49.0.1.840.0.<uuid>`).
+export type NwsAlert = {
+  id: string;
+  event: string;
+  severity: string;
+  urgency: string;
+  certainty: string;
+  headline: string;
+  expires: string;
+  areas: string;
 };
 
 // Open-Meteo geocoding response shape (slim). The upstream payload carries
@@ -527,12 +545,57 @@ export class WeatherClient {
     this.cache.set(key, out, TTL.airQuality);
     return out;
   }
+
+  // Active NWS weather alerts for a US coordinate. Skips the cache entirely
+  // (TTL.alerts is 0 by design — alert state changes minute-to-minute and
+  // stale data is dangerous). NWS requires a User-Agent header on every
+  // request; without it the API returns 403. The endpoint expects a
+  // `point=lat,lng` query and returns GeoJSON, so we set
+  // Accept: application/geo+json explicitly.
+  //
+  // The upstream `features` array is omitted (rather than `[]`) when there
+  // are no active alerts for the point — `?? []` handles that. Caller code
+  // (the `get_alerts` tool) is responsible for short-circuiting non-US
+  // coordinates so we never hit NWS for them.
+  async getNwsAlerts(
+    lat: number,
+    lng: number,
+  ): Promise<{ alerts: NwsAlert[] }> {
+    const data = await fetchJson<{
+      features?: Array<{ id: string; properties: Record<string, unknown> }>;
+    }>(NWS_ALERTS_ACTIVE, {
+      searchParams: { point: `${lat},${lng}` },
+      headers: {
+        "User-Agent": NWS_USER_AGENT,
+        // Lowercase `accept` here so the spread in fetchJson overrides the
+        // default `accept: "application/json"` rather than appending a second
+        // header (HTTP headers are case-insensitive on the wire and would
+        // concatenate as `application/json, application/geo+json`).
+        accept: "application/geo+json",
+      },
+    });
+
+    const features = data.features ?? [];
+    const alerts: NwsAlert[] = features.map((f) => ({
+      id: f.id,
+      event: f.properties.event as string,
+      severity: f.properties.severity as string,
+      urgency: f.properties.urgency as string,
+      certainty: f.properties.certainty as string,
+      headline: f.properties.headline as string,
+      expires: f.properties.expires as string,
+      areas: f.properties.areaDesc as string,
+    }));
+
+    return { alerts };
+  }
 }
 
 // Re-export so other modules (or future tools) can import the constant
 // without re-deriving it.
 export {
   NWS_USER_AGENT,
+  NWS_ALERTS_ACTIVE,
   OPEN_METEO_GEOCODE,
   OPEN_METEO_FORECAST,
   OPEN_METEO_ARCHIVE,
