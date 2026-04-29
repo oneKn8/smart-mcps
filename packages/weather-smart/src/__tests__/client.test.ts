@@ -53,13 +53,26 @@ describe("WeatherClient — constructor", () => {
   it("reads WEATHER_DEFAULT_UNITS from process.env", () => {
     process.env.WEATHER_DEFAULT_UNITS = "imperial";
     const client = new WeatherClient();
-    expect(client.creds.WEATHER_DEFAULT_UNITS).toBe("imperial");
+    expect(client.getDefaultUnits()).toBe("imperial");
+  });
+
+  it("accepts WEATHER_DEFAULT_UNITS=metric", () => {
+    process.env.WEATHER_DEFAULT_UNITS = "metric";
+    const client = new WeatherClient();
+    expect(client.getDefaultUnits()).toBe("metric");
   });
 
   it("reads WEATHER_DEFAULT_LOCATION from process.env", () => {
     process.env.WEATHER_DEFAULT_LOCATION = "Dallas";
     const client = new WeatherClient();
-    expect(client.creds.WEATHER_DEFAULT_LOCATION).toBe("Dallas");
+    expect(client.getDefaultLocation()).toBe("Dallas");
+  });
+
+  it("throws when WEATHER_DEFAULT_UNITS is not 'metric' or 'imperial'", () => {
+    process.env.WEATHER_DEFAULT_UNITS = "foo";
+    expect(() => new WeatherClient()).toThrow(
+      /WEATHER_DEFAULT_UNITS.*foo/,
+    );
   });
 });
 

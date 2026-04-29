@@ -13,8 +13,8 @@ export type WeatherCreds = {
 };
 
 // loadCreds is constrained to Record<string, string>, so we shape the
-// resolved record that way and re-cast on the way out — the actual values
-// are validated at use-sites (only "metric"/"imperial" reach the formatter).
+// resolved record that way and validate WEATHER_DEFAULT_UNITS at construction
+// time before narrowing to the public WeatherCreds type.
 type WeatherCredsRecord = Record<
   "WEATHER_DEFAULT_UNITS" | "WEATHER_DEFAULT_LOCATION",
   string
@@ -44,18 +44,52 @@ export type GeocodeMatch = {
   population?: number;
 };
 
+// Builds a stable cache key from a method name and an args bag. JSON.stringify
+// preserves field ordering as written here (key insertion order), so callers
+// must pass args with consistent key order. Avoids ad-hoc `:`-separated keys
+// that collide once any string value contains a literal `:`.
+function cacheKey(method: string, args: unknown): string {
+  return `${method}:${JSON.stringify(args)}`;
+}
+
 export class WeatherClient {
-  readonly creds: WeatherCreds;
-  readonly cache = new TtlCache();
+  private readonly creds: WeatherCreds;
+  private readonly cache = new TtlCache();
 
   constructor(creds?: WeatherCreds) {
-    this.creds =
-      creds ??
-      (loadCreds<WeatherCredsRecord>({
-        serviceName: "weather-smart",
-        required: [],
-        optional: ["WEATHER_DEFAULT_UNITS", "WEATHER_DEFAULT_LOCATION"],
-      }) as WeatherCreds);
+    if (creds) {
+      this.creds = creds;
+      return;
+    }
+    const raw = loadCreds<WeatherCredsRecord>({
+      serviceName: "weather-smart",
+      required: [],
+      optional: ["WEATHER_DEFAULT_UNITS", "WEATHER_DEFAULT_LOCATION"],
+    });
+    // Validate WEATHER_DEFAULT_UNITS eagerly so bad config surfaces at
+    // startup rather than when a downstream formatter receives an unexpected
+    // unit string. Same eager-fail pattern as runpod-smart's required-key
+    // check.
+    const units = (raw as Partial<WeatherCredsRecord>).WEATHER_DEFAULT_UNITS;
+    if (units !== undefined && units !== "metric" && units !== "imperial") {
+      throw new Error(
+        `WEATHER_DEFAULT_UNITS must be 'metric' or 'imperial', got '${units}'`,
+      );
+    }
+    this.creds = raw as WeatherCreds;
+  }
+
+  // The optional default unit system used when callers don't specify one.
+  // Exposed as a typed accessor so downstream tools can read this without
+  // reaching into the private creds record.
+  getDefaultUnits(): "metric" | "imperial" | undefined {
+    return this.creds.WEATHER_DEFAULT_UNITS;
+  }
+
+  // The optional default location used when callers don't name a city.
+  // Used by the location resolver to back "what's the weather?" without args.
+  getDefaultLocation(): string | undefined {
+    return this.creds.WEATHER_DEFAULT_LOCATION;
   }
 
   // Open-Meteo geocoding. Cached for 24 hours per query+limit pair (cities
@@ -66,8 +100,8 @@ export class WeatherClient {
     query: string,
     limit = 5,
   ): Promise<{ matches: GeocodeMatch[] }> {
-    const cacheKey = `geocode:${query}:${limit}`;
-    const cached = this.cache.get<{ matches: GeocodeMatch[] }>(cacheKey);
+    const key = cacheKey("geocode", { query, limit });
+    const cached = this.cache.get<{ matches: GeocodeMatch[] }>(key);
     if (cached) return cached;
 
     const data = await fetchJson<{
@@ -95,7 +129,7 @@ export class WeatherClient {
     }));
 
     const out = { matches };
-    this.cache.set(cacheKey, out, TTL.geocode);
+    this.cache.set(key, out, TTL.geocode);
     return out;
   }
 }
