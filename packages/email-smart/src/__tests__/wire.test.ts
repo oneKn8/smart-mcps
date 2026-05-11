@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import { tools } from "../tools/index.js";
 
 describe("tools/index — wire", () => {
-  it("exports exactly 27 tools", () => {
-    expect(tools).toHaveLength(27);
+  it("exports exactly 30 tools", () => {
+    expect(tools).toHaveLength(30);
   });
 
   it("all tool names are unique", () => {
@@ -30,7 +30,7 @@ describe("tools/index — wire", () => {
     expect(new Set(descriptions).size).toBe(descriptions.length);
   });
 
-  it("contains the expected 27 tool names", () => {
+  it("contains the expected 30 tool names", () => {
     const expected = [
       // Send (5)
       "send_email",
@@ -54,8 +54,12 @@ describe("tools/index — wire", () => {
       "archive_by_query",
       "trash_by_query",
       "apply_label_by_query",
-      // Labels + smart (3)
+      // Labels (4) — list + CRUD
       "list_labels",
+      "create_label",
+      "update_label",
+      "delete_label",
+      // Smart shortcuts (2)
       "daily_status",
       "inbox_zero_dry_run",
       // Bulk unsubscribe (1)

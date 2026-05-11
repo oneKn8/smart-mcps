@@ -154,12 +154,12 @@ describe("EmailClient.batchModify", () => {
 });
 
 describe("EmailClient.batchTrash", () => {
-  it("POSTs /users/me/messages/batchTrash with ids and bearer", async () => {
+  it("POSTs /users/me/messages/batchModify with TRASH label and bearer", async () => {
     let capturedBody: unknown;
     let capturedAuth: string | null = null;
     server.use(
       http.post(
-        `${GMAIL_BASE}/users/me/messages/batchTrash`,
+        `${GMAIL_BASE}/users/me/messages/batchModify`,
         async ({ request }) => {
           capturedBody = await request.json();
           capturedAuth = request.headers.get("authorization");
@@ -172,12 +172,16 @@ describe("EmailClient.batchTrash", () => {
     await client.batchTrash("alice", ["m1", "m2", "m3"]);
 
     expect(capturedAuth).toBe("Bearer test-access-token");
-    expect(capturedBody).toEqual({ ids: ["m1", "m2", "m3"] });
+    expect(capturedBody).toEqual({
+      ids: ["m1", "m2", "m3"],
+      addLabelIds: ["TRASH"],
+      removeLabelIds: ["INBOX"],
+    });
   });
 
   it("returns void on 204", async () => {
     server.use(
-      http.post(`${GMAIL_BASE}/users/me/messages/batchTrash`, () =>
+      http.post(`${GMAIL_BASE}/users/me/messages/batchModify`, () =>
         new HttpResponse(null, { status: 204 }),
       ),
     );
@@ -188,7 +192,7 @@ describe("EmailClient.batchTrash", () => {
 
   it("maps Gmail 403 → AuthError on batchTrash", async () => {
     server.use(
-      http.post(`${GMAIL_BASE}/users/me/messages/batchTrash`, () =>
+      http.post(`${GMAIL_BASE}/users/me/messages/batchModify`, () =>
         HttpResponse.json(
           { error: { code: 403, message: "Insufficient Permission" } },
           { status: 403 },
@@ -283,5 +287,169 @@ describe("EmailClient.getLabel", () => {
       name: "Custom",
       type: "user",
     });
+  });
+});
+
+describe("EmailClient.createLabel", () => {
+  it("POSTs /users/me/labels with name + visibility and returns the new label", async () => {
+    let capturedAuth: string | null = null;
+    let capturedBody: unknown;
+    server.use(
+      http.post(`${GMAIL_BASE}/users/me/labels`, async ({ request }) => {
+        capturedAuth = request.headers.get("authorization");
+        capturedBody = await request.json();
+        return HttpResponse.json({
+          id: "Label_99",
+          name: "Critical",
+          type: "user",
+        });
+      }),
+    );
+
+    const client = new EmailClient(tmpHome);
+    const result = await client.createLabel("alice", {
+      name: "Critical",
+      labelListVisibility: "labelShow",
+      messageListVisibility: "show",
+    });
+    expect(capturedAuth).toBe("Bearer test-access-token");
+    expect(capturedBody).toEqual({
+      name: "Critical",
+      labelListVisibility: "labelShow",
+      messageListVisibility: "show",
+    });
+    expect(result).toEqual({
+      id: "Label_99",
+      name: "Critical",
+      type: "user",
+    });
+  });
+
+  it("omits visibility fields when not provided", async () => {
+    let capturedBody: unknown;
+    server.use(
+      http.post(`${GMAIL_BASE}/users/me/labels`, async ({ request }) => {
+        capturedBody = await request.json();
+        return HttpResponse.json({ id: "Label_1", name: "Foo", type: "user" });
+      }),
+    );
+
+    const client = new EmailClient(tmpHome);
+    await client.createLabel("alice", { name: "Foo" });
+    expect(capturedBody).toEqual({ name: "Foo" });
+  });
+
+  it("maps 401 to AuthError", async () => {
+    server.use(
+      http.post(`${GMAIL_BASE}/users/me/labels`, () =>
+        HttpResponse.json({ error: "unauthorized" }, { status: 401 }),
+      ),
+    );
+
+    const client = new EmailClient(tmpHome);
+    await expect(
+      client.createLabel("alice", { name: "Critical" }),
+    ).rejects.toBeInstanceOf(AuthError);
+  });
+});
+
+describe("EmailClient.updateLabel", () => {
+  it("PATCHes /users/me/labels/{id} with name and returns updated label", async () => {
+    let capturedAuth: string | null = null;
+    let capturedBody: unknown;
+    server.use(
+      http.patch(
+        `${GMAIL_BASE}/users/me/labels/Label_42`,
+        async ({ request }) => {
+          capturedAuth = request.headers.get("authorization");
+          capturedBody = await request.json();
+          return HttpResponse.json({
+            id: "Label_42",
+            name: "Renamed",
+            type: "user",
+          });
+        },
+      ),
+    );
+
+    const client = new EmailClient(tmpHome);
+    const result = await client.updateLabel("alice", "Label_42", {
+      name: "Renamed",
+    });
+    expect(capturedAuth).toBe("Bearer test-access-token");
+    expect(capturedBody).toEqual({ name: "Renamed" });
+    expect(result).toEqual({
+      id: "Label_42",
+      name: "Renamed",
+      type: "user",
+    });
+  });
+
+  it("PATCH body includes only fields provided in the patch", async () => {
+    let capturedBody: unknown;
+    server.use(
+      http.patch(
+        `${GMAIL_BASE}/users/me/labels/Label_42`,
+        async ({ request }) => {
+          capturedBody = await request.json();
+          return HttpResponse.json({
+            id: "Label_42",
+            name: "Newsletters",
+            type: "user",
+          });
+        },
+      ),
+    );
+
+    const client = new EmailClient(tmpHome);
+    await client.updateLabel("alice", "Label_42", {
+      labelListVisibility: "labelHide",
+    });
+    expect(capturedBody).toEqual({ labelListVisibility: "labelHide" });
+  });
+
+  it("maps 401 to AuthError", async () => {
+    server.use(
+      http.patch(`${GMAIL_BASE}/users/me/labels/Label_42`, () =>
+        HttpResponse.json({ error: "unauthorized" }, { status: 401 }),
+      ),
+    );
+
+    const client = new EmailClient(tmpHome);
+    await expect(
+      client.updateLabel("alice", "Label_42", { name: "x" }),
+    ).rejects.toBeInstanceOf(AuthError);
+  });
+});
+
+describe("EmailClient.deleteLabel", () => {
+  it("DELETEs /users/me/labels/{id} with bearer and returns void", async () => {
+    let capturedAuth: string | null = null;
+    server.use(
+      http.delete(
+        `${GMAIL_BASE}/users/me/labels/Label_42`,
+        ({ request }) => {
+          capturedAuth = request.headers.get("authorization");
+          return new HttpResponse(null, { status: 204 });
+        },
+      ),
+    );
+
+    const client = new EmailClient(tmpHome);
+    await client.deleteLabel("alice", "Label_42");
+    expect(capturedAuth).toBe("Bearer test-access-token");
+  });
+
+  it("maps 401 to AuthError", async () => {
+    server.use(
+      http.delete(`${GMAIL_BASE}/users/me/labels/Label_42`, () =>
+        HttpResponse.json({ error: "unauthorized" }, { status: 401 }),
+      ),
+    );
+
+    const client = new EmailClient(tmpHome);
+    await expect(
+      client.deleteLabel("alice", "Label_42"),
+    ).rejects.toBeInstanceOf(AuthError);
   });
 });

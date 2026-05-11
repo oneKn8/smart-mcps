@@ -88,6 +88,22 @@ export type GmailLabelDetail = GmailLabel & {
   threadsUnread?: number;
 };
 
+export type LabelVisibility = "labelShow" | "labelHide" | "labelShowIfUnread";
+
+export type LabelMessageListVisibility = "show" | "hide";
+
+export type CreateLabelOpts = {
+  name: string;
+  labelListVisibility?: LabelVisibility;
+  messageListVisibility?: LabelMessageListVisibility;
+};
+
+export type UpdateLabelOpts = {
+  name?: string;
+  labelListVisibility?: LabelVisibility;
+  messageListVisibility?: LabelMessageListVisibility;
+};
+
 export type BatchModifyOpts = {
   ids: string[];
   addLabelIds?: string[];
@@ -288,17 +304,23 @@ export class EmailClient {
   }
 
   /**
-   * POST /users/me/messages/batchTrash — bulk move up to 1000 message IDs
-   * into Trash. Gmail returns 204 No Content on success.
+   * Bulk move up to 1000 message IDs into Trash. There is no `batchTrash`
+   * endpoint in the Gmail REST API — moving to Trash is expressed as adding
+   * the `TRASH` system label (and removing `INBOX` so the thread stops
+   * appearing in the inbox view). Implemented via `batchModify`.
    */
   async batchTrash(account: string, ids: string[]): Promise<void> {
     const accessToken = await this.oauthFor(account).getAccessToken();
     try {
       await fetchJson<unknown>(
-        `${GMAIL_API_BASE}/users/me/messages/batchTrash`,
+        `${GMAIL_API_BASE}/users/me/messages/batchModify`,
         {
           method: "POST",
-          body: { ids },
+          body: {
+            ids,
+            addLabelIds: ["TRASH"],
+            removeLabelIds: ["INBOX"],
+          },
           token: accessToken,
         },
       );
@@ -374,6 +396,96 @@ export class EmailClient {
     if (typeof raw.threadsUnread === "number")
       out.threadsUnread = raw.threadsUnread;
     return out;
+  }
+
+  /**
+   * POST /users/me/labels — create a new user label. Gmail rejects names that
+   * collide with existing user labels (409) and names that collide with system
+   * labels like INBOX/IMPORTANT (400). Both surface as upstream errors here;
+   * the caller picks a different name.
+   */
+  async createLabel(
+    account: string,
+    opts: CreateLabelOpts,
+  ): Promise<GmailLabel> {
+    const accessToken = await this.oauthFor(account).getAccessToken();
+    const body: Record<string, unknown> = { name: opts.name };
+    if (opts.labelListVisibility !== undefined)
+      body["labelListVisibility"] = opts.labelListVisibility;
+    if (opts.messageListVisibility !== undefined)
+      body["messageListVisibility"] = opts.messageListVisibility;
+    let raw: { id?: unknown; name?: unknown; type?: unknown };
+    try {
+      raw = await fetchJson(`${GMAIL_API_BASE}/users/me/labels`, {
+        method: "POST",
+        body,
+        token: accessToken,
+      });
+    } catch (err) {
+      throw mapGmailAuthError(err, account);
+    }
+    return {
+      id: typeof raw.id === "string" ? raw.id : "",
+      name: typeof raw.name === "string" ? raw.name : opts.name,
+      type: typeof raw.type === "string" ? raw.type : "user",
+    };
+  }
+
+  /**
+   * PATCH /users/me/labels/{id} — rename or change visibility of a user label.
+   * Gmail rejects PATCH on system labels (400); callers must check the label
+   * type before invoking this.
+   */
+  async updateLabel(
+    account: string,
+    id: string,
+    patch: UpdateLabelOpts,
+  ): Promise<GmailLabel> {
+    const accessToken = await this.oauthFor(account).getAccessToken();
+    const body: Record<string, unknown> = {};
+    if (patch.name !== undefined) body["name"] = patch.name;
+    if (patch.labelListVisibility !== undefined)
+      body["labelListVisibility"] = patch.labelListVisibility;
+    if (patch.messageListVisibility !== undefined)
+      body["messageListVisibility"] = patch.messageListVisibility;
+    let raw: { id?: unknown; name?: unknown; type?: unknown };
+    try {
+      raw = await fetchJson(
+        `${GMAIL_API_BASE}/users/me/labels/${encodeURIComponent(id)}`,
+        {
+          method: "PATCH",
+          body,
+          token: accessToken,
+        },
+      );
+    } catch (err) {
+      throw mapGmailAuthError(err, account);
+    }
+    return {
+      id: typeof raw.id === "string" ? raw.id : id,
+      name: typeof raw.name === "string" ? raw.name : "",
+      type: typeof raw.type === "string" ? raw.type : "user",
+    };
+  }
+
+  /**
+   * DELETE /users/me/labels/{id} — permanently delete a user label. The label
+   * is removed from all messages in addition to the label resource itself.
+   * Gmail rejects DELETE on system labels (400).
+   */
+  async deleteLabel(account: string, id: string): Promise<void> {
+    const accessToken = await this.oauthFor(account).getAccessToken();
+    try {
+      await fetchJson<unknown>(
+        `${GMAIL_API_BASE}/users/me/labels/${encodeURIComponent(id)}`,
+        {
+          method: "DELETE",
+          token: accessToken,
+        },
+      );
+    } catch (err) {
+      throw mapGmailAuthError(err, account);
+    }
   }
 
   /**

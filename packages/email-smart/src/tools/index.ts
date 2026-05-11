@@ -21,7 +21,12 @@ import {
   trashByQuery,
   applyLabelByQuery,
 } from "./modify.js";
-import { listLabels } from "./labels.js";
+import {
+  listLabels,
+  createLabel,
+  updateLabel,
+  deleteLabel,
+} from "./labels.js";
 import { dailyStatus, inboxZeroDryRun } from "./smart.js";
 import {
   createDraft,
@@ -54,8 +59,12 @@ export const tools: ToolDefinition<unknown, unknown, EmailContext>[] = [
   archiveByQuery as unknown as ToolDefinition<unknown, unknown, EmailContext>,
   trashByQuery as unknown as ToolDefinition<unknown, unknown, EmailContext>,
   applyLabelByQuery as unknown as ToolDefinition<unknown, unknown, EmailContext>,
-  // Labels + smart shortcuts (3)
+  // Labels (4) — list + CRUD
   listLabels as unknown as ToolDefinition<unknown, unknown, EmailContext>,
+  createLabel as unknown as ToolDefinition<unknown, unknown, EmailContext>,
+  updateLabel as unknown as ToolDefinition<unknown, unknown, EmailContext>,
+  deleteLabel as unknown as ToolDefinition<unknown, unknown, EmailContext>,
+  // Smart shortcuts (2)
   dailyStatus as unknown as ToolDefinition<unknown, unknown, EmailContext>,
   inboxZeroDryRun as unknown as ToolDefinition<unknown, unknown, EmailContext>,
   // Bulk unsubscribe (1) — destructive
