@@ -776,6 +776,57 @@ describe("CalendarClient.insertEvent", () => {
       c.insertEvent({ calendarId: "primary", body: {} }),
     ).rejects.toBeInstanceOf(AuthError);
   });
+
+  it("forwards conferenceDataVersion, supportsAttachments, sendUpdates as query params", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    let captured: URL | undefined;
+    server.use(
+      http.post(PRIMARY_EVENTS_URL, ({ request }) => {
+        captured = new URL(request.url);
+        return HttpResponse.json({ id: "evt_alpha" });
+      }),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    await c.insertEvent({
+      calendarId: "primary",
+      body: { summary: "x" },
+      conferenceDataVersion: 1,
+      supportsAttachments: true,
+      sendUpdates: "all",
+    });
+
+    expect(captured?.searchParams.get("conferenceDataVersion")).toBe("1");
+    expect(captured?.searchParams.get("supportsAttachments")).toBe("true");
+    expect(captured?.searchParams.get("sendUpdates")).toBe("all");
+  });
+
+  it("omits the query string entirely when no optional params are provided", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    let captured: URL | undefined;
+    server.use(
+      http.post(PRIMARY_EVENTS_URL, ({ request }) => {
+        captured = new URL(request.url);
+        return HttpResponse.json({ id: "evt_alpha" });
+      }),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    await c.insertEvent({
+      calendarId: "primary",
+      body: { summary: "x" },
+    });
+
+    expect(captured?.search).toBe("");
+  });
 });
 
 describe("CalendarClient.patchEvent", () => {
@@ -877,6 +928,59 @@ describe("CalendarClient.patchEvent", () => {
         body: {},
       }),
     ).rejects.toBeInstanceOf(AuthError);
+  });
+
+  it("forwards conferenceDataVersion, supportsAttachments, sendUpdates as query params", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    let captured: URL | undefined;
+    server.use(
+      http.patch(PRIMARY_EVENT_URL("evt_alpha"), ({ request }) => {
+        captured = new URL(request.url);
+        return HttpResponse.json({ id: "evt_alpha" });
+      }),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    await c.patchEvent({
+      calendarId: "primary",
+      eventId: "evt_alpha",
+      body: { summary: "x" },
+      conferenceDataVersion: 1,
+      supportsAttachments: true,
+      sendUpdates: "externalOnly",
+    });
+
+    expect(captured?.searchParams.get("conferenceDataVersion")).toBe("1");
+    expect(captured?.searchParams.get("supportsAttachments")).toBe("true");
+    expect(captured?.searchParams.get("sendUpdates")).toBe("externalOnly");
+  });
+
+  it("omits the query string entirely when no optional params are provided", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    let captured: URL | undefined;
+    server.use(
+      http.patch(PRIMARY_EVENT_URL("evt_alpha"), ({ request }) => {
+        captured = new URL(request.url);
+        return HttpResponse.json({ id: "evt_alpha" });
+      }),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    await c.patchEvent({
+      calendarId: "primary",
+      eventId: "evt_alpha",
+      body: { summary: "x" },
+    });
+
+    expect(captured?.search).toBe("");
   });
 });
 

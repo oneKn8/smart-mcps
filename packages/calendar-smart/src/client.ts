@@ -243,12 +243,34 @@ export class CalendarClient {
    * body. The caller is responsible for shaping `body` (start/end as
    * `{ dateTime }` blocks, attendees as `{ email }` objects, etc.); this
    * method just wraps auth + transport.
+   *
+   * Optional query params:
+   * - `conferenceDataVersion` — must be 1 to honor a `conferenceData.createRequest`
+   *   block in the body (Google Meet auto-creation). Defaults to omitted.
+   * - `supportsAttachments` — pass true when the body includes attachments.
+   * - `sendUpdates` — controls invite emails: `all` (everyone), `externalOnly`
+   *   (non-Google attendees only), `none` (silent). Defaults to omitted, which
+   *   Google interprets as no email side-effect for newly created events.
    */
   async insertEvent(opts: {
     calendarId: string;
     body: Record<string, unknown>;
+    conferenceDataVersion?: 0 | 1;
+    supportsAttachments?: boolean;
+    sendUpdates?: "all" | "externalOnly" | "none";
   }): Promise<unknown> {
     const token = await this.oauthClient.getAccessToken();
+    const searchParams: Record<string, string | number | boolean | undefined> =
+      {};
+    if (opts.conferenceDataVersion !== undefined) {
+      searchParams.conferenceDataVersion = opts.conferenceDataVersion;
+    }
+    if (opts.supportsAttachments !== undefined) {
+      searchParams.supportsAttachments = opts.supportsAttachments;
+    }
+    if (opts.sendUpdates !== undefined) {
+      searchParams.sendUpdates = opts.sendUpdates;
+    }
     try {
       return await fetchJson<unknown>(
         `${CALENDAR_API_BASE}/calendars/${encodeURIComponent(opts.calendarId)}/events`,
@@ -256,6 +278,7 @@ export class CalendarClient {
           method: "POST",
           token,
           body: opts.body,
+          ...(Object.keys(searchParams).length > 0 ? { searchParams } : {}),
         },
       );
     } catch (err) {
@@ -270,13 +293,34 @@ export class CalendarClient {
    *
    * A 404 from Google is rewritten into a NotFoundError that names the
    * event id and calendar id, matching `getEvent`'s behavior.
+   *
+   * Optional query params (mirror `insertEvent`):
+   * - `conferenceDataVersion` — must be 1 to add a `conferenceData.createRequest`
+   *   on patch (i.e. attaching a Meet link to an existing event).
+   * - `supportsAttachments` — pass true when the patch includes attachments.
+   * - `sendUpdates` — invite-email behavior on update: `all`, `externalOnly`,
+   *   or `none`. Defaults to omitted, which Google treats as `none` for PATCH.
    */
   async patchEvent(opts: {
     calendarId: string;
     eventId: string;
     body: Record<string, unknown>;
+    conferenceDataVersion?: 0 | 1;
+    supportsAttachments?: boolean;
+    sendUpdates?: "all" | "externalOnly" | "none";
   }): Promise<unknown> {
     const token = await this.oauthClient.getAccessToken();
+    const searchParams: Record<string, string | number | boolean | undefined> =
+      {};
+    if (opts.conferenceDataVersion !== undefined) {
+      searchParams.conferenceDataVersion = opts.conferenceDataVersion;
+    }
+    if (opts.supportsAttachments !== undefined) {
+      searchParams.supportsAttachments = opts.supportsAttachments;
+    }
+    if (opts.sendUpdates !== undefined) {
+      searchParams.sendUpdates = opts.sendUpdates;
+    }
     try {
       return await fetchJson<unknown>(
         `${CALENDAR_API_BASE}/calendars/${encodeURIComponent(opts.calendarId)}` +
@@ -285,6 +329,7 @@ export class CalendarClient {
           method: "PATCH",
           token,
           body: opts.body,
+          ...(Object.keys(searchParams).length > 0 ? { searchParams } : {}),
         },
       );
     } catch (err) {
