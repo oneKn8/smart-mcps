@@ -8,6 +8,7 @@ import {
   listInstancesTool,
   updateInstanceTool,
   cancelInstanceTool,
+  splitRecurrenceTool,
 } from "../events-recurring.js";
 
 type FakeClient = {
@@ -371,5 +372,185 @@ describe("cancelInstanceTool — handler", () => {
     ).rejects.toMatchObject({
       preview: expect.stringContaining("primary"),
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// splitRecurrenceTool
+// ---------------------------------------------------------------------------
+
+function rawMasterSeries(
+  over: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    id: "evt_alpha",
+    summary: "Weekly standup",
+    start: { dateTime: "2026-04-06T10:00:00-05:00" },
+    end: { dateTime: "2026-04-06T10:30:00-05:00" },
+    recurrence: ["RRULE:FREQ=WEEKLY;BYDAY=MO"],
+    htmlLink: "https://calendar.google.com/event?eid=alpha",
+    status: "confirmed",
+    ...over,
+  };
+}
+
+describe("splitRecurrenceTool — metadata", () => {
+  it("name and short description fit the budget", () => {
+    expect(splitRecurrenceTool.name).toBe("split_recurrence");
+    expect(
+      splitRecurrenceTool.description.split(/\s+/).length,
+    ).toBeLessThanOrEqual(15);
+  });
+
+  it("inputSchema requires event_id, target_start, new_event and defaults calendar_id", () => {
+    expect(() => splitRecurrenceTool.inputSchema.parse({})).toThrow();
+    const parsed = splitRecurrenceTool.inputSchema.parse({
+      event_id: "evt_alpha",
+      target_start: "2026-06-01T10:00:00-05:00",
+      new_event: {
+        summary: "Weekly standup (new)",
+        start: "2026-06-01T10:00:00-05:00",
+        end: "2026-06-01T10:30:00-05:00",
+      },
+    }) as { calendar_id: string; confirm: boolean };
+    expect(parsed.calendar_id).toBe("primary");
+    expect(parsed.confirm).toBe(false);
+  });
+});
+
+describe("splitRecurrenceTool — handler", () => {
+  it("throws ConfirmRequiredError with a meaningful preview when confirm=false", async () => {
+    const client = makeClient({
+      getEvent: vi.fn().mockResolvedValue(rawMasterSeries()),
+    });
+    const parsed = splitRecurrenceTool.inputSchema.parse({
+      event_id: "evt_alpha",
+      target_start: "2026-06-01T10:00:00-05:00",
+      new_event: {
+        summary: "Weekly standup (new)",
+        start: "2026-06-01T10:00:00-05:00",
+        end: "2026-06-01T10:30:00-05:00",
+      },
+    }) as Parameters<typeof splitRecurrenceTool.handler>[0];
+
+    await expect(
+      splitRecurrenceTool.handler(parsed, {
+        client: client as unknown as never,
+      }),
+    ).rejects.toBeInstanceOf(ConfirmRequiredError);
+    expect(client.patchEvent).not.toHaveBeenCalled();
+    expect(client.insertEvent).not.toHaveBeenCalled();
+  });
+
+  it("when confirmed: caps the master series via UNTIL then inserts a new series", async () => {
+    const client = makeClient({
+      getEvent: vi.fn().mockResolvedValue(rawMasterSeries()),
+      patchEvent: vi
+        .fn()
+        .mockResolvedValue(
+          rawMasterSeries({
+            recurrence: [
+              "RRULE:FREQ=WEEKLY;BYDAY=MO;UNTIL=20260601T145959Z",
+            ],
+          }),
+        ),
+      insertEvent: vi.fn().mockResolvedValue({
+        id: "evt_beta",
+        summary: "Weekly standup (new)",
+        start: { dateTime: "2026-06-01T10:00:00-05:00" },
+        end: { dateTime: "2026-06-01T10:30:00-05:00" },
+        recurrence: ["RRULE:FREQ=WEEKLY;BYDAY=MO"],
+        status: "confirmed",
+        htmlLink: "https://calendar.google.com/event?eid=beta",
+      }),
+    });
+    const parsed = splitRecurrenceTool.inputSchema.parse({
+      event_id: "evt_alpha",
+      // 2026-06-01T15:00:00Z → minus 1s → 2026-06-01T14:59:59Z → 20260601T145959Z
+      target_start: "2026-06-01T15:00:00Z",
+      new_event: {
+        summary: "Weekly standup (new)",
+        start: "2026-06-01T10:00:00-05:00",
+        end: "2026-06-01T10:30:00-05:00",
+        recurrence: ["RRULE:FREQ=WEEKLY;BYDAY=MO"],
+      },
+      confirm: true,
+    }) as Parameters<typeof splitRecurrenceTool.handler>[0];
+
+    const out = await splitRecurrenceTool.handler(parsed, {
+      client: client as unknown as never,
+    });
+
+    expect(client.patchEvent).toHaveBeenCalledTimes(1);
+    const patchCall = (client.patchEvent as ReturnType<typeof vi.fn>).mock
+      .calls[0]?.[0];
+    expect(patchCall.calendarId).toBe("primary");
+    expect(patchCall.eventId).toBe("evt_alpha");
+    expect(patchCall.body.recurrence).toEqual([
+      "RRULE:FREQ=WEEKLY;BYDAY=MO;UNTIL=20260601T145959Z",
+    ]);
+
+    expect(client.insertEvent).toHaveBeenCalledTimes(1);
+    const insertCall = (client.insertEvent as ReturnType<typeof vi.fn>).mock
+      .calls[0]?.[0];
+    expect(insertCall.calendarId).toBe("primary");
+    expect(insertCall.body.summary).toBe("Weekly standup (new)");
+    expect(insertCall.body.recurrence).toEqual([
+      "RRULE:FREQ=WEEKLY;BYDAY=MO",
+    ]);
+
+    expect(out.truncated_series.id).toBe("evt_alpha");
+    expect(out.new_series.id).toBe("evt_beta");
+  });
+
+  it("computes UNTIL as (target_start - 1s) in UTC YYYYMMDDTHHMMSSZ format", async () => {
+    const client = makeClient({
+      getEvent: vi.fn().mockResolvedValue(rawMasterSeries()),
+      patchEvent: vi.fn().mockResolvedValue(rawMasterSeries()),
+      insertEvent: vi.fn().mockResolvedValue(rawMasterSeries({ id: "evt_new" })),
+    });
+    const parsed = splitRecurrenceTool.inputSchema.parse({
+      event_id: "evt_alpha",
+      target_start: "2026-06-01T10:00:00-05:00",
+      new_event: {
+        summary: "x",
+        start: "2026-06-01T10:00:00-05:00",
+        end: "2026-06-01T10:30:00-05:00",
+      },
+      confirm: true,
+    }) as Parameters<typeof splitRecurrenceTool.handler>[0];
+
+    await splitRecurrenceTool.handler(parsed, {
+      client: client as unknown as never,
+    });
+
+    const patchCall = (client.patchEvent as ReturnType<typeof vi.fn>).mock
+      .calls[0]?.[0];
+    // 2026-06-01T10:00:00-05:00 = 15:00:00Z → minus 1s = 14:59:59Z
+    expect(patchCall.body.recurrence[0]).toContain("UNTIL=20260601T145959Z");
+  });
+
+  it("throws when the master event has no recurrence rule", async () => {
+    const client = makeClient({
+      getEvent: vi
+        .fn()
+        .mockResolvedValue(rawMasterSeries({ recurrence: undefined })),
+    });
+    const parsed = splitRecurrenceTool.inputSchema.parse({
+      event_id: "evt_alpha",
+      target_start: "2026-06-01T10:00:00-05:00",
+      new_event: {
+        summary: "x",
+        start: "2026-06-01T10:00:00-05:00",
+        end: "2026-06-01T10:30:00-05:00",
+      },
+      confirm: true,
+    }) as Parameters<typeof splitRecurrenceTool.handler>[0];
+
+    await expect(
+      splitRecurrenceTool.handler(parsed, {
+        client: client as unknown as never,
+      }),
+    ).rejects.toBeInstanceOf(ValidationError);
   });
 });

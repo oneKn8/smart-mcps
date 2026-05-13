@@ -5,14 +5,24 @@ import {
   ValidationError,
 } from "smart-mcp-core";
 import type { CalendarContext } from "../context.js";
-import { mapEvent, type SlimEvent } from "../event-mapper.js";
+import { mapEvent, eventTimeField, type SlimEvent } from "../event-mapper.js";
 import {
+  applyUntilToRRule,
   attendeesSchema,
   birthdaySchema,
+  buildBirthdayProperties,
+  buildExtendedPropertiesField,
+  buildFocusTimeProperties,
+  buildMeetConferenceRequest,
+  buildOutOfOfficeProperties,
+  buildRemindersField,
+  buildSourceField,
   buildUpdateEventBody,
+  buildWorkingLocationProperties,
   eventTypeSchema,
   extendedPropertiesSchema,
   focusTimeSchema,
+  normalizeAttendees,
   outOfOfficeSchema,
   remindersSchema,
   sendUpdatesSchema,
@@ -265,5 +275,215 @@ export const cancelInstanceTool = defineTool<
       body: { status: "cancelled" },
     });
     return { cancelled: true };
+  },
+});
+
+// =============================================================================
+// split_recurrence
+// =============================================================================
+
+/**
+ * Schema for the `new_event` sub-object: the series that picks up at the
+ * split point. Mirrors `create_event` input minus `calendar_id` (the parent
+ * call's `calendar_id` is the canonical scope; the new series must live in
+ * the same calendar to preserve "split here" semantics).
+ */
+const newEventSchema = z.object({
+  summary: z.string().min(1),
+  start: z.string().min(1),
+  end: z.string().min(1),
+  attendees: attendeesSchema.optional(),
+  location: z.string().optional(),
+  description: z.string().optional(),
+  recurrence: z.array(z.string().min(1)).optional(),
+  reminders: remindersSchema.optional(),
+  create_meet_link: z.boolean().optional(),
+  color_id: z.string().optional(),
+  visibility: visibilitySchema.optional(),
+  transparency: transparencySchema.optional(),
+  guests_can_invite_others: z.boolean().optional(),
+  guests_can_modify: z.boolean().optional(),
+  guests_can_see_other_guests: z.boolean().optional(),
+  source: sourceSchema.optional(),
+  extended_properties: extendedPropertiesSchema.optional(),
+  event_type: eventTypeSchema.optional(),
+  focus_time: focusTimeSchema.optional(),
+  out_of_office: outOfOfficeSchema.optional(),
+  working_location: workingLocationSchema.optional(),
+  birthday: birthdaySchema.optional(),
+});
+
+type NewEventInput = z.infer<typeof newEventSchema>;
+
+const splitRecurrenceInputSchema = z.object({
+  event_id: z.string().min(1),
+  target_start: z.string().min(1),
+  new_event: newEventSchema,
+  calendar_id: z.string().optional().default("primary"),
+  send_updates: sendUpdatesSchema.optional(),
+  confirm: z.boolean().optional().default(false),
+});
+
+type SplitRecurrenceInput = z.input<typeof splitRecurrenceInputSchema>;
+type SplitRecurrenceParsed = z.infer<typeof splitRecurrenceInputSchema>;
+
+type SplitRecurrenceOutput = {
+  truncated_series: SlimEvent;
+  new_series: SlimEvent;
+};
+
+/**
+ * Convert an ISO datetime to Google's RRULE UNTIL stamp format
+ * `YYYYMMDDTHHMMSSZ`, after subtracting one second so the UNTIL cap lands
+ * strictly before the new series' first occurrence.
+ *
+ * The `target_start` we receive is whatever ISO the caller provided (with
+ * offset or `Z`). `new Date(...)` parses both, and we re-emit in UTC.
+ */
+function untilStampBefore(isoStart: string): string {
+  const t = Date.parse(isoStart);
+  if (!Number.isFinite(t)) {
+    throw new ValidationError(
+      `target_start \`${isoStart}\` is not a valid ISO datetime`,
+    );
+  }
+  const d = new Date(t - 1000);
+  const pad = (n: number, w = 2): string => String(n).padStart(w, "0");
+  return (
+    `${d.getUTCFullYear()}` +
+    `${pad(d.getUTCMonth() + 1)}` +
+    `${pad(d.getUTCDate())}` +
+    `T${pad(d.getUTCHours())}` +
+    `${pad(d.getUTCMinutes())}` +
+    `${pad(d.getUTCSeconds())}Z`
+  );
+}
+
+/**
+ * Build the Google insert body for the new series. Mirrors the create_event
+ * field-attachment policy: only attach the per-event-type property block
+ * that matches `event_type`; Google rejects mismatched blocks.
+ */
+function buildNewSeriesBody(ne: NewEventInput): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    summary: ne.summary,
+    start: eventTimeField(ne.start),
+    end: eventTimeField(ne.end),
+  };
+  if (ne.attendees !== undefined) body.attendees = normalizeAttendees(ne.attendees);
+  if (ne.location !== undefined) body.location = ne.location;
+  if (ne.description !== undefined) body.description = ne.description;
+  if (ne.recurrence !== undefined) body.recurrence = ne.recurrence;
+  if (ne.reminders !== undefined) body.reminders = buildRemindersField(ne.reminders);
+  if (ne.create_meet_link === true) body.conferenceData = buildMeetConferenceRequest();
+  if (ne.color_id !== undefined) body.colorId = ne.color_id;
+  if (ne.visibility !== undefined) body.visibility = ne.visibility;
+  if (ne.transparency !== undefined) body.transparency = ne.transparency;
+  if (ne.guests_can_invite_others !== undefined) {
+    body.guestsCanInviteOthers = ne.guests_can_invite_others;
+  }
+  if (ne.guests_can_modify !== undefined) body.guestsCanModify = ne.guests_can_modify;
+  if (ne.guests_can_see_other_guests !== undefined) {
+    body.guestsCanSeeOtherGuests = ne.guests_can_see_other_guests;
+  }
+  if (ne.source !== undefined) body.source = buildSourceField(ne.source);
+  if (ne.extended_properties !== undefined) {
+    const ext = buildExtendedPropertiesField(ne.extended_properties);
+    if (ext !== null) body.extendedProperties = ext;
+  }
+  if (ne.event_type !== undefined && ne.event_type !== "default") {
+    body.eventType = ne.event_type;
+  }
+  if (ne.event_type === "focusTime" && ne.focus_time !== undefined) {
+    body.focusTimeProperties = buildFocusTimeProperties(ne.focus_time);
+  }
+  if (ne.event_type === "outOfOffice" && ne.out_of_office !== undefined) {
+    body.outOfOfficeProperties = buildOutOfOfficeProperties(ne.out_of_office);
+  }
+  if (ne.event_type === "workingLocation" && ne.working_location !== undefined) {
+    body.workingLocationProperties = buildWorkingLocationProperties(
+      ne.working_location,
+    );
+  }
+  if (ne.event_type === "birthday" && ne.birthday !== undefined) {
+    body.birthdayProperties = buildBirthdayProperties(ne.birthday);
+  }
+  // Mark unused helper to silence the linter; buildUpdateEventBody is not
+  // used here (we build the create-side body), but kept imported as a hint
+  // to maintainers that the recurrence module shares the helper namespace.
+  void buildUpdateEventBody;
+  return body;
+}
+
+export const splitRecurrenceTool = defineTool<
+  SplitRecurrenceInput,
+  SplitRecurrenceOutput,
+  CalendarContext
+>({
+  name: "split_recurrence",
+  description: "Split recurring series at a date",
+  // Cast required because `calendar_id` and `confirm` have defaults.
+  inputSchema:
+    splitRecurrenceInputSchema as unknown as z.ZodType<SplitRecurrenceInput>,
+  handler: async (input, ctx) => {
+    const parsed = input as SplitRecurrenceParsed;
+
+    // Fetch the master series first so we can validate it has a recurrence
+    // rule before asking the caller to confirm.
+    const rawMaster = await ctx.client.getEvent({
+      calendarId: parsed.calendar_id,
+      eventId: parsed.event_id,
+    });
+    const master = (rawMaster && typeof rawMaster === "object"
+      ? rawMaster
+      : {}) as Record<string, unknown>;
+    if (!Array.isArray(master.recurrence) || master.recurrence.length === 0) {
+      throw new ValidationError(
+        `Event \`${parsed.event_id}\` is not a recurring series (no RRULE).`,
+      );
+    }
+
+    const summary = typeof master.summary === "string" ? master.summary : "";
+    const preview =
+      `Split recurring '${summary}' at ${parsed.target_start}: ` +
+      `cap series with UNTIL, then create new series with provided fields`;
+    guardDestructive({ confirm: parsed.confirm, preview });
+
+    // Step 1: cap the master series with UNTIL = (target_start - 1s) in UTC.
+    const untilUtc = untilStampBefore(parsed.target_start);
+    const cappedRules = applyUntilToRRule(
+      master.recurrence.filter((r): r is string => typeof r === "string"),
+      untilUtc,
+    );
+
+    const sendUpdates = parsed.send_updates ?? "none";
+    const truncatedRaw = await ctx.client.patchEvent({
+      calendarId: parsed.calendar_id,
+      eventId: parsed.event_id,
+      body: { recurrence: cappedRules },
+      sendUpdates,
+    });
+
+    // Step 2: insert the new series.
+    const insertBody = buildNewSeriesBody(parsed.new_event);
+    const insertOpts: {
+      calendarId: string;
+      body: Record<string, unknown>;
+      conferenceDataVersion?: 0 | 1;
+      sendUpdates?: "all" | "externalOnly" | "none";
+    } = {
+      calendarId: parsed.calendar_id,
+      body: insertBody,
+    };
+    if (parsed.new_event.create_meet_link === true) {
+      insertOpts.conferenceDataVersion = 1;
+    }
+    insertOpts.sendUpdates = sendUpdates;
+    const newRaw = await ctx.client.insertEvent(insertOpts);
+
+    return {
+      truncated_series: mapEvent(truncatedRaw, parsed.calendar_id),
+      new_series: mapEvent(newRaw, parsed.calendar_id),
+    };
   },
 });

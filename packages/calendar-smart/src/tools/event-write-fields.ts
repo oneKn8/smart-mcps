@@ -373,3 +373,48 @@ export function buildUpdateEventBody(
   }
   return body;
 }
+
+/**
+ * Apply (insert or replace) an `UNTIL=<stamp>` clause on the first RRULE
+ * entry in a recurrence array. Used by `split_recurrence` to cap the
+ * original series at the split point.
+ *
+ * Behavior:
+ *  - The stamp must be in Google's UTC RRULE format `YYYYMMDDTHHMMSSZ`. We
+ *    do not parse or transform it; callers compute it once.
+ *  - Any existing `UNTIL=` clause on the matched RRULE is replaced.
+ *  - Any existing `COUNT=` clause is dropped — Google rejects an RRULE
+ *    that carries both UNTIL and COUNT, and "this and following" semantics
+ *    intend UNTIL, not COUNT.
+ *  - Only the FIRST RRULE entry is modified; subsequent rules and non-RRULE
+ *    entries (EXDATE, RDATE, etc.) pass through verbatim.
+ *  - Throws when the input contains no RRULE — caller surfaces a clear
+ *    error rather than silently dropping the operation.
+ */
+export function applyUntilToRRule(
+  rules: string[],
+  untilUtc: string,
+): string[] {
+  let modified = false;
+  const out = rules.map((rule) => {
+    if (modified || !rule.startsWith("RRULE:")) return rule;
+    modified = true;
+    const body = rule.slice("RRULE:".length);
+    const parts = body
+      .split(";")
+      .filter(
+        (p) =>
+          p.length > 0 &&
+          !p.toUpperCase().startsWith("UNTIL=") &&
+          !p.toUpperCase().startsWith("COUNT="),
+      );
+    parts.push(`UNTIL=${untilUtc}`);
+    return `RRULE:${parts.join(";")}`;
+  });
+  if (!modified) {
+    throw new Error(
+      "applyUntilToRRule: recurrence array contains no RRULE entry",
+    );
+  }
+  return out;
+}
