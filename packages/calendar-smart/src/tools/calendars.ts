@@ -7,9 +7,21 @@ import { mapCalendar, type SlimCalendar } from "../calendar-mapper.js";
 // list_calendars
 // =============================================================================
 
-const listCalendarsInputSchema = z.object({});
+const minAccessRoleSchema = z.enum([
+  "freeBusyReader",
+  "reader",
+  "writer",
+  "owner",
+]);
 
-type ListCalendarsInput = z.infer<typeof listCalendarsInputSchema>;
+const listCalendarsInputSchema = z.object({
+  show_hidden: z.boolean().optional().default(false),
+  show_deleted: z.boolean().optional().default(false),
+  min_access_role: minAccessRoleSchema.optional(),
+});
+
+type ListCalendarsInput = z.input<typeof listCalendarsInputSchema>;
+type ListCalendarsParsed = z.infer<typeof listCalendarsInputSchema>;
 
 type ListCalendarsOutput = {
   calendars: SlimCalendar[];
@@ -22,9 +34,23 @@ export const listCalendarsTool = defineTool<
 >({
   name: "list_calendars",
   description: "List all your calendars",
-  inputSchema: listCalendarsInputSchema,
-  handler: async (_input, ctx) => {
-    const items = await ctx.client.listCalendars();
+  // Cast required because `show_hidden` and `show_deleted` have defaults.
+  inputSchema:
+    listCalendarsInputSchema as unknown as z.ZodType<ListCalendarsInput>,
+  handler: async (input, ctx) => {
+    const parsed = input as ListCalendarsParsed;
+    const opts: {
+      showHidden: boolean;
+      showDeleted: boolean;
+      minAccessRole?: string;
+    } = {
+      showHidden: parsed.show_hidden,
+      showDeleted: parsed.show_deleted,
+    };
+    if (parsed.min_access_role !== undefined) {
+      opts.minAccessRole = parsed.min_access_role;
+    }
+    const items = await ctx.client.listCalendars(opts);
     return { calendars: items.map((item) => mapCalendar(item)) };
   },
 });

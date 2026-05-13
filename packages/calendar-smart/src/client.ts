@@ -173,14 +173,38 @@ export class CalendarClient {
    * `primary` (the bare `/calendars/{id}` endpoint does not), which is why
    * we use this endpoint for the slim calendar mapper. Items are returned
    * raw; the tool layer maps to SlimCalendar.
+   *
+   * Optional filters mirror Google's API:
+   * - `showHidden` — include calendars the user explicitly hid (default: false).
+   * - `showDeleted` — include calendars the user deleted (default: false).
+   * - `minAccessRole` — restrict to roles at or above this floor; valid
+   *   values: `freeBusyReader`, `reader`, `writer`, `owner`.
    */
-  async listCalendars(): Promise<unknown[]> {
+  async listCalendars(opts?: {
+    showHidden?: boolean;
+    showDeleted?: boolean;
+    minAccessRole?: string;
+  }): Promise<unknown[]> {
     const token = await this.oauthClient.getAccessToken();
+    const searchParams: Record<string, string | number | boolean | undefined> =
+      {};
+    if (opts?.showHidden !== undefined) {
+      searchParams.showHidden = opts.showHidden;
+    }
+    if (opts?.showDeleted !== undefined) {
+      searchParams.showDeleted = opts.showDeleted;
+    }
+    if (opts?.minAccessRole !== undefined) {
+      searchParams.minAccessRole = opts.minAccessRole;
+    }
     let raw: { items?: unknown[] };
     try {
       raw = await fetchJson<{ items?: unknown[] }>(
         `${CALENDAR_API_BASE}/users/me/calendarList`,
-        { token },
+        {
+          token,
+          ...(Object.keys(searchParams).length > 0 ? { searchParams } : {}),
+        },
       );
     } catch (err) {
       throw mapCalendarAuthError(err, this.account);

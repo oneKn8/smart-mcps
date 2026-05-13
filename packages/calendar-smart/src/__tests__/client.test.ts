@@ -437,6 +437,51 @@ describe("CalendarClient.listCalendars", () => {
     const out = await c.listCalendars();
     expect(out).toEqual([]);
   });
+
+  it("forwards showHidden, showDeleted, minAccessRole as query params", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    let captured: URL | undefined;
+    server.use(
+      http.get(CALENDAR_LIST_URL, ({ request }) => {
+        captured = new URL(request.url);
+        return HttpResponse.json({ items: [] });
+      }),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    await c.listCalendars({
+      showHidden: true,
+      showDeleted: true,
+      minAccessRole: "writer",
+    });
+
+    expect(captured?.searchParams.get("showHidden")).toBe("true");
+    expect(captured?.searchParams.get("showDeleted")).toBe("true");
+    expect(captured?.searchParams.get("minAccessRole")).toBe("writer");
+  });
+
+  it("omits the query string entirely when no filters are provided", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    let captured: URL | undefined;
+    server.use(
+      http.get(CALENDAR_LIST_URL, ({ request }) => {
+        captured = new URL(request.url);
+        return HttpResponse.json({ items: [] });
+      }),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    await c.listCalendars();
+    expect(captured?.search).toBe("");
+  });
 });
 
 describe("CalendarClient.getCalendarListEntry", () => {

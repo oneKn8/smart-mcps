@@ -52,9 +52,13 @@ describe("listCalendarsTool — metadata", () => {
     expect(listCalendarsTool.inputSchema).toBeInstanceOf(z.ZodType);
   });
 
-  it("accepts an empty input object", () => {
-    const parsed = listCalendarsTool.inputSchema.parse({});
-    expect(parsed).toEqual({});
+  it("accepts an empty input object and applies safe defaults", () => {
+    const parsed = listCalendarsTool.inputSchema.parse({}) as {
+      show_hidden: boolean;
+      show_deleted: boolean;
+      min_access_role?: string;
+    };
+    expect(parsed).toEqual({ show_hidden: false, show_deleted: false });
   });
 });
 
@@ -101,6 +105,43 @@ describe("listCalendarsTool — handler", () => {
       client: client as unknown as never,
     });
     expect(out.calendars).toEqual([]);
+  });
+
+  it("forwards show_hidden, show_deleted, min_access_role to the client", async () => {
+    const client = makeListClient([]);
+    const parsed = listCalendarsTool.inputSchema.parse({
+      show_hidden: true,
+      show_deleted: true,
+      min_access_role: "writer",
+    }) as Parameters<typeof listCalendarsTool.handler>[0];
+    await listCalendarsTool.handler(parsed, {
+      client: client as unknown as never,
+    });
+    expect(client.listCalendars).toHaveBeenCalledWith({
+      showHidden: true,
+      showDeleted: true,
+      minAccessRole: "writer",
+    });
+  });
+
+  it("calls listCalendars with default-only opts when no filters set", async () => {
+    const client = makeListClient([]);
+    const parsed = listCalendarsTool.inputSchema.parse({}) as Parameters<
+      typeof listCalendarsTool.handler
+    >[0];
+    await listCalendarsTool.handler(parsed, {
+      client: client as unknown as never,
+    });
+    expect(client.listCalendars).toHaveBeenCalledWith({
+      showHidden: false,
+      showDeleted: false,
+    });
+  });
+
+  it("rejects invalid min_access_role at the schema layer", () => {
+    expect(() =>
+      listCalendarsTool.inputSchema.parse({ min_access_role: "admin" }),
+    ).toThrow();
   });
 });
 
