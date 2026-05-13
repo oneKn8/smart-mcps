@@ -72,6 +72,12 @@ describe("listCalendarsTool — handler", () => {
       time_zone: "America/Chicago",
       access_role: "owner",
       background_color: "#0d58c7",
+      foreground_color: null,
+      description: null,
+      location: null,
+      summary_override: null,
+      selected: true,
+      hidden: false,
     });
     expect(out.calendars[1]).toEqual({
       id: "cal_work",
@@ -80,6 +86,12 @@ describe("listCalendarsTool — handler", () => {
       time_zone: "America/Chicago",
       access_role: "writer",
       background_color: null,
+      foreground_color: null,
+      description: null,
+      location: null,
+      summary_override: null,
+      selected: true,
+      hidden: false,
     });
   });
 
@@ -133,6 +145,12 @@ describe("getCalendarTool — handler", () => {
       time_zone: "America/Chicago",
       access_role: "writer",
       background_color: null,
+      foreground_color: null,
+      description: null,
+      location: null,
+      summary_override: null,
+      selected: true,
+      hidden: false,
     });
   });
 });
