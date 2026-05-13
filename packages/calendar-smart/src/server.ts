@@ -1,9 +1,14 @@
 #!/usr/bin/env node
 import { createMcpServer, type ToolDefinition } from "smart-mcp-core";
 import { buildContext, type CalendarContext } from "./context.js";
+import { listEventsTool } from "./tools/events-read.js";
 
-// Empty for now — populated in Phase 5 tasks 4-11.
-const tools: ToolDefinition<unknown, unknown, CalendarContext>[] = [];
+// Tool registry. Each tool definition is widened to the unknown-input/output
+// shape that `createMcpServer` expects; the per-tool generic types are
+// preserved at the source of truth (each tool's `defineTool<...>` call).
+const tools: ToolDefinition<unknown, unknown, CalendarContext>[] = [
+  listEventsTool as ToolDefinition<unknown, unknown, CalendarContext>,
+];
 
 await createMcpServer<CalendarContext>({
   name: "calendar-smart",

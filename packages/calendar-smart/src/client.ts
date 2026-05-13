@@ -1,74 +1,193 @@
-// Note: GoogleOAuthClient lives in `smart-mcp-core` after Phase 5 task 2.
-// Task 1 keeps the OAuth wiring deferred so the scaffold builds standalone
-// without depending on the not-yet-lifted class. Task 4 fleshes out methods
-// (listEvents, ensureTimeZone, etc.) and at that point the constructor
-// switches to eagerly building the OAuth client.
+import {
+  AuthError,
+  NotFoundError,
+  fetchJson,
+  GoogleOAuthClient,
+} from "smart-mcp-core";
 
+const CALENDAR_API_BASE = "https://www.googleapis.com/calendar/v3";
 const CALENDAR_TOKEN_FILE_SUFFIX = ".calendar.json";
 const CALENDAR_REQUIRED_SCOPE = "https://www.googleapis.com/auth/calendar";
 
+/**
+ * Build the per-account re-auth hint shown inside any AuthError surfaced
+ * by this client. Mirrors the CLI users actually run:
+ *   `node packages/calendar-smart/dist/bin/calendar-smart-auth.js <account>`
+ */
+function reauthHintFor(account: string): string {
+  return `node packages/calendar-smart/dist/bin/calendar-smart-auth.js ${account}`;
+}
+
 export type CalendarClientOpts = {
   /**
-   * Override for the user home directory. When unset, the inner OAuth client
-   * (built in Phase 5 task 2/4) resolves `process.env.HOME` lazily on first
-   * use. Tests pass a tmpdir.
+   * Override for the user home directory. When unset, the inner OAuth
+   * client resolves `process.env.HOME` lazily on first use. Tests pass a
+   * tmpdir.
    */
   home?: string;
   /**
-   * Pre-built OAuth client for tests. Production code omits this; the client
-   * builds one against the standard token-jar layout when methods land.
+   * Pre-built OAuth client for tests. Production code omits this; the
+   * client builds one against the calendar token-jar slot
+   * (`<account>.calendar.json`) on construction.
    */
-  oauthClient?: unknown;
+  oauthClient?: GoogleOAuthClient;
+};
+
+export type ListEventsOpts = {
+  calendarId: string;
+  timeMin?: string;
+  timeMax?: string;
+  q?: string;
+  maxResults?: number;
+  pageToken?: string;
 };
 
 /**
- * REST client for Google Calendar API v3. Constructor is side-effect-free —
- * no token files are read until the first method call. Time zone is
- * auto-detected from the primary calendar on first use and cached in memory
- * for the lifetime of this process.
+ * REST client for Google Calendar API v3. Constructor builds (but does not
+ * read) the OAuth client; the token file is opened lazily on the first
+ * method call.
  *
- * Methods are added in subsequent Phase 5 tasks (4 onwards). Phase 5 task 1
- * ships only the constructor skeleton plus account / cached-tz getters so
- * downstream context wiring and tests can compile.
+ * Time-zone is auto-detected from the primary calendar via
+ * `ensureTimeZone()` and cached for the lifetime of this process. Agenda
+ * tools call `ensureTimeZone()` before computing window bounds so "today"
+ * means midnight-to-midnight in the cached zone, not UTC.
  */
 export class CalendarClient {
-  // tslint:disable-next-line: typedef — kept for future task 2/4 use.
   static readonly TOKEN_FILE_SUFFIX = CALENDAR_TOKEN_FILE_SUFFIX;
   static readonly REQUIRED_SCOPE = CALENDAR_REQUIRED_SCOPE;
 
-  private readonly account: string;
-  // OAuth client is built lazily; stored opts feed the constructor in task 4.
-  private readonly opts: CalendarClientOpts;
+  private readonly oauthClient: GoogleOAuthClient;
   private cachedTimeZone: string | undefined;
 
-  constructor(account: string, opts: CalendarClientOpts = {}) {
-    this.account = account;
-    this.opts = opts;
+  constructor(
+    private readonly account: string,
+    opts: CalendarClientOpts = {},
+  ) {
+    this.oauthClient =
+      opts.oauthClient ??
+      new GoogleOAuthClient(account, {
+        ...(opts.home !== undefined ? { home: opts.home } : {}),
+        fileSuffix: CALENDAR_TOKEN_FILE_SUFFIX,
+        reauthHint: reauthHintFor(account),
+        requiredScope: CALENDAR_REQUIRED_SCOPE,
+      });
   }
 
   /**
-   * Account identifier this client is bound to. Mirrors the basename of the
-   * token file under `~/.santo-agent/oauth/`. Read-only — used by tools that
-   * surface the account in error messages.
+   * Account identifier this client is bound to. Mirrors the basename of
+   * the token file under `~/.santo-agent/oauth/`. Read-only — used by
+   * tools that surface the account in error messages.
    */
   getAccount(): string {
     return this.account;
   }
 
   /**
-   * Cached time zone IANA identifier (e.g. `"America/Chicago"`) sourced from
-   * the primary calendar. `undefined` until the first tool call resolves it.
+   * Cached time zone IANA identifier (e.g. `"America/Chicago"`) sourced
+   * from the primary calendar. `undefined` until `ensureTimeZone()` runs
+   * for the first time on this instance.
    */
   getCachedTimeZone(): string | undefined {
     return this.cachedTimeZone;
   }
 
   /**
-   * Test seam: the constructor opts are stashed so later tasks can promote
-   * them into a live `GoogleOAuthClient`. Exposed read-only here for unit
-   * tests that want to assert the home/oauthClient overrides round-trip.
+   * Resolve and cache the user's primary calendar time zone. Subsequent
+   * calls return the cached value without an HTTP round-trip. The result
+   * is the IANA identifier Google records on the calendar resource (e.g.
+   * `"America/Chicago"`, `"Asia/Dhaka"`).
+   *
+   * Throws `Error` if Google returns no `timeZone` field — that would
+   * indicate either a corrupted upstream response or a calendar resource
+   * shape change worth surfacing instead of silently substituting UTC.
    */
-  getOpts(): Readonly<CalendarClientOpts> {
-    return this.opts;
+  async ensureTimeZone(): Promise<string> {
+    if (this.cachedTimeZone !== undefined) return this.cachedTimeZone;
+    const token = await this.oauthClient.getAccessToken();
+    let cal: { timeZone?: unknown };
+    try {
+      cal = await fetchJson<{ timeZone?: unknown }>(
+        `${CALENDAR_API_BASE}/users/me/calendarList/primary`,
+        { token },
+      );
+    } catch (err) {
+      throw mapCalendarAuthError(err, this.account);
+    }
+    if (typeof cal.timeZone !== "string" || cal.timeZone.length === 0) {
+      throw new Error(
+        `primary calendar response missing timeZone for account ${this.account}`,
+      );
+    }
+    this.cachedTimeZone = cal.timeZone;
+    return cal.timeZone;
   }
+
+  /**
+   * GET /calendars/{calendarId}/events with `singleEvents=true` and
+   * `orderBy=startTime` so recurring series are expanded into their
+   * concrete instances within the requested window.
+   *
+   * Returns the raw `items` array and `nextPageToken` so callers map +
+   * paginate. `items` is normalized to `[]` when Google omits it.
+   */
+  async listEvents(
+    opts: ListEventsOpts,
+  ): Promise<{ items: unknown[]; nextPageToken?: string }> {
+    const token = await this.oauthClient.getAccessToken();
+    const searchParams: Record<string, string | number | boolean | undefined> =
+      {
+        singleEvents: "true",
+        orderBy: "startTime",
+        maxResults: String(opts.maxResults ?? 50),
+        timeMin: opts.timeMin,
+        timeMax: opts.timeMax,
+        q: opts.q,
+        pageToken: opts.pageToken,
+      };
+    let raw: { items?: unknown[]; nextPageToken?: string };
+    try {
+      raw = await fetchJson<{
+        items?: unknown[];
+        nextPageToken?: string;
+      }>(
+        `${CALENDAR_API_BASE}/calendars/${encodeURIComponent(opts.calendarId)}/events`,
+        { token, searchParams },
+      );
+    } catch (err) {
+      throw mapCalendarAuthError(err, this.account);
+    }
+    return {
+      items: raw.items ?? [],
+      ...(raw.nextPageToken !== undefined
+        ? { nextPageToken: raw.nextPageToken }
+        : {}),
+    };
+  }
+}
+
+/**
+ * Promote 401/403 from `fetchJson` into AuthError messages that name the
+ * account and point at the `calendar-smart-auth` CLI. `fetchJson` already
+ * maps both statuses to AuthError generically; we re-throw a friendlier
+ * one. Other error types pass through unchanged.
+ */
+function mapCalendarAuthError(err: unknown, account: string): unknown {
+  if (err instanceof NotFoundError) return err;
+  if (!(err instanceof AuthError)) return err;
+  const msg = err.message;
+  if (msg.includes("→ 403")) {
+    return new AuthError(
+      `calendar token for account ${account} has insufficient scope — ` +
+        `re-run ${reauthHintFor(account)} to re-consent with the calendar scope`,
+      { cause: err },
+    );
+  }
+  if (msg.includes("→ 401")) {
+    return new AuthError(
+      `calendar token rejected for account ${account}; ` +
+        `re-run ${reauthHintFor(account)}`,
+      { cause: err },
+    );
+  }
+  return err;
 }
