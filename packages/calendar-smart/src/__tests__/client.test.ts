@@ -25,6 +25,7 @@ const PRIMARY_EVENT_URL = (id: string): string =>
 const CALENDAR_LIST_URL = `${CALENDAR_API_BASE}/users/me/calendarList`;
 const CALENDAR_LIST_ENTRY_URL = (id: string): string =>
   `${CALENDAR_API_BASE}/users/me/calendarList/${id}`;
+const FREE_BUSY_URL = `${CALENDAR_API_BASE}/freeBusy`;
 
 const server = setupServer();
 beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
@@ -500,5 +501,128 @@ describe("CalendarClient.getCalendarListEntry", () => {
         message: expect.stringContaining("cal_missing"),
       },
     );
+  });
+});
+
+describe("CalendarClient.freeBusy", () => {
+  it("POSTs /freeBusy with timeMin, timeMax, and items array", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    let bearer: string | null = null;
+    let captured: unknown;
+    server.use(
+      http.post(FREE_BUSY_URL, async ({ request }) => {
+        bearer = request.headers.get("authorization");
+        captured = await request.json();
+        return HttpResponse.json({
+          calendars: {
+            primary: {
+              busy: [
+                {
+                  start: "2026-05-13T15:00:00Z",
+                  end: "2026-05-13T16:00:00Z",
+                },
+              ],
+            },
+          },
+        });
+      }),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    const out = await c.freeBusy({
+      timeMin: "2026-05-13T00:00:00Z",
+      timeMax: "2026-05-14T00:00:00Z",
+      calendarIds: ["primary"],
+    });
+
+    expect(bearer).toBe("Bearer test-access-token");
+    expect(captured).toEqual({
+      timeMin: "2026-05-13T00:00:00Z",
+      timeMax: "2026-05-14T00:00:00Z",
+      items: [{ id: "primary" }],
+    });
+    expect(out.calendars["primary"]?.busy).toEqual([
+      { start: "2026-05-13T15:00:00Z", end: "2026-05-13T16:00:00Z" },
+    ]);
+  });
+
+  it("forwards multiple calendar ids in the items array", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    let captured: unknown;
+    server.use(
+      http.post(FREE_BUSY_URL, async ({ request }) => {
+        captured = await request.json();
+        return HttpResponse.json({
+          calendars: {
+            cal_personal: { busy: [] },
+            cal_work: { busy: [] },
+          },
+        });
+      }),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    const out = await c.freeBusy({
+      timeMin: "2026-05-13T00:00:00Z",
+      timeMax: "2026-05-14T00:00:00Z",
+      calendarIds: ["cal_personal", "cal_work"],
+    });
+
+    expect(captured).toEqual({
+      timeMin: "2026-05-13T00:00:00Z",
+      timeMax: "2026-05-14T00:00:00Z",
+      items: [{ id: "cal_personal" }, { id: "cal_work" }],
+    });
+    expect(Object.keys(out.calendars).sort()).toEqual([
+      "cal_personal",
+      "cal_work",
+    ]);
+  });
+
+  it("propagates AuthError when the calendar token file is missing", async () => {
+    const c = new CalendarClient("ghost", { home: tmpHome });
+    await expect(
+      c.freeBusy({
+        timeMin: "2026-05-13T00:00:00Z",
+        timeMax: "2026-05-14T00:00:00Z",
+        calendarIds: ["primary"],
+      }),
+    ).rejects.toBeInstanceOf(AuthError);
+  });
+
+  it("wraps a 403 from Google as AuthError mentioning the re-auth command", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    server.use(
+      http.post(FREE_BUSY_URL, () =>
+        HttpResponse.json(
+          { error: { code: 403, message: "Insufficient Permission" } },
+          { status: 403 },
+        ),
+      ),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    await expect(
+      c.freeBusy({
+        timeMin: "2026-05-13T00:00:00Z",
+        timeMax: "2026-05-14T00:00:00Z",
+        calendarIds: ["primary"],
+      }),
+    ).rejects.toMatchObject({
+      name: "AuthError",
+      message: expect.stringContaining("calendar-smart-auth"),
+    });
   });
 });

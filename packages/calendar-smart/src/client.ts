@@ -203,6 +203,46 @@ export class CalendarClient {
    * Returns the raw `items` array and `nextPageToken` so callers map +
    * paginate. `items` is normalized to `[]` when Google omits it.
    */
+  /**
+   * POST /freeBusy — query busy windows across one or more calendars in a
+   * `[timeMin, timeMax]` ISO range. The response shape mirrors Google
+   * verbatim:
+   *   `{ calendars: { <calendarId>: { busy: [{start,end}], errors? } } }`
+   *
+   * Per-calendar `errors` (e.g. notFound, accessDenied) are surfaced
+   * unmodified so the tool layer can decide whether to ignore or escalate.
+   */
+  async freeBusy(opts: {
+    timeMin: string;
+    timeMax: string;
+    calendarIds: string[];
+  }): Promise<{
+    calendars: Record<
+      string,
+      { busy: { start: string; end: string }[]; errors?: unknown[] }
+    >;
+  }> {
+    const token = await this.oauthClient.getAccessToken();
+    try {
+      return await fetchJson<{
+        calendars: Record<
+          string,
+          { busy: { start: string; end: string }[]; errors?: unknown[] }
+        >;
+      }>(`${CALENDAR_API_BASE}/freeBusy`, {
+        method: "POST",
+        token,
+        body: {
+          timeMin: opts.timeMin,
+          timeMax: opts.timeMax,
+          items: opts.calendarIds.map((id) => ({ id })),
+        },
+      });
+    } catch (err) {
+      throw mapCalendarAuthError(err, this.account);
+    }
+  }
+
   async listEvents(
     opts: ListEventsOpts,
   ): Promise<{ items: unknown[]; nextPageToken?: string }> {
