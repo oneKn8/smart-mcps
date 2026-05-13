@@ -51,3 +51,36 @@ export const listEventsTool = defineTool<
     };
   },
 });
+
+// =============================================================================
+// get_event
+// =============================================================================
+
+const getEventInputSchema = z.object({
+  event_id: z.string().min(1),
+  calendar_id: z.string().optional().default("primary"),
+});
+
+type GetEventInput = z.input<typeof getEventInputSchema>;
+type GetEventParsed = z.infer<typeof getEventInputSchema>;
+
+type GetEventOutput = { event: SlimEvent };
+
+export const getEventTool = defineTool<
+  GetEventInput,
+  GetEventOutput,
+  CalendarContext
+>({
+  name: "get_event",
+  description: "Get one event by ID",
+  // Cast required because `calendar_id` has `.optional().default(...)`.
+  inputSchema: getEventInputSchema as unknown as z.ZodType<GetEventInput>,
+  handler: async (input, ctx) => {
+    const parsed = input as GetEventParsed;
+    const raw = await ctx.client.getEvent({
+      calendarId: parsed.calendar_id,
+      eventId: parsed.event_id,
+    });
+    return { event: mapEvent(raw, parsed.calendar_id) };
+  },
+});

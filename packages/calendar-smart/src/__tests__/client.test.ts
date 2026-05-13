@@ -13,13 +13,15 @@ import { http, HttpResponse } from "msw";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { AuthError } from "smart-mcp-core";
+import { AuthError, NotFoundError } from "smart-mcp-core";
 import { CalendarClient } from "../client.js";
 
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const CALENDAR_API_BASE = "https://www.googleapis.com/calendar/v3";
 const PRIMARY_LIST_URL = `${CALENDAR_API_BASE}/users/me/calendarList/primary`;
 const PRIMARY_EVENTS_URL = `${CALENDAR_API_BASE}/calendars/primary/events`;
+const PRIMARY_EVENT_URL = (id: string): string =>
+  `${CALENDAR_API_BASE}/calendars/primary/events/${id}`;
 
 const server = setupServer();
 beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
@@ -296,5 +298,86 @@ describe("CalendarClient.listEvents", () => {
     await expect(
       c.listEvents({ calendarId: "primary" }),
     ).rejects.toBeInstanceOf(AuthError);
+  });
+});
+
+describe("CalendarClient.getEvent", () => {
+  it("GETs /calendars/{calendarId}/events/{eventId} and returns the raw resource", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    let bearer: string | null = null;
+    server.use(
+      http.get(PRIMARY_EVENT_URL("evt_alpha"), ({ request }) => {
+        bearer = request.headers.get("authorization");
+        return HttpResponse.json({
+          id: "evt_alpha",
+          summary: "Standup",
+        });
+      }),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    const out = await c.getEvent({
+      calendarId: "primary",
+      eventId: "evt_alpha",
+    });
+    expect(bearer).toBe("Bearer test-access-token");
+    expect(out).toEqual({ id: "evt_alpha", summary: "Standup" });
+  });
+
+  it("URL-encodes both the calendarId and eventId", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    let captured: URL | undefined;
+    server.use(
+      http.get(
+        `${CALENDAR_API_BASE}/calendars/:calendarId/events/:eventId`,
+        ({ request }) => {
+          captured = new URL(request.url);
+          return HttpResponse.json({ id: "evt_x" });
+        },
+      ),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    await c.getEvent({
+      calendarId: "alice@example.test",
+      eventId: "evt with spaces",
+    });
+    expect(captured?.pathname).toContain("alice%40example.test");
+    expect(captured?.pathname).toContain("evt%20with%20spaces");
+  });
+
+  it("wraps a 404 from Google as NotFoundError naming the event", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    server.use(
+      http.get(PRIMARY_EVENT_URL("evt_missing"), () =>
+        HttpResponse.json(
+          { error: { code: 404, message: "Not Found" } },
+          { status: 404 },
+        ),
+      ),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    await expect(
+      c.getEvent({ calendarId: "primary", eventId: "evt_missing" }),
+    ).rejects.toMatchObject({
+      name: "NotFoundError",
+      message: expect.stringContaining("evt_missing"),
+    });
+    await expect(
+      c.getEvent({ calendarId: "primary", eventId: "evt_missing" }),
+    ).rejects.toBeInstanceOf(NotFoundError);
   });
 });

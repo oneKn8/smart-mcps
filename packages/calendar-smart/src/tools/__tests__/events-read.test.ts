@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { z } from "zod";
-import { listEventsTool } from "../events-read.js";
+import { listEventsTool, getEventTool } from "../events-read.js";
 
 type FakeClient = {
   listEvents: ReturnType<typeof vi.fn>;
@@ -130,5 +130,71 @@ describe("listEventsTool — handler", () => {
       client: withoutToken as unknown as never,
     });
     expect(b.next_page_token).toBeNull();
+  });
+});
+
+// ============================================================================
+// getEventTool
+// ============================================================================
+
+type FakeGetClient = {
+  getEvent: ReturnType<typeof vi.fn>;
+};
+
+function makeGetClient(raw: Record<string, unknown>): FakeGetClient {
+  return {
+    getEvent: vi.fn().mockResolvedValue(raw),
+  };
+}
+
+describe("getEventTool — metadata", () => {
+  it("name + short description + token budget", () => {
+    expect(getEventTool.name).toBe("get_event");
+    expect(getEventTool.description).toBe("Get one event by ID");
+    expect(getEventTool.description.split(/\s+/).length).toBeLessThanOrEqual(
+      15,
+    );
+  });
+
+  it("inputSchema requires event_id and defaults calendar_id to 'primary'", () => {
+    expect(() => getEventTool.inputSchema.parse({})).toThrow();
+    const parsed = getEventTool.inputSchema.parse({
+      event_id: "evt_alpha",
+    }) as { event_id: string; calendar_id: string };
+    expect(parsed.event_id).toBe("evt_alpha");
+    expect(parsed.calendar_id).toBe("primary");
+  });
+});
+
+describe("getEventTool — handler", () => {
+  it("calls client.getEvent with the parsed args and maps the result", async () => {
+    const client = makeGetClient(rawEvent({ id: "evt_alpha" }));
+    const parsed = getEventTool.inputSchema.parse({
+      event_id: "evt_alpha",
+      calendar_id: "cal_personal",
+    }) as Parameters<typeof getEventTool.handler>[0];
+    const out = await getEventTool.handler(parsed, {
+      client: client as unknown as never,
+    });
+    expect(client.getEvent).toHaveBeenCalledWith({
+      calendarId: "cal_personal",
+      eventId: "evt_alpha",
+    });
+    expect(out.event.id).toBe("evt_alpha");
+    expect(out.event.calendar_id).toBe("cal_personal");
+  });
+
+  it("defaults calendar_id to 'primary' when omitted", async () => {
+    const client = makeGetClient(rawEvent({ id: "evt_alpha" }));
+    const parsed = getEventTool.inputSchema.parse({
+      event_id: "evt_alpha",
+    }) as Parameters<typeof getEventTool.handler>[0];
+    await getEventTool.handler(parsed, {
+      client: client as unknown as never,
+    });
+    expect(client.getEvent).toHaveBeenCalledWith({
+      calendarId: "primary",
+      eventId: "evt_alpha",
+    });
   });
 });

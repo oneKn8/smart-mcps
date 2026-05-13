@@ -123,6 +123,34 @@ export class CalendarClient {
   }
 
   /**
+   * GET /calendars/{calendarId}/events/{eventId} — single event resource.
+   * Returns the raw upstream shape so callers feed it to `mapEvent` with
+   * the calendar id they already know. A 404 from Google is rewritten
+   * into a NotFoundError that names the event id and calendar id.
+   */
+  async getEvent(opts: {
+    calendarId: string;
+    eventId: string;
+  }): Promise<unknown> {
+    const token = await this.oauthClient.getAccessToken();
+    try {
+      return await fetchJson<unknown>(
+        `${CALENDAR_API_BASE}/calendars/${encodeURIComponent(opts.calendarId)}` +
+          `/events/${encodeURIComponent(opts.eventId)}`,
+        { token },
+      );
+    } catch (err) {
+      if (err instanceof NotFoundError) {
+        throw new NotFoundError(
+          `Event \`${opts.eventId}\` not found in \`${opts.calendarId}\`.`,
+          { cause: err },
+        );
+      }
+      throw mapCalendarAuthError(err, this.account);
+    }
+  }
+
+  /**
    * GET /calendars/{calendarId}/events with `singleEvents=true` and
    * `orderBy=startTime` so recurring series are expanded into their
    * concrete instances within the requested window.
