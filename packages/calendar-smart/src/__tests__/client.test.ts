@@ -2661,3 +2661,96 @@ describe("CalendarClient.getCalendarMetadata", () => {
     );
   });
 });
+
+// =============================================================================
+// Wave 4: freeBusyGroup
+// =============================================================================
+
+describe("CalendarClient.freeBusyGroup", () => {
+  it("POSTs /freeBusy with single group item + expansion max params", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    let captured: unknown;
+    server.use(
+      http.post(FREE_BUSY_URL, async ({ request }) => {
+        captured = await request.json();
+        return HttpResponse.json({
+          calendars: {
+            "alice@example.test": {
+              busy: [
+                { start: "2026-05-13T15:00:00Z", end: "2026-05-13T16:00:00Z" },
+              ],
+            },
+            "bob@example.test": {
+              busy: [],
+              errors: [{ domain: "global", reason: "notFound" }],
+            },
+          },
+        });
+      }),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    const out = await c.freeBusyGroup({
+      timeMin: "2026-05-13T00:00:00Z",
+      timeMax: "2026-05-14T00:00:00Z",
+      groupEmail: "team@example.test",
+      groupExpansionMax: 50,
+      calendarExpansionMax: 25,
+    });
+
+    expect(captured).toEqual({
+      timeMin: "2026-05-13T00:00:00Z",
+      timeMax: "2026-05-14T00:00:00Z",
+      items: [{ id: "team@example.test" }],
+      groupExpansionMax: 50,
+      calendarExpansionMax: 25,
+    });
+    expect(out.calendars["alice@example.test"]?.busy).toHaveLength(1);
+    expect(out.calendars["bob@example.test"]?.errors).toEqual([
+      { domain: "global", reason: "notFound" },
+    ]);
+  });
+
+  it("omits expansion params from the body when not supplied", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    let captured: unknown;
+    server.use(
+      http.post(FREE_BUSY_URL, async ({ request }) => {
+        captured = await request.json();
+        return HttpResponse.json({ calendars: {} });
+      }),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    await c.freeBusyGroup({
+      timeMin: "2026-05-13T00:00:00Z",
+      timeMax: "2026-05-14T00:00:00Z",
+      groupEmail: "team@example.test",
+    });
+
+    expect(captured).toEqual({
+      timeMin: "2026-05-13T00:00:00Z",
+      timeMax: "2026-05-14T00:00:00Z",
+      items: [{ id: "team@example.test" }],
+    });
+  });
+
+  it("propagates AuthError when the calendar token file is missing", async () => {
+    const c = new CalendarClient("ghost", { home: tmpHome });
+    await expect(
+      c.freeBusyGroup({
+        timeMin: "2026-05-13T00:00:00Z",
+        timeMax: "2026-05-14T00:00:00Z",
+        groupEmail: "team@example.test",
+      }),
+    ).rejects.toBeInstanceOf(AuthError);
+  });
+});

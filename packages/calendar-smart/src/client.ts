@@ -651,6 +651,58 @@ export class CalendarClient {
   }
 
   /**
+   * POST /freeBusy with a single Google Group `id` plus `groupExpansionMax`
+   * and `calendarExpansionMax` so the response carries one entry per member
+   * calendar (not one combined busy block for the group). This is a thin
+   * variant of `freeBusy` because the group case has a different request
+   * shape and a different response semantics — the tool layer surfaces
+   * per-member `busy[]` and per-member `errors[]` separately.
+   *
+   * Per-calendar `errors` (notFound, accessDenied, rateLimitExceeded) are
+   * preserved in the raw response shape so the tool can report them
+   * alongside successes instead of failing the whole call.
+   */
+  async freeBusyGroup(opts: {
+    timeMin: string;
+    timeMax: string;
+    groupEmail: string;
+    groupExpansionMax?: number;
+    calendarExpansionMax?: number;
+  }): Promise<{
+    calendars: Record<
+      string,
+      { busy: { start: string; end: string }[]; errors?: unknown[] }
+    >;
+  }> {
+    const token = await this.oauthClient.getAccessToken();
+    const body: Record<string, unknown> = {
+      timeMin: opts.timeMin,
+      timeMax: opts.timeMax,
+      items: [{ id: opts.groupEmail }],
+    };
+    if (opts.groupExpansionMax !== undefined) {
+      body.groupExpansionMax = opts.groupExpansionMax;
+    }
+    if (opts.calendarExpansionMax !== undefined) {
+      body.calendarExpansionMax = opts.calendarExpansionMax;
+    }
+    try {
+      return await fetchJson<{
+        calendars: Record<
+          string,
+          { busy: { start: string; end: string }[]; errors?: unknown[] }
+        >;
+      }>(`${CALENDAR_API_BASE}/freeBusy`, {
+        method: "POST",
+        token,
+        body,
+      });
+    } catch (err) {
+      throw mapCalendarAuthError(err, this.account);
+    }
+  }
+
+  /**
    * GET /calendars/{calendarId}/events/{eventId}/instances — expand a
    * recurring event series into its concrete occurrences. Each instance
    * carries `recurringEventId` (master id) and `originalStartTime` (the
