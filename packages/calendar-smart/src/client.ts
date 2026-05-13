@@ -237,6 +237,82 @@ export class CalendarClient {
   }
 
   /**
+   * POST /calendars — create a brand new secondary calendar. Google adds the
+   * new calendar to the user's CalendarList automatically. The response is
+   * the bare /calendars/{id} shape (no `accessRole`/`primary`/`selected`);
+   * tools that want the per-user view re-fetch via `getCalendarListEntry`.
+   */
+  async insertCalendar(body: Record<string, unknown>): Promise<unknown> {
+    const token = await this.oauthClient.getAccessToken();
+    try {
+      return await fetchJson<unknown>(`${CALENDAR_API_BASE}/calendars`, {
+        method: "POST",
+        token,
+        body,
+      });
+    } catch (err) {
+      throw mapCalendarAuthError(err, this.account);
+    }
+  }
+
+  /**
+   * PATCH /calendars/{calendarId} — partial update of calendar metadata.
+   * Only the fields present in `body` are touched. Returns the bare
+   * /calendars/{id} shape; tools re-fetch the CalendarList entry for
+   * per-user fields.
+   */
+  async patchCalendar(opts: {
+    calendarId: string;
+    body: Record<string, unknown>;
+  }): Promise<unknown> {
+    const token = await this.oauthClient.getAccessToken();
+    try {
+      return await fetchJson<unknown>(
+        `${CALENDAR_API_BASE}/calendars/${encodeURIComponent(opts.calendarId)}`,
+        { method: "PATCH", token, body: opts.body },
+      );
+    } catch (err) {
+      throw mapCalendarAuthError(err, this.account);
+    }
+  }
+
+  /**
+   * DELETE /calendars/{calendarId} — permanently delete a secondary
+   * calendar. Returns 204; resolved promise carries no value. Cannot delete
+   * the primary calendar (Google rejects with 403); the tool layer guards
+   * against that before issuing the request.
+   */
+  async deleteCalendar(opts: { calendarId: string }): Promise<void> {
+    const token = await this.oauthClient.getAccessToken();
+    try {
+      await fetchJson<unknown>(
+        `${CALENDAR_API_BASE}/calendars/${encodeURIComponent(opts.calendarId)}`,
+        { method: "DELETE", token },
+      );
+    } catch (err) {
+      throw mapCalendarAuthError(err, this.account);
+    }
+  }
+
+  /**
+   * POST /calendars/primary/clear — wipe ALL events from the primary
+   * calendar. The calendar metadata is preserved. Returns 204; only valid
+   * against the primary calendar (Google rejects on any other id), so the
+   * endpoint is hardcoded here rather than parameterized.
+   */
+  async clearPrimaryCalendar(): Promise<void> {
+    const token = await this.oauthClient.getAccessToken();
+    try {
+      await fetchJson<unknown>(
+        `${CALENDAR_API_BASE}/calendars/primary/clear`,
+        { method: "POST", token },
+      );
+    } catch (err) {
+      throw mapCalendarAuthError(err, this.account);
+    }
+  }
+
+  /**
    * GET /calendars/{calendarId}/events/{eventId} — single event resource.
    * Returns the raw upstream shape so callers feed it to `mapEvent` with
    * the calendar id they already know. A 404 from Google is rewritten

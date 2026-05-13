@@ -26,6 +26,10 @@ const CALENDAR_LIST_URL = `${CALENDAR_API_BASE}/users/me/calendarList`;
 const CALENDAR_LIST_ENTRY_URL = (id: string): string =>
   `${CALENDAR_API_BASE}/users/me/calendarList/${id}`;
 const FREE_BUSY_URL = `${CALENDAR_API_BASE}/freeBusy`;
+const CALENDARS_URL = `${CALENDAR_API_BASE}/calendars`;
+const CALENDAR_URL = (id: string): string =>
+  `${CALENDAR_API_BASE}/calendars/${id}`;
+const CLEAR_PRIMARY_URL = `${CALENDAR_API_BASE}/calendars/primary/clear`;
 
 const server = setupServer();
 beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
@@ -1444,4 +1448,200 @@ describe("CalendarClient.listEvents — Wave 2 filters", () => {
     expect(out.syncTokenInvalid).toBe(true);
     expect(out.items).toEqual([]);
   }, 10_000);
+});
+
+// =============================================================================
+// Wave 3: Calendars resource (create / patch / delete / clear-primary)
+// =============================================================================
+
+describe("CalendarClient.insertCalendar", () => {
+  it("POSTs /calendars with the supplied body and returns the raw resource", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    let captured: unknown;
+    let bearer: string | null = null;
+    server.use(
+      http.post(CALENDARS_URL, async ({ request }) => {
+        bearer = request.headers.get("authorization");
+        captured = await request.json();
+        return HttpResponse.json({
+          id: "cal_new",
+          summary: "Side Project",
+          timeZone: "America/Chicago",
+        });
+      }),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    const out = await c.insertCalendar({
+      summary: "Side Project",
+      timeZone: "America/Chicago",
+    });
+
+    expect(bearer).toBe("Bearer test-access-token");
+    expect(captured).toEqual({
+      summary: "Side Project",
+      timeZone: "America/Chicago",
+    });
+    expect(out).toEqual({
+      id: "cal_new",
+      summary: "Side Project",
+      timeZone: "America/Chicago",
+    });
+  });
+
+  it("propagates AuthError when the calendar token file is missing", async () => {
+    const c = new CalendarClient("ghost", { home: tmpHome });
+    await expect(
+      c.insertCalendar({ summary: "x" }),
+    ).rejects.toBeInstanceOf(AuthError);
+  });
+});
+
+describe("CalendarClient.patchCalendar", () => {
+  it("PATCHes /calendars/{id} with the supplied body", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    let captured: unknown;
+    let bearer: string | null = null;
+    server.use(
+      http.patch(CALENDAR_URL("cal_new"), async ({ request }) => {
+        bearer = request.headers.get("authorization");
+        captured = await request.json();
+        return HttpResponse.json({
+          id: "cal_new",
+          summary: "Renamed",
+        });
+      }),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    const out = await c.patchCalendar({
+      calendarId: "cal_new",
+      body: { summary: "Renamed", description: "Updated" },
+    });
+
+    expect(bearer).toBe("Bearer test-access-token");
+    expect(captured).toEqual({ summary: "Renamed", description: "Updated" });
+    expect(out).toEqual({ id: "cal_new", summary: "Renamed" });
+  });
+
+  it("URL-encodes the calendarId", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    let captured: URL | undefined;
+    server.use(
+      http.patch(
+        `${CALENDAR_API_BASE}/calendars/:calendarId`,
+        ({ request }) => {
+          captured = new URL(request.url);
+          return HttpResponse.json({ id: "x" });
+        },
+      ),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    await c.patchCalendar({
+      calendarId: "alice@example.test",
+      body: { summary: "x" },
+    });
+    expect(captured?.pathname).toContain("alice%40example.test");
+  });
+
+  it("propagates AuthError when the calendar token file is missing", async () => {
+    const c = new CalendarClient("ghost", { home: tmpHome });
+    await expect(
+      c.patchCalendar({ calendarId: "primary", body: {} }),
+    ).rejects.toBeInstanceOf(AuthError);
+  });
+});
+
+describe("CalendarClient.deleteCalendar", () => {
+  it("DELETEs /calendars/{id} and returns nothing on 204", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    let bearer: string | null = null;
+    server.use(
+      http.delete(CALENDAR_URL("cal_new"), ({ request }) => {
+        bearer = request.headers.get("authorization");
+        return new HttpResponse(null, { status: 204 });
+      }),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    await expect(
+      c.deleteCalendar({ calendarId: "cal_new" }),
+    ).resolves.toBeUndefined();
+    expect(bearer).toBe("Bearer test-access-token");
+  });
+
+  it("URL-encodes the calendarId", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    let captured: URL | undefined;
+    server.use(
+      http.delete(
+        `${CALENDAR_API_BASE}/calendars/:calendarId`,
+        ({ request }) => {
+          captured = new URL(request.url);
+          return new HttpResponse(null, { status: 204 });
+        },
+      ),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    await c.deleteCalendar({ calendarId: "alice@example.test" });
+    expect(captured?.pathname).toContain("alice%40example.test");
+  });
+
+  it("propagates AuthError when the calendar token file is missing", async () => {
+    const c = new CalendarClient("ghost", { home: tmpHome });
+    await expect(
+      c.deleteCalendar({ calendarId: "cal_x" }),
+    ).rejects.toBeInstanceOf(AuthError);
+  });
+});
+
+describe("CalendarClient.clearPrimaryCalendar", () => {
+  it("POSTs /calendars/primary/clear and returns nothing on 204", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    let bearer: string | null = null;
+    let method: string | undefined;
+    server.use(
+      http.post(CLEAR_PRIMARY_URL, ({ request }) => {
+        bearer = request.headers.get("authorization");
+        method = request.method;
+        return new HttpResponse(null, { status: 204 });
+      }),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    await expect(c.clearPrimaryCalendar()).resolves.toBeUndefined();
+    expect(bearer).toBe("Bearer test-access-token");
+    expect(method).toBe("POST");
+  });
+
+  it("propagates AuthError when the calendar token file is missing", async () => {
+    const c = new CalendarClient("ghost", { home: tmpHome });
+    await expect(c.clearPrimaryCalendar()).rejects.toBeInstanceOf(AuthError);
+  });
 });
