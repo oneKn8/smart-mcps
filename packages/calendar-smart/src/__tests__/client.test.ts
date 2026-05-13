@@ -1094,3 +1094,152 @@ describe("CalendarClient.deleteEvent", () => {
     ).rejects.toBeInstanceOf(AuthError);
   });
 });
+
+describe("CalendarClient.listInstances", () => {
+  const INSTANCES_URL = (eventId: string): string =>
+    `${PRIMARY_EVENT_URL(eventId)}/instances`;
+
+  it("GETs /events/{id}/instances with default maxResults=25 and showDeleted=false", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    let captured: URL | undefined;
+    let bearer: string | null = null;
+    server.use(
+      http.get(INSTANCES_URL("evt_alpha"), ({ request }) => {
+        bearer = request.headers.get("authorization");
+        captured = new URL(request.url);
+        return HttpResponse.json({ items: [], nextPageToken: undefined });
+      }),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    const out = await c.listInstances({
+      calendarId: "primary",
+      eventId: "evt_alpha",
+    });
+
+    expect(bearer).toBe("Bearer test-access-token");
+    expect(captured?.searchParams.get("maxResults")).toBe("25");
+    expect(captured?.searchParams.get("showDeleted")).toBe("false");
+    expect(out.items).toEqual([]);
+  });
+
+  it("forwards optional timeMin, timeMax, originalStart, showDeleted, pageToken", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    let captured: URL | undefined;
+    server.use(
+      http.get(INSTANCES_URL("evt_alpha"), ({ request }) => {
+        captured = new URL(request.url);
+        return HttpResponse.json({
+          items: [{ id: "evt_alpha_20260513T150000Z" }],
+          nextPageToken: "tok_next",
+        });
+      }),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    const out = await c.listInstances({
+      calendarId: "primary",
+      eventId: "evt_alpha",
+      timeMin: "2026-05-13T00:00:00Z",
+      timeMax: "2026-05-20T00:00:00Z",
+      originalStart: "2026-05-13T15:00:00Z",
+      showDeleted: true,
+      maxResults: 100,
+      pageToken: "tok_in",
+    });
+
+    expect(captured?.searchParams.get("timeMin")).toBe("2026-05-13T00:00:00Z");
+    expect(captured?.searchParams.get("timeMax")).toBe("2026-05-20T00:00:00Z");
+    expect(captured?.searchParams.get("originalStart")).toBe(
+      "2026-05-13T15:00:00Z",
+    );
+    expect(captured?.searchParams.get("showDeleted")).toBe("true");
+    expect(captured?.searchParams.get("maxResults")).toBe("100");
+    expect(captured?.searchParams.get("pageToken")).toBe("tok_in");
+    expect(out.items).toEqual([{ id: "evt_alpha_20260513T150000Z" }]);
+    expect(out.nextPageToken).toBe("tok_next");
+  });
+
+  it("URL-encodes the calendarId and eventId", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    let captured: URL | undefined;
+    server.use(
+      http.get(
+        `${CALENDAR_API_BASE}/calendars/:calendarId/events/:eventId/instances`,
+        ({ request }) => {
+          captured = new URL(request.url);
+          return HttpResponse.json({ items: [] });
+        },
+      ),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    await c.listInstances({
+      calendarId: "alice@example.test",
+      eventId: "evt with spaces",
+    });
+    expect(captured?.pathname).toContain("alice%40example.test");
+    expect(captured?.pathname).toContain("evt%20with%20spaces");
+  });
+
+  it("normalizes a missing items array to []", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    server.use(
+      http.get(INSTANCES_URL("evt_alpha"), () => HttpResponse.json({})),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    const out = await c.listInstances({
+      calendarId: "primary",
+      eventId: "evt_alpha",
+    });
+    expect(out.items).toEqual([]);
+  });
+
+  it("wraps a 404 from Google as NotFoundError naming the event", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    server.use(
+      http.get(INSTANCES_URL("evt_missing"), () =>
+        HttpResponse.json(
+          { error: { code: 404, message: "Not Found" } },
+          { status: 404 },
+        ),
+      ),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    await expect(
+      c.listInstances({ calendarId: "primary", eventId: "evt_missing" }),
+    ).rejects.toMatchObject({
+      name: "NotFoundError",
+      message: expect.stringContaining("evt_missing"),
+    });
+  });
+
+  it("propagates AuthError when the calendar token file is missing", async () => {
+    const c = new CalendarClient("ghost", { home: tmpHome });
+    await expect(
+      c.listInstances({ calendarId: "primary", eventId: "evt_alpha" }),
+    ).rejects.toBeInstanceOf(AuthError);
+  });
+});

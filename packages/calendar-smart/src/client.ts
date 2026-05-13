@@ -435,6 +435,60 @@ export class CalendarClient {
     }
   }
 
+  /**
+   * GET /calendars/{calendarId}/events/{eventId}/instances — expand a
+   * recurring event series into its concrete occurrences. Each instance
+   * carries `recurringEventId` (master id) and `originalStartTime` (the
+   * originally-scheduled slot, before any per-instance reschedule).
+   *
+   * Defaults: `maxResults=25`, `showDeleted=false`. The optional
+   * `originalStart` filter narrows to a single occurrence by its original
+   * slot — useful for confirming an instance exists before patching it.
+   */
+  async listInstances(opts: {
+    calendarId: string;
+    eventId: string;
+    timeMin?: string;
+    timeMax?: string;
+    originalStart?: string;
+    maxResults?: number;
+    showDeleted?: boolean;
+    pageToken?: string;
+  }): Promise<{ items: unknown[]; nextPageToken?: string }> {
+    const token = await this.oauthClient.getAccessToken();
+    const searchParams: Record<string, string | number | boolean | undefined> =
+      {
+        maxResults: String(opts.maxResults ?? 25),
+        showDeleted: opts.showDeleted === true ? "true" : "false",
+        timeMin: opts.timeMin,
+        timeMax: opts.timeMax,
+        originalStart: opts.originalStart,
+        pageToken: opts.pageToken,
+      };
+    let raw: { items?: unknown[]; nextPageToken?: string };
+    try {
+      raw = await fetchJson<{ items?: unknown[]; nextPageToken?: string }>(
+        `${CALENDAR_API_BASE}/calendars/${encodeURIComponent(opts.calendarId)}` +
+          `/events/${encodeURIComponent(opts.eventId)}/instances`,
+        { token, searchParams },
+      );
+    } catch (err) {
+      if (err instanceof NotFoundError) {
+        throw new NotFoundError(
+          `Event \`${opts.eventId}\` not found in \`${opts.calendarId}\`.`,
+          { cause: err },
+        );
+      }
+      throw mapCalendarAuthError(err, this.account);
+    }
+    return {
+      items: raw.items ?? [],
+      ...(raw.nextPageToken !== undefined
+        ? { nextPageToken: raw.nextPageToken }
+        : {}),
+    };
+  }
+
   async listEvents(
     opts: ListEventsOpts,
   ): Promise<{ items: unknown[]; nextPageToken?: string }> {
