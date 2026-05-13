@@ -704,6 +704,262 @@ export class CalendarClient {
     };
   }
 
+  /**
+   * GET /calendars/{calendarId}/acl — every share rule on the calendar.
+   * Items are returned raw; the tool layer maps each to SlimAclRule. The
+   * `items[]` envelope is normalized to a bare array for symmetry with
+   * `listCalendars`.
+   */
+  async listAcl(opts: { calendarId: string }): Promise<unknown[]> {
+    const token = await this.oauthClient.getAccessToken();
+    let raw: { items?: unknown[] };
+    try {
+      raw = await fetchJson<{ items?: unknown[] }>(
+        `${CALENDAR_API_BASE}/calendars/${encodeURIComponent(opts.calendarId)}/acl`,
+        { token },
+      );
+    } catch (err) {
+      throw mapCalendarAuthError(err, this.account);
+    }
+    return raw.items ?? [];
+  }
+
+  /**
+   * GET /calendars/{calendarId}/acl/{ruleId} — single share rule. A 404
+   * from Google is rewritten into a NotFoundError that names both the rule
+   * id and the calendar id, mirroring `getEvent`.
+   */
+  async getAclRule(opts: {
+    calendarId: string;
+    ruleId: string;
+  }): Promise<unknown> {
+    const token = await this.oauthClient.getAccessToken();
+    try {
+      return await fetchJson<unknown>(
+        `${CALENDAR_API_BASE}/calendars/${encodeURIComponent(opts.calendarId)}` +
+          `/acl/${encodeURIComponent(opts.ruleId)}`,
+        { token },
+      );
+    } catch (err) {
+      if (err instanceof NotFoundError) {
+        throw new NotFoundError(
+          `ACL rule \`${opts.ruleId}\` not found on \`${opts.calendarId}\`.`,
+          { cause: err },
+        );
+      }
+      throw mapCalendarAuthError(err, this.account);
+    }
+  }
+
+  /**
+   * POST /calendars/{calendarId}/acl — grant access to a calendar. The body
+   * MUST include `role` and `scope: { type, value? }`. `value` is omitted
+   * for `scope.type === "default"` (anyone with the link); the tool layer
+   * enforces that invariant before calling.
+   *
+   * `sendNotifications=true` (default at Google) emails the principal that
+   * they've been granted access; pass `false` to share silently. The tool
+   * surface mirrors this default.
+   */
+  async insertAclRule(opts: {
+    calendarId: string;
+    body: Record<string, unknown>;
+    sendNotifications?: boolean;
+  }): Promise<unknown> {
+    const token = await this.oauthClient.getAccessToken();
+    const searchParams: Record<string, string | number | boolean | undefined> =
+      {};
+    if (opts.sendNotifications !== undefined) {
+      searchParams.sendNotifications = opts.sendNotifications;
+    }
+    try {
+      return await fetchJson<unknown>(
+        `${CALENDAR_API_BASE}/calendars/${encodeURIComponent(opts.calendarId)}/acl`,
+        {
+          method: "POST",
+          token,
+          body: opts.body,
+          ...(Object.keys(searchParams).length > 0 ? { searchParams } : {}),
+        },
+      );
+    } catch (err) {
+      throw mapCalendarAuthError(err, this.account);
+    }
+  }
+
+  /**
+   * PUT /calendars/{calendarId}/acl/{ruleId} — replace an existing share
+   * rule. Google requires the body to include the full `scope` block and
+   * the new `role`; the tool layer fetches the existing rule first to
+   * preserve scope, then mutates only the role.
+   */
+  async updateAclRule(opts: {
+    calendarId: string;
+    ruleId: string;
+    body: Record<string, unknown>;
+  }): Promise<unknown> {
+    const token = await this.oauthClient.getAccessToken();
+    try {
+      return await fetchJson<unknown>(
+        `${CALENDAR_API_BASE}/calendars/${encodeURIComponent(opts.calendarId)}` +
+          `/acl/${encodeURIComponent(opts.ruleId)}`,
+        { method: "PUT", token, body: opts.body },
+      );
+    } catch (err) {
+      if (err instanceof NotFoundError) {
+        throw new NotFoundError(
+          `ACL rule \`${opts.ruleId}\` not found on \`${opts.calendarId}\`.`,
+          { cause: err },
+        );
+      }
+      throw mapCalendarAuthError(err, this.account);
+    }
+  }
+
+  /**
+   * DELETE /calendars/{calendarId}/acl/{ruleId} — revoke an existing share
+   * rule. Returns 204; the resolved promise carries no value. A 404 is
+   * rewritten into a NotFoundError naming the rule id.
+   */
+  async deleteAclRule(opts: {
+    calendarId: string;
+    ruleId: string;
+  }): Promise<void> {
+    const token = await this.oauthClient.getAccessToken();
+    try {
+      await fetchJson<unknown>(
+        `${CALENDAR_API_BASE}/calendars/${encodeURIComponent(opts.calendarId)}` +
+          `/acl/${encodeURIComponent(opts.ruleId)}`,
+        { method: "DELETE", token },
+      );
+    } catch (err) {
+      if (err instanceof NotFoundError) {
+        throw new NotFoundError(
+          `ACL rule \`${opts.ruleId}\` not found on \`${opts.calendarId}\`.`,
+          { cause: err },
+        );
+      }
+      throw mapCalendarAuthError(err, this.account);
+    }
+  }
+
+  /**
+   * GET /users/me/settings — every user-level calendar preference. Returns
+   * raw `items[]` (each carries `{ id, value }`); the tool layer flattens
+   * these into a `Record<string, string>`. Symmetric with `listCalendars`'
+   * envelope normalization.
+   */
+  async listSettings(): Promise<unknown[]> {
+    const token = await this.oauthClient.getAccessToken();
+    let raw: { items?: unknown[] };
+    try {
+      raw = await fetchJson<{ items?: unknown[] }>(
+        `${CALENDAR_API_BASE}/users/me/settings`,
+        { token },
+      );
+    } catch (err) {
+      throw mapCalendarAuthError(err, this.account);
+    }
+    return raw.items ?? [];
+  }
+
+  /**
+   * GET /users/me/settings/{settingId} — single user-level preference.
+   * Returns the raw `{ id, value }` resource so callers can inspect both.
+   */
+  async getSetting(settingId: string): Promise<unknown> {
+    const token = await this.oauthClient.getAccessToken();
+    try {
+      return await fetchJson<unknown>(
+        `${CALENDAR_API_BASE}/users/me/settings/${encodeURIComponent(settingId)}`,
+        { token },
+      );
+    } catch (err) {
+      throw mapCalendarAuthError(err, this.account);
+    }
+  }
+
+  /**
+   * GET /colors — the event + calendar color palettes. Google updates this
+   * rarely; the tool layer does no caching for now (defer optimization).
+   * Returns the raw resource (`{ kind, updated, calendar, event }`) so
+   * the tool maps it to its slim shape.
+   */
+  async getColors(): Promise<unknown> {
+    const token = await this.oauthClient.getAccessToken();
+    try {
+      return await fetchJson<unknown>(`${CALENDAR_API_BASE}/colors`, {
+        token,
+      });
+    } catch (err) {
+      throw mapCalendarAuthError(err, this.account);
+    }
+  }
+
+  /**
+   * POST /calendars/{calendarId}/events/{eventId}/move?destination=... —
+   * move an event from one calendar to another WITHOUT recreating it.
+   * The event id is preserved across the move. Google requires the
+   * organizer to own both the source and destination calendars.
+   *
+   * 404s are remapped to NotFoundError naming the source event id, matching
+   * `getEvent`/`patchEvent` behavior.
+   */
+  async moveEvent(opts: {
+    calendarId: string;
+    eventId: string;
+    destination: string;
+    sendUpdates?: "all" | "externalOnly" | "none";
+  }): Promise<unknown> {
+    const token = await this.oauthClient.getAccessToken();
+    const searchParams: Record<string, string | number | boolean | undefined> =
+      { destination: opts.destination };
+    if (opts.sendUpdates !== undefined) {
+      searchParams.sendUpdates = opts.sendUpdates;
+    }
+    try {
+      return await fetchJson<unknown>(
+        `${CALENDAR_API_BASE}/calendars/${encodeURIComponent(opts.calendarId)}` +
+          `/events/${encodeURIComponent(opts.eventId)}/move`,
+        { method: "POST", token, searchParams },
+      );
+    } catch (err) {
+      if (err instanceof NotFoundError) {
+        throw new NotFoundError(
+          `Event \`${opts.eventId}\` not found in \`${opts.calendarId}\`.`,
+          { cause: err },
+        );
+      }
+      throw mapCalendarAuthError(err, this.account);
+    }
+  }
+
+  /**
+   * GET /calendars/{calendarId} — the bare Calendar resource (NOT the
+   * CalendarList entry). Carries `conferenceProperties` and the canonical
+   * `summary`/`description`/`location`/`timeZone` fields without per-user
+   * `accessRole`/`primary`/`selected`.
+   *
+   * 404s are remapped to NotFoundError naming the calendar id.
+   */
+  async getCalendarMetadata(calendarId: string): Promise<unknown> {
+    const token = await this.oauthClient.getAccessToken();
+    try {
+      return await fetchJson<unknown>(
+        `${CALENDAR_API_BASE}/calendars/${encodeURIComponent(calendarId)}`,
+        { token },
+      );
+    } catch (err) {
+      if (err instanceof NotFoundError) {
+        throw new NotFoundError(
+          `Calendar \`${calendarId}\` not found.`,
+          { cause: err },
+        );
+      }
+      throw mapCalendarAuthError(err, this.account);
+    }
+  }
+
   async listEvents(opts: ListEventsOpts): Promise<ListEventsResult> {
     const token = await this.oauthClient.getAccessToken();
     // Build the URL by hand so we can carry repeated query parameters

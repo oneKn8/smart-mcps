@@ -30,6 +30,17 @@ const CALENDARS_URL = `${CALENDAR_API_BASE}/calendars`;
 const CALENDAR_URL = (id: string): string =>
   `${CALENDAR_API_BASE}/calendars/${id}`;
 const CLEAR_PRIMARY_URL = `${CALENDAR_API_BASE}/calendars/primary/clear`;
+const ACL_LIST_URL = (calendarId: string): string =>
+  `${CALENDAR_API_BASE}/calendars/${calendarId}/acl`;
+const ACL_RULE_URL = (calendarId: string, ruleId: string): string =>
+  `${CALENDAR_API_BASE}/calendars/${encodeURIComponent(calendarId)}` +
+  `/acl/${encodeURIComponent(ruleId)}`;
+const SETTINGS_LIST_URL = `${CALENDAR_API_BASE}/users/me/settings`;
+const SETTING_URL = (id: string): string =>
+  `${CALENDAR_API_BASE}/users/me/settings/${id}`;
+const COLORS_URL = `${CALENDAR_API_BASE}/colors`;
+const MOVE_EVENT_URL = (calendarId: string, eventId: string): string =>
+  `${CALENDAR_API_BASE}/calendars/${calendarId}/events/${eventId}/move`;
 
 const server = setupServer();
 beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
@@ -1880,5 +1891,773 @@ describe("CalendarClient.deleteCalendarListEntry", () => {
     await expect(
       c.deleteCalendarListEntry({ calendarId: "x" }),
     ).rejects.toBeInstanceOf(AuthError);
+  });
+});
+
+// =============================================================================
+// Wave 4: ACL (sharing)
+// =============================================================================
+
+describe("CalendarClient.listAcl", () => {
+  it("GETs /calendars/{id}/acl and returns items[]", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    let bearer: string | null = null;
+    server.use(
+      http.get(ACL_LIST_URL("primary"), ({ request }) => {
+        bearer = request.headers.get("authorization");
+        return HttpResponse.json({
+          items: [
+            {
+              id: "user:alice@example.test",
+              role: "reader",
+              scope: { type: "user", value: "alice@example.test" },
+            },
+            {
+              id: "default",
+              role: "freeBusyReader",
+              scope: { type: "default" },
+            },
+          ],
+        });
+      }),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    const out = await c.listAcl({ calendarId: "primary" });
+    expect(bearer).toBe("Bearer test-access-token");
+    expect(out).toHaveLength(2);
+  });
+
+  it("normalizes a missing items array to []", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    server.use(
+      http.get(ACL_LIST_URL("primary"), () => HttpResponse.json({})),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    const out = await c.listAcl({ calendarId: "primary" });
+    expect(out).toEqual([]);
+  });
+
+  it("URL-encodes the calendarId", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    let captured: URL | undefined;
+    server.use(
+      http.get(
+        `${CALENDAR_API_BASE}/calendars/:calendarId/acl`,
+        ({ request }) => {
+          captured = new URL(request.url);
+          return HttpResponse.json({ items: [] });
+        },
+      ),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    await c.listAcl({ calendarId: "alice@example.test" });
+    expect(captured?.pathname).toContain("alice%40example.test");
+  });
+
+  it("propagates AuthError when the calendar token file is missing", async () => {
+    const c = new CalendarClient("ghost", { home: tmpHome });
+    await expect(
+      c.listAcl({ calendarId: "primary" }),
+    ).rejects.toBeInstanceOf(AuthError);
+  });
+});
+
+describe("CalendarClient.getAclRule", () => {
+  it("GETs /calendars/{id}/acl/{ruleId} and returns the raw rule", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    server.use(
+      http.get(
+        ACL_RULE_URL("primary", "user:alice@example.test"),
+        () =>
+          HttpResponse.json({
+            id: "user:alice@example.test",
+            role: "writer",
+            scope: { type: "user", value: "alice@example.test" },
+          }),
+      ),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    const out = await c.getAclRule({
+      calendarId: "primary",
+      ruleId: "user:alice@example.test",
+    });
+    expect(out).toEqual({
+      id: "user:alice@example.test",
+      role: "writer",
+      scope: { type: "user", value: "alice@example.test" },
+    });
+  });
+
+  it("URL-encodes the ruleId", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    let captured: URL | undefined;
+    server.use(
+      http.get(
+        `${CALENDAR_API_BASE}/calendars/:calendarId/acl/:ruleId`,
+        ({ request }) => {
+          captured = new URL(request.url);
+          return HttpResponse.json({ id: "x" });
+        },
+      ),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    await c.getAclRule({
+      calendarId: "primary",
+      ruleId: "user:bob@example.test",
+    });
+    expect(captured?.pathname).toContain("user%3Abob%40example.test");
+  });
+
+  it("wraps a 404 from Google as NotFoundError naming the rule", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    server.use(
+      http.get(ACL_RULE_URL("primary", "user:missing"), () =>
+        HttpResponse.json(
+          { error: { code: 404, message: "Not Found" } },
+          { status: 404 },
+        ),
+      ),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    await expect(
+      c.getAclRule({ calendarId: "primary", ruleId: "user:missing" }),
+    ).rejects.toMatchObject({
+      name: "NotFoundError",
+      message: expect.stringContaining("user:missing"),
+    });
+  });
+});
+
+describe("CalendarClient.insertAclRule", () => {
+  it("POSTs /calendars/{id}/acl with the supplied body", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    let captured: unknown;
+    let bearer: string | null = null;
+    server.use(
+      http.post(ACL_LIST_URL("primary"), async ({ request }) => {
+        bearer = request.headers.get("authorization");
+        captured = await request.json();
+        return HttpResponse.json({
+          id: "user:bob@example.test",
+          role: "reader",
+          scope: { type: "user", value: "bob@example.test" },
+        });
+      }),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    const out = await c.insertAclRule({
+      calendarId: "primary",
+      body: {
+        role: "reader",
+        scope: { type: "user", value: "bob@example.test" },
+      },
+    });
+    expect(bearer).toBe("Bearer test-access-token");
+    expect(captured).toEqual({
+      role: "reader",
+      scope: { type: "user", value: "bob@example.test" },
+    });
+    expect(out).toMatchObject({ id: "user:bob@example.test" });
+  });
+
+  it("forwards sendNotifications=true as a query param when set", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    let captured: URL | undefined;
+    server.use(
+      http.post(ACL_LIST_URL("primary"), ({ request }) => {
+        captured = new URL(request.url);
+        return HttpResponse.json({ id: "x" });
+      }),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    await c.insertAclRule({
+      calendarId: "primary",
+      body: { role: "reader", scope: { type: "default" } },
+      sendNotifications: true,
+    });
+    expect(captured?.searchParams.get("sendNotifications")).toBe("true");
+  });
+
+  it("forwards sendNotifications=false as a query param when set", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    let captured: URL | undefined;
+    server.use(
+      http.post(ACL_LIST_URL("primary"), ({ request }) => {
+        captured = new URL(request.url);
+        return HttpResponse.json({ id: "x" });
+      }),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    await c.insertAclRule({
+      calendarId: "primary",
+      body: { role: "reader", scope: { type: "default" } },
+      sendNotifications: false,
+    });
+    expect(captured?.searchParams.get("sendNotifications")).toBe("false");
+  });
+
+  it("omits the query string when sendNotifications is unset", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    let captured: URL | undefined;
+    server.use(
+      http.post(ACL_LIST_URL("primary"), ({ request }) => {
+        captured = new URL(request.url);
+        return HttpResponse.json({ id: "x" });
+      }),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    await c.insertAclRule({
+      calendarId: "primary",
+      body: { role: "reader", scope: { type: "default" } },
+    });
+    expect(captured?.search).toBe("");
+  });
+
+  it("propagates AuthError when the calendar token file is missing", async () => {
+    const c = new CalendarClient("ghost", { home: tmpHome });
+    await expect(
+      c.insertAclRule({ calendarId: "primary", body: {} }),
+    ).rejects.toBeInstanceOf(AuthError);
+  });
+});
+
+describe("CalendarClient.updateAclRule", () => {
+  it("PUTs /calendars/{id}/acl/{ruleId} with the supplied body", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    let captured: unknown;
+    let method: string | undefined;
+    server.use(
+      http.put(
+        ACL_RULE_URL("primary", "user:bob@example.test"),
+        async ({ request }) => {
+          method = request.method;
+          captured = await request.json();
+          return HttpResponse.json({
+            id: "user:bob@example.test",
+            role: "writer",
+            scope: { type: "user", value: "bob@example.test" },
+          });
+        },
+      ),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    const out = await c.updateAclRule({
+      calendarId: "primary",
+      ruleId: "user:bob@example.test",
+      body: {
+        role: "writer",
+        scope: { type: "user", value: "bob@example.test" },
+      },
+    });
+    expect(method).toBe("PUT");
+    expect(captured).toEqual({
+      role: "writer",
+      scope: { type: "user", value: "bob@example.test" },
+    });
+    expect(out).toMatchObject({ role: "writer" });
+  });
+
+  it("wraps a 404 from Google as NotFoundError naming the rule", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    server.use(
+      http.put(ACL_RULE_URL("primary", "user:missing"), () =>
+        HttpResponse.json(
+          { error: { code: 404, message: "Not Found" } },
+          { status: 404 },
+        ),
+      ),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    await expect(
+      c.updateAclRule({
+        calendarId: "primary",
+        ruleId: "user:missing",
+        body: { role: "writer" },
+      }),
+    ).rejects.toMatchObject({
+      name: "NotFoundError",
+      message: expect.stringContaining("user:missing"),
+    });
+  });
+});
+
+describe("CalendarClient.deleteAclRule", () => {
+  it("DELETEs /calendars/{id}/acl/{ruleId} and returns nothing on 204", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    let bearer: string | null = null;
+    server.use(
+      http.delete(
+        ACL_RULE_URL("primary", "user:bob@example.test"),
+        ({ request }) => {
+          bearer = request.headers.get("authorization");
+          return new HttpResponse(null, { status: 204 });
+        },
+      ),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    await expect(
+      c.deleteAclRule({
+        calendarId: "primary",
+        ruleId: "user:bob@example.test",
+      }),
+    ).resolves.toBeUndefined();
+    expect(bearer).toBe("Bearer test-access-token");
+  });
+
+  it("wraps a 404 from Google as NotFoundError naming the rule", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    server.use(
+      http.delete(ACL_RULE_URL("primary", "user:missing"), () =>
+        HttpResponse.json(
+          { error: { code: 404, message: "Not Found" } },
+          { status: 404 },
+        ),
+      ),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    await expect(
+      c.deleteAclRule({ calendarId: "primary", ruleId: "user:missing" }),
+    ).rejects.toMatchObject({
+      name: "NotFoundError",
+      message: expect.stringContaining("user:missing"),
+    });
+  });
+});
+
+// =============================================================================
+// Wave 4: Settings (read-only)
+// =============================================================================
+
+describe("CalendarClient.listSettings", () => {
+  it("GETs /users/me/settings and returns items[]", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    let bearer: string | null = null;
+    server.use(
+      http.get(SETTINGS_LIST_URL, ({ request }) => {
+        bearer = request.headers.get("authorization");
+        return HttpResponse.json({
+          items: [
+            { id: "timezone", value: "America/Chicago" },
+            { id: "weekStart", value: "1" },
+          ],
+        });
+      }),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    const out = await c.listSettings();
+    expect(bearer).toBe("Bearer test-access-token");
+    expect(out).toEqual([
+      { id: "timezone", value: "America/Chicago" },
+      { id: "weekStart", value: "1" },
+    ]);
+  });
+
+  it("normalizes a missing items array to []", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    server.use(
+      http.get(SETTINGS_LIST_URL, () => HttpResponse.json({})),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    const out = await c.listSettings();
+    expect(out).toEqual([]);
+  });
+
+  it("propagates AuthError when the calendar token file is missing", async () => {
+    const c = new CalendarClient("ghost", { home: tmpHome });
+    await expect(c.listSettings()).rejects.toBeInstanceOf(AuthError);
+  });
+});
+
+describe("CalendarClient.getSetting", () => {
+  it("GETs /users/me/settings/{id} and returns the raw setting", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    server.use(
+      http.get(SETTING_URL("timezone"), () =>
+        HttpResponse.json({ id: "timezone", value: "America/Chicago" }),
+      ),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    const out = await c.getSetting("timezone");
+    expect(out).toEqual({ id: "timezone", value: "America/Chicago" });
+  });
+
+  it("URL-encodes the setting id", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    let captured: URL | undefined;
+    server.use(
+      http.get(
+        `${CALENDAR_API_BASE}/users/me/settings/:id`,
+        ({ request }) => {
+          captured = new URL(request.url);
+          return HttpResponse.json({ id: "x", value: "y" });
+        },
+      ),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    await c.getSetting("weird id");
+    expect(captured?.pathname).toContain("weird%20id");
+  });
+
+  it("propagates AuthError when the calendar token file is missing", async () => {
+    const c = new CalendarClient("ghost", { home: tmpHome });
+    await expect(c.getSetting("timezone")).rejects.toBeInstanceOf(AuthError);
+  });
+});
+
+// =============================================================================
+// Wave 4: Colors
+// =============================================================================
+
+describe("CalendarClient.getColors", () => {
+  it("GETs /colors and returns the raw palette", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    let bearer: string | null = null;
+    server.use(
+      http.get(COLORS_URL, ({ request }) => {
+        bearer = request.headers.get("authorization");
+        return HttpResponse.json({
+          kind: "calendar#colors",
+          updated: "2026-05-13T00:00:00Z",
+          calendar: {
+            "1": { background: "#ac725e", foreground: "#1d1d1d" },
+          },
+          event: {
+            "1": { background: "#a4bdfc", foreground: "#1d1d1d" },
+          },
+        });
+      }),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    const out = await c.getColors();
+    expect(bearer).toBe("Bearer test-access-token");
+    expect(out).toMatchObject({
+      updated: "2026-05-13T00:00:00Z",
+      calendar: { "1": { background: "#ac725e", foreground: "#1d1d1d" } },
+      event: { "1": { background: "#a4bdfc", foreground: "#1d1d1d" } },
+    });
+  });
+
+  it("propagates AuthError when the calendar token file is missing", async () => {
+    const c = new CalendarClient("ghost", { home: tmpHome });
+    await expect(c.getColors()).rejects.toBeInstanceOf(AuthError);
+  });
+});
+
+// =============================================================================
+// Wave 4: move event
+// =============================================================================
+
+describe("CalendarClient.moveEvent", () => {
+  it("POSTs /calendars/{id}/events/{eventId}/move?destination=...", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    let captured: URL | undefined;
+    let method: string | undefined;
+    server.use(
+      http.post(
+        MOVE_EVENT_URL("primary", "evt_alpha"),
+        ({ request }) => {
+          captured = new URL(request.url);
+          method = request.method;
+          return HttpResponse.json({
+            id: "evt_alpha",
+            summary: "Standup",
+          });
+        },
+      ),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    const out = await c.moveEvent({
+      calendarId: "primary",
+      eventId: "evt_alpha",
+      destination: "cal_work",
+    });
+    expect(method).toBe("POST");
+    expect(captured?.searchParams.get("destination")).toBe("cal_work");
+    expect(out).toMatchObject({ id: "evt_alpha" });
+  });
+
+  it("forwards sendUpdates as a query param when set", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    let captured: URL | undefined;
+    server.use(
+      http.post(MOVE_EVENT_URL("primary", "evt_alpha"), ({ request }) => {
+        captured = new URL(request.url);
+        return HttpResponse.json({ id: "evt_alpha" });
+      }),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    await c.moveEvent({
+      calendarId: "primary",
+      eventId: "evt_alpha",
+      destination: "cal_work",
+      sendUpdates: "all",
+    });
+    expect(captured?.searchParams.get("sendUpdates")).toBe("all");
+  });
+
+  it("URL-encodes the calendarId and eventId", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    let captured: URL | undefined;
+    server.use(
+      http.post(
+        `${CALENDAR_API_BASE}/calendars/:calendarId/events/:eventId/move`,
+        ({ request }) => {
+          captured = new URL(request.url);
+          return HttpResponse.json({ id: "x" });
+        },
+      ),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    await c.moveEvent({
+      calendarId: "alice@example.test",
+      eventId: "evt with spaces",
+      destination: "cal_work",
+    });
+    expect(captured?.pathname).toContain("alice%40example.test");
+    expect(captured?.pathname).toContain("evt%20with%20spaces");
+  });
+
+  it("wraps a 404 from Google as NotFoundError naming the event", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    server.use(
+      http.post(MOVE_EVENT_URL("primary", "evt_missing"), () =>
+        HttpResponse.json(
+          { error: { code: 404, message: "Not Found" } },
+          { status: 404 },
+        ),
+      ),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    await expect(
+      c.moveEvent({
+        calendarId: "primary",
+        eventId: "evt_missing",
+        destination: "cal_work",
+      }),
+    ).rejects.toMatchObject({
+      name: "NotFoundError",
+      message: expect.stringContaining("evt_missing"),
+    });
+  });
+
+  it("propagates AuthError when the calendar token file is missing", async () => {
+    const c = new CalendarClient("ghost", { home: tmpHome });
+    await expect(
+      c.moveEvent({
+        calendarId: "primary",
+        eventId: "evt_x",
+        destination: "cal_work",
+      }),
+    ).rejects.toBeInstanceOf(AuthError);
+  });
+});
+
+// =============================================================================
+// Wave 4: get bare Calendar resource
+// =============================================================================
+
+describe("CalendarClient.getCalendarMetadata", () => {
+  it("GETs /calendars/{id} and returns the raw resource", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    let bearer: string | null = null;
+    server.use(
+      http.get(CALENDAR_URL("cal_work"), ({ request }) => {
+        bearer = request.headers.get("authorization");
+        return HttpResponse.json({
+          kind: "calendar#calendar",
+          etag: "etag-abc",
+          id: "cal_work",
+          summary: "Work",
+          description: "Stuff",
+          location: "Dallas",
+          timeZone: "America/Chicago",
+          conferenceProperties: {
+            allowedConferenceSolutionTypes: ["hangoutsMeet"],
+          },
+        });
+      }),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    const out = await c.getCalendarMetadata("cal_work");
+    expect(bearer).toBe("Bearer test-access-token");
+    expect(out).toMatchObject({
+      id: "cal_work",
+      summary: "Work",
+      timeZone: "America/Chicago",
+      conferenceProperties: {
+        allowedConferenceSolutionTypes: ["hangoutsMeet"],
+      },
+    });
+  });
+
+  it("URL-encodes the calendarId", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    let captured: URL | undefined;
+    server.use(
+      http.get(
+        `${CALENDAR_API_BASE}/calendars/:calendarId`,
+        ({ request }) => {
+          captured = new URL(request.url);
+          return HttpResponse.json({ id: "x" });
+        },
+      ),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    await c.getCalendarMetadata("alice@example.test");
+    expect(captured?.pathname).toContain("alice%40example.test");
+  });
+
+  it("wraps a 404 from Google as NotFoundError naming the calendar", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    server.use(
+      http.get(CALENDAR_URL("cal_missing"), () =>
+        HttpResponse.json(
+          { error: { code: 404, message: "Not Found" } },
+          { status: 404 },
+        ),
+      ),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    await expect(c.getCalendarMetadata("cal_missing")).rejects.toMatchObject({
+      name: "NotFoundError",
+      message: expect.stringContaining("cal_missing"),
+    });
+  });
+
+  it("propagates AuthError when the calendar token file is missing", async () => {
+    const c = new CalendarClient("ghost", { home: tmpHome });
+    await expect(c.getCalendarMetadata("cal_x")).rejects.toBeInstanceOf(
+      AuthError,
+    );
   });
 });
