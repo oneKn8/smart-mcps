@@ -37,6 +37,17 @@ import {
 } from "./events-recurring.js";
 import { searchEventsTool } from "./events-search.js";
 import { syncEventsTool } from "./events-sync.js";
+import {
+  createCalendarTool,
+  updateCalendarTool,
+  deleteCalendarTool,
+  clearPrimaryCalendarTool,
+} from "./calendars-write.js";
+import {
+  subscribeCalendarTool,
+  unsubscribeCalendarTool,
+  updateCalendarSubscriptionTool,
+} from "./calendar-subscriptions.js";
 
 /**
  * Registry of every calendar-smart tool. Imported by both `server.ts` (to
@@ -82,4 +93,13 @@ export const tools = [
   searchEventsTool,
   // Wave 2: incremental sync (1)
   syncEventsTool,
+  // Wave 3: calendar resource CRUD (4)
+  createCalendarTool,
+  updateCalendarTool,
+  deleteCalendarTool,
+  clearPrimaryCalendarTool,
+  // Wave 3: CalendarList subscription management (3)
+  subscribeCalendarTool,
+  unsubscribeCalendarTool,
+  updateCalendarSubscriptionTool,
 ] as unknown as ToolDefinition<unknown, unknown, CalendarContext>[];
