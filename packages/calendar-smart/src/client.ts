@@ -436,6 +436,18 @@ function mapCalendarAuthError(err: unknown, account: string): unknown {
   if (!(err instanceof AuthError)) return err;
   const msg = err.message;
   if (msg.includes("→ 403")) {
+    if (
+      msg.includes("accessNotConfigured") ||
+      msg.includes("SERVICE_DISABLED") ||
+      msg.includes("has not been used in project")
+    ) {
+      return new AuthError(
+        `Google Calendar API is not enabled on your Cloud project. ` +
+          `Enable it at https://console.developers.google.com/apis/library/calendar-json.googleapis.com ` +
+          `then wait ~30s for propagation.`,
+        { cause: err },
+      );
+    }
     return new AuthError(
       `calendar token for account ${account} has insufficient scope — ` +
         `re-run ${reauthHintFor(account)} to re-consent with the calendar scope`,
