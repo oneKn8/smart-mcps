@@ -2,6 +2,29 @@ import { z } from "zod";
 import { defineTool, ValidationError } from "smart-mcp-core";
 import type { CalendarContext } from "../context.js";
 import { mapEvent, eventTimeField, type SlimEvent } from "../event-mapper.js";
+import {
+  attendeesSchema,
+  birthdaySchema,
+  buildBirthdayProperties,
+  buildExtendedPropertiesField,
+  buildFocusTimeProperties,
+  buildMeetConferenceRequest,
+  buildOutOfOfficeProperties,
+  buildRemindersField,
+  buildSourceField,
+  buildWorkingLocationProperties,
+  eventTypeSchema,
+  extendedPropertiesSchema,
+  focusTimeSchema,
+  normalizeAttendees,
+  outOfOfficeSchema,
+  remindersSchema,
+  sendUpdatesSchema,
+  sourceSchema,
+  transparencySchema,
+  visibilitySchema,
+  workingLocationSchema,
+} from "./event-write-fields.js";
 
 // =============================================================================
 // quick_add
@@ -44,17 +67,49 @@ const createEventInputSchema = z.object({
   summary: z.string().min(1),
   start: z.string().min(1),
   end: z.string().min(1),
-  attendees: z.array(z.string().email()).optional(),
+  attendees: attendeesSchema.optional(),
   location: z.string().optional(),
   description: z.string().optional(),
   recurrence: z.array(z.string().min(1)).optional(),
   calendar_id: z.string().optional().default("primary"),
+  // Phase 5.5: extended fields
+  reminders: remindersSchema.optional(),
+  create_meet_link: z.boolean().optional(),
+  color_id: z.string().optional(),
+  visibility: visibilitySchema.optional(),
+  transparency: transparencySchema.optional(),
+  guests_can_invite_others: z.boolean().optional(),
+  guests_can_modify: z.boolean().optional(),
+  guests_can_see_other_guests: z.boolean().optional(),
+  source: sourceSchema.optional(),
+  extended_properties: extendedPropertiesSchema.optional(),
+  send_updates: sendUpdatesSchema.optional(),
+  event_type: eventTypeSchema.optional(),
+  focus_time: focusTimeSchema.optional(),
+  out_of_office: outOfOfficeSchema.optional(),
+  working_location: workingLocationSchema.optional(),
+  birthday: birthdaySchema.optional(),
 });
 
 type CreateEventInput = z.input<typeof createEventInputSchema>;
 type CreateEventParsed = z.infer<typeof createEventInputSchema>;
 
 type CreateEventOutput = { event: SlimEvent };
+
+/**
+ * Determine the default `sendUpdates` value: when attendees are present we
+ * default to "all" so Google sends invite emails (matches user expectation
+ * of "I just invited people, they should hear about it"); otherwise "none".
+ * An explicit `parsed.send_updates` always wins.
+ */
+function resolveCreateSendUpdates(
+  parsed: CreateEventParsed,
+): "all" | "externalOnly" | "none" {
+  if (parsed.send_updates !== undefined) return parsed.send_updates;
+  return parsed.attendees !== undefined && parsed.attendees.length > 0
+    ? "all"
+    : "none";
+}
 
 export const createEventTool = defineTool<
   CreateEventInput,
@@ -68,6 +123,7 @@ export const createEventTool = defineTool<
     createEventInputSchema as unknown as z.ZodType<CreateEventInput>,
   handler: async (input, ctx) => {
     const parsed = input as CreateEventParsed;
+
     // Build the body with only the keys that have values. Strip undefineds
     // explicitly so the upstream payload is minimal — Google echoes back
     // the exact fields we send and we don't want stray `attendees: null`
@@ -78,16 +134,89 @@ export const createEventTool = defineTool<
       end: eventTimeField(parsed.end),
     };
     if (parsed.attendees !== undefined) {
-      body.attendees = parsed.attendees.map((email) => ({ email }));
+      body.attendees = normalizeAttendees(parsed.attendees);
     }
     if (parsed.location !== undefined) body.location = parsed.location;
     if (parsed.description !== undefined) body.description = parsed.description;
     if (parsed.recurrence !== undefined) body.recurrence = parsed.recurrence;
 
-    const raw = await ctx.client.insertEvent({
+    // Extended fields ---------------------------------------------------------
+    if (parsed.reminders !== undefined) {
+      body.reminders = buildRemindersField(parsed.reminders);
+    }
+    if (parsed.create_meet_link === true) {
+      body.conferenceData = buildMeetConferenceRequest();
+    }
+    if (parsed.color_id !== undefined) body.colorId = parsed.color_id;
+    if (parsed.visibility !== undefined) body.visibility = parsed.visibility;
+    if (parsed.transparency !== undefined) {
+      body.transparency = parsed.transparency;
+    }
+    if (parsed.guests_can_invite_others !== undefined) {
+      body.guestsCanInviteOthers = parsed.guests_can_invite_others;
+    }
+    if (parsed.guests_can_modify !== undefined) {
+      body.guestsCanModify = parsed.guests_can_modify;
+    }
+    if (parsed.guests_can_see_other_guests !== undefined) {
+      body.guestsCanSeeOtherGuests = parsed.guests_can_see_other_guests;
+    }
+    if (parsed.source !== undefined) {
+      body.source = buildSourceField(parsed.source);
+    }
+    if (parsed.extended_properties !== undefined) {
+      const ext = buildExtendedPropertiesField(parsed.extended_properties);
+      if (ext !== null) body.extendedProperties = ext;
+    }
+
+    // Event type + per-type properties. Google rejects mismatched property
+    // blocks (e.g. focusTimeProperties on an outOfOffice event), so we only
+    // attach the property block that matches the declared event_type.
+    if (parsed.event_type !== undefined && parsed.event_type !== "default") {
+      body.eventType = parsed.event_type;
+    }
+    if (parsed.event_type === "focusTime" && parsed.focus_time !== undefined) {
+      body.focusTimeProperties = buildFocusTimeProperties(parsed.focus_time);
+    }
+    if (
+      parsed.event_type === "outOfOffice" &&
+      parsed.out_of_office !== undefined
+    ) {
+      body.outOfOfficeProperties = buildOutOfOfficeProperties(
+        parsed.out_of_office,
+      );
+    }
+    if (
+      parsed.event_type === "workingLocation" &&
+      parsed.working_location !== undefined
+    ) {
+      body.workingLocationProperties = buildWorkingLocationProperties(
+        parsed.working_location,
+      );
+    }
+    if (parsed.event_type === "birthday" && parsed.birthday !== undefined) {
+      body.birthdayProperties = buildBirthdayProperties(parsed.birthday);
+    }
+
+    const sendUpdates = resolveCreateSendUpdates(parsed);
+
+    const insertOpts: {
+      calendarId: string;
+      body: Record<string, unknown>;
+      conferenceDataVersion?: 0 | 1;
+      sendUpdates?: "all" | "externalOnly" | "none";
+    } = {
       calendarId: parsed.calendar_id,
       body,
-    });
+    };
+    if (parsed.create_meet_link === true) {
+      insertOpts.conferenceDataVersion = 1;
+    }
+    // Always forward sendUpdates explicitly so behavior is predictable;
+    // the client only attaches a query string when this is set.
+    insertOpts.sendUpdates = sendUpdates;
+
+    const raw = await ctx.client.insertEvent(insertOpts);
     return { event: mapEvent(raw, parsed.calendar_id) };
   },
 });

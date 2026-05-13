@@ -146,6 +146,7 @@ describe("createEventTool — handler", () => {
       client: client as unknown as never,
     });
 
+    // sendUpdates defaults to "none" when there are no attendees.
     expect(client.insertEvent).toHaveBeenCalledWith({
       calendarId: "primary",
       body: {
@@ -153,6 +154,7 @@ describe("createEventTool — handler", () => {
         start: { dateTime: "2026-05-13T10:00:00-05:00" },
         end: { dateTime: "2026-05-13T10:30:00-05:00" },
       },
+      sendUpdates: "none",
     });
     expect(out.event.id).toBe("evt_new");
     expect(out.event.calendar_id).toBe("primary");
@@ -177,6 +179,7 @@ describe("createEventTool — handler", () => {
       client: client as unknown as never,
     });
 
+    // With attendees present, sendUpdates defaults to "all".
     expect(client.insertEvent).toHaveBeenCalledWith({
       calendarId: "cal_work",
       body: {
@@ -191,6 +194,7 @@ describe("createEventTool — handler", () => {
         description: "Weekly check-in",
         recurrence: ["RRULE:FREQ=WEEKLY;BYDAY=MO"],
       },
+      sendUpdates: "all",
     });
   });
 
@@ -217,6 +221,502 @@ describe("createEventTool — handler", () => {
       "start",
       "summary",
     ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// createEventTool — Phase 5.5 extended fields
+// ---------------------------------------------------------------------------
+
+function bodyFromInsert(client: FakeClient): Record<string, unknown> {
+  const call = (client.insertEvent as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as
+    | { body: Record<string, unknown> }
+    | undefined;
+  if (!call) throw new Error("insertEvent was not called");
+  return call.body;
+}
+
+function optsFromInsert(client: FakeClient): Record<string, unknown> {
+  const call = (client.insertEvent as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as
+    | Record<string, unknown>
+    | undefined;
+  if (!call) throw new Error("insertEvent was not called");
+  return call;
+}
+
+describe("createEventTool — reminders", () => {
+  it("forwards { useDefault: false, overrides: [...] } when overrides provided", async () => {
+    const client = makeClient({
+      insertEvent: vi.fn().mockResolvedValue(rawEvent()),
+    });
+    const parsed = createEventTool.inputSchema.parse({
+      summary: "x",
+      start: "2026-05-13T10:00:00-05:00",
+      end: "2026-05-13T10:30:00-05:00",
+      reminders: {
+        overrides: [
+          { method: "popup", minutes: 10 },
+          { method: "email", minutes: 60 },
+        ],
+      },
+    }) as Parameters<typeof createEventTool.handler>[0];
+
+    await createEventTool.handler(parsed, {
+      client: client as unknown as never,
+    });
+    expect(bodyFromInsert(client).reminders).toEqual({
+      useDefault: false,
+      overrides: [
+        { method: "popup", minutes: 10 },
+        { method: "email", minutes: 60 },
+      ],
+    });
+  });
+
+  it("respects use_default=true even when overrides are also provided", async () => {
+    const client = makeClient({
+      insertEvent: vi.fn().mockResolvedValue(rawEvent()),
+    });
+    const parsed = createEventTool.inputSchema.parse({
+      summary: "x",
+      start: "2026-05-13T10:00:00-05:00",
+      end: "2026-05-13T10:30:00-05:00",
+      reminders: {
+        use_default: true,
+        overrides: [{ method: "popup", minutes: 10 }],
+      },
+    }) as Parameters<typeof createEventTool.handler>[0];
+
+    await createEventTool.handler(parsed, {
+      client: client as unknown as never,
+    });
+    expect(bodyFromInsert(client).reminders).toEqual({
+      useDefault: true,
+      overrides: [{ method: "popup", minutes: 10 }],
+    });
+  });
+
+  it("rejects more than 5 reminder overrides", () => {
+    expect(() =>
+      createEventTool.inputSchema.parse({
+        summary: "x",
+        start: "2026-05-13T10:00:00-05:00",
+        end: "2026-05-13T10:30:00-05:00",
+        reminders: {
+          overrides: Array.from({ length: 6 }, (_, i) => ({
+            method: "popup" as const,
+            minutes: i,
+          })),
+        },
+      }),
+    ).toThrow();
+  });
+
+  it("rejects reminder minutes above 40320 (4 weeks)", () => {
+    expect(() =>
+      createEventTool.inputSchema.parse({
+        summary: "x",
+        start: "2026-05-13T10:00:00-05:00",
+        end: "2026-05-13T10:30:00-05:00",
+        reminders: {
+          overrides: [{ method: "popup", minutes: 40321 }],
+        },
+      }),
+    ).toThrow();
+  });
+});
+
+describe("createEventTool — Meet link auto-creation", () => {
+  it("attaches conferenceData.createRequest with hangoutsMeet and conferenceDataVersion=1", async () => {
+    const client = makeClient({
+      insertEvent: vi.fn().mockResolvedValue(rawEvent()),
+    });
+    const parsed = createEventTool.inputSchema.parse({
+      summary: "x",
+      start: "2026-05-13T10:00:00-05:00",
+      end: "2026-05-13T10:30:00-05:00",
+      create_meet_link: true,
+    }) as Parameters<typeof createEventTool.handler>[0];
+
+    await createEventTool.handler(parsed, {
+      client: client as unknown as never,
+    });
+    const opts = optsFromInsert(client);
+    const conf = (opts.body as Record<string, unknown>).conferenceData as {
+      createRequest: {
+        requestId: unknown;
+        conferenceSolutionKey: { type: string };
+      };
+    };
+    expect(conf.createRequest.conferenceSolutionKey).toEqual({
+      type: "hangoutsMeet",
+    });
+    expect(typeof conf.createRequest.requestId).toBe("string");
+    expect((conf.createRequest.requestId as string).length).toBeGreaterThan(0);
+    expect(opts.conferenceDataVersion).toBe(1);
+  });
+
+  it("does NOT attach conferenceData when create_meet_link is omitted", async () => {
+    const client = makeClient({
+      insertEvent: vi.fn().mockResolvedValue(rawEvent()),
+    });
+    const parsed = createEventTool.inputSchema.parse({
+      summary: "x",
+      start: "2026-05-13T10:00:00-05:00",
+      end: "2026-05-13T10:30:00-05:00",
+    }) as Parameters<typeof createEventTool.handler>[0];
+
+    await createEventTool.handler(parsed, {
+      client: client as unknown as never,
+    });
+    const opts = optsFromInsert(client);
+    expect((opts.body as Record<string, unknown>).conferenceData).toBeUndefined();
+    expect(opts.conferenceDataVersion).toBeUndefined();
+  });
+});
+
+describe("createEventTool — color/visibility/transparency/guest perms", () => {
+  it("forwards color_id, visibility, transparency, and the three guests_can_* flags", async () => {
+    const client = makeClient({
+      insertEvent: vi.fn().mockResolvedValue(rawEvent()),
+    });
+    const parsed = createEventTool.inputSchema.parse({
+      summary: "x",
+      start: "2026-05-13T10:00:00-05:00",
+      end: "2026-05-13T10:30:00-05:00",
+      color_id: "5",
+      visibility: "private",
+      transparency: "transparent",
+      guests_can_invite_others: false,
+      guests_can_modify: true,
+      guests_can_see_other_guests: false,
+    }) as Parameters<typeof createEventTool.handler>[0];
+
+    await createEventTool.handler(parsed, {
+      client: client as unknown as never,
+    });
+    const body = bodyFromInsert(client);
+    expect(body.colorId).toBe("5");
+    expect(body.visibility).toBe("private");
+    expect(body.transparency).toBe("transparent");
+    expect(body.guestsCanInviteOthers).toBe(false);
+    expect(body.guestsCanModify).toBe(true);
+    expect(body.guestsCanSeeOtherGuests).toBe(false);
+  });
+});
+
+describe("createEventTool — source / extended_properties", () => {
+  it("forwards source.url and source.title", async () => {
+    const client = makeClient({
+      insertEvent: vi.fn().mockResolvedValue(rawEvent()),
+    });
+    const parsed = createEventTool.inputSchema.parse({
+      summary: "x",
+      start: "2026-05-13T10:00:00-05:00",
+      end: "2026-05-13T10:30:00-05:00",
+      source: { url: "https://docs.example.test/spec", title: "Spec" },
+    }) as Parameters<typeof createEventTool.handler>[0];
+
+    await createEventTool.handler(parsed, {
+      client: client as unknown as never,
+    });
+    expect(bodyFromInsert(client).source).toEqual({
+      url: "https://docs.example.test/spec",
+      title: "Spec",
+    });
+  });
+
+  it("rejects a non-http(s) source URL", () => {
+    expect(() =>
+      createEventTool.inputSchema.parse({
+        summary: "x",
+        start: "2026-05-13T10:00:00-05:00",
+        end: "2026-05-13T10:30:00-05:00",
+        source: { url: "ftp://example.test/file" },
+      }),
+    ).toThrow();
+  });
+
+  it("forwards extended_properties.private and .shared as Google's nested shape", async () => {
+    const client = makeClient({
+      insertEvent: vi.fn().mockResolvedValue(rawEvent()),
+    });
+    const parsed = createEventTool.inputSchema.parse({
+      summary: "x",
+      start: "2026-05-13T10:00:00-05:00",
+      end: "2026-05-13T10:30:00-05:00",
+      extended_properties: {
+        private: { trace_id: "abc" },
+        shared: { project: "alpha" },
+      },
+    }) as Parameters<typeof createEventTool.handler>[0];
+
+    await createEventTool.handler(parsed, {
+      client: client as unknown as never,
+    });
+    expect(bodyFromInsert(client).extendedProperties).toEqual({
+      private: { trace_id: "abc" },
+      shared: { project: "alpha" },
+    });
+  });
+
+  it("omits extendedProperties entirely when both private and shared are empty", async () => {
+    const client = makeClient({
+      insertEvent: vi.fn().mockResolvedValue(rawEvent()),
+    });
+    const parsed = createEventTool.inputSchema.parse({
+      summary: "x",
+      start: "2026-05-13T10:00:00-05:00",
+      end: "2026-05-13T10:30:00-05:00",
+      extended_properties: { private: {}, shared: {} },
+    }) as Parameters<typeof createEventTool.handler>[0];
+
+    await createEventTool.handler(parsed, {
+      client: client as unknown as never,
+    });
+    expect(bodyFromInsert(client).extendedProperties).toBeUndefined();
+  });
+});
+
+describe("createEventTool — event_type focus_time / out_of_office / working_location / birthday", () => {
+  it("focusTime + focus_time builds focusTimeProperties with autoDeclineMode + chatStatus", async () => {
+    const client = makeClient({
+      insertEvent: vi.fn().mockResolvedValue(rawEvent()),
+    });
+    const parsed = createEventTool.inputSchema.parse({
+      summary: "Deep Work",
+      start: "2026-05-13T10:00:00-05:00",
+      end: "2026-05-13T12:00:00-05:00",
+      event_type: "focusTime",
+      focus_time: {
+        auto_decline: "declineAllConflictingInvitations",
+        decline_message: "Heads down — back at noon.",
+        chat_status: "doNotDisturb",
+      },
+    }) as Parameters<typeof createEventTool.handler>[0];
+
+    await createEventTool.handler(parsed, {
+      client: client as unknown as never,
+    });
+    const body = bodyFromInsert(client);
+    expect(body.eventType).toBe("focusTime");
+    expect(body.focusTimeProperties).toEqual({
+      autoDeclineMode: "declineAllConflictingInvitations",
+      declineMessage: "Heads down — back at noon.",
+      chatStatus: "doNotDisturb",
+    });
+  });
+
+  it("outOfOffice + out_of_office builds outOfOfficeProperties", async () => {
+    const client = makeClient({
+      insertEvent: vi.fn().mockResolvedValue(rawEvent()),
+    });
+    const parsed = createEventTool.inputSchema.parse({
+      summary: "OOO",
+      start: "2026-05-13",
+      end: "2026-05-14",
+      event_type: "outOfOffice",
+      out_of_office: {
+        auto_decline: "declineAllConflictingInvitations",
+        decline_message: "Out today.",
+      },
+    }) as Parameters<typeof createEventTool.handler>[0];
+
+    await createEventTool.handler(parsed, {
+      client: client as unknown as never,
+    });
+    const body = bodyFromInsert(client);
+    expect(body.eventType).toBe("outOfOffice");
+    expect(body.outOfOfficeProperties).toEqual({
+      autoDeclineMode: "declineAllConflictingInvitations",
+      declineMessage: "Out today.",
+    });
+  });
+
+  it("workingLocation + working_location.type=homeOffice yields { homeOffice: {} }", async () => {
+    const client = makeClient({
+      insertEvent: vi.fn().mockResolvedValue(rawEvent()),
+    });
+    const parsed = createEventTool.inputSchema.parse({
+      summary: "WFH",
+      start: "2026-05-13",
+      end: "2026-05-14",
+      event_type: "workingLocation",
+      working_location: { type: "homeOffice" },
+    }) as Parameters<typeof createEventTool.handler>[0];
+
+    await createEventTool.handler(parsed, {
+      client: client as unknown as never,
+    });
+    const body = bodyFromInsert(client);
+    expect(body.eventType).toBe("workingLocation");
+    expect(body.workingLocationProperties).toEqual({ homeOffice: {} });
+  });
+
+  it("workingLocation + customLocation + custom_label yields { customLocation: { label } }", async () => {
+    const client = makeClient({
+      insertEvent: vi.fn().mockResolvedValue(rawEvent()),
+    });
+    const parsed = createEventTool.inputSchema.parse({
+      summary: "Cafe",
+      start: "2026-05-13",
+      end: "2026-05-14",
+      event_type: "workingLocation",
+      working_location: { type: "customLocation", custom_label: "The Wild Bean" },
+    }) as Parameters<typeof createEventTool.handler>[0];
+
+    await createEventTool.handler(parsed, {
+      client: client as unknown as never,
+    });
+    const body = bodyFromInsert(client);
+    expect(body.workingLocationProperties).toEqual({
+      customLocation: { label: "The Wild Bean" },
+    });
+  });
+
+  it("birthday + birthday properties forwards type, contact, customTypeName", async () => {
+    const client = makeClient({
+      insertEvent: vi.fn().mockResolvedValue(rawEvent()),
+    });
+    const parsed = createEventTool.inputSchema.parse({
+      summary: "Mom's Birthday",
+      start: "2026-05-15",
+      end: "2026-05-16",
+      event_type: "birthday",
+      birthday: {
+        type: "birthday",
+        contact: "people/c123",
+      },
+    }) as Parameters<typeof createEventTool.handler>[0];
+
+    await createEventTool.handler(parsed, {
+      client: client as unknown as never,
+    });
+    const body = bodyFromInsert(client);
+    expect(body.eventType).toBe("birthday");
+    expect(body.birthdayProperties).toEqual({
+      type: "birthday",
+      contact: "people/c123",
+    });
+  });
+
+  it("event_type=default does NOT add an eventType field (Google's implicit default)", async () => {
+    const client = makeClient({
+      insertEvent: vi.fn().mockResolvedValue(rawEvent()),
+    });
+    const parsed = createEventTool.inputSchema.parse({
+      summary: "x",
+      start: "2026-05-13T10:00:00-05:00",
+      end: "2026-05-13T10:30:00-05:00",
+      event_type: "default",
+    }) as Parameters<typeof createEventTool.handler>[0];
+
+    await createEventTool.handler(parsed, {
+      client: client as unknown as never,
+    });
+    expect(bodyFromInsert(client).eventType).toBeUndefined();
+  });
+
+  it("does not attach focusTimeProperties when event_type is not focusTime", async () => {
+    const client = makeClient({
+      insertEvent: vi.fn().mockResolvedValue(rawEvent()),
+    });
+    const parsed = createEventTool.inputSchema.parse({
+      summary: "x",
+      start: "2026-05-13T10:00:00-05:00",
+      end: "2026-05-13T10:30:00-05:00",
+      // No event_type set, but focus_time is — should be silently ignored.
+      focus_time: { auto_decline: "declineAllConflictingInvitations" },
+    }) as Parameters<typeof createEventTool.handler>[0];
+
+    await createEventTool.handler(parsed, {
+      client: client as unknown as never,
+    });
+    expect(bodyFromInsert(client).focusTimeProperties).toBeUndefined();
+  });
+});
+
+describe("createEventTool — attendees union", () => {
+  it("accepts attendees as an array of objects with optional/response/resource flags", async () => {
+    const client = makeClient({
+      insertEvent: vi.fn().mockResolvedValue(rawEvent()),
+    });
+    const parsed = createEventTool.inputSchema.parse({
+      summary: "x",
+      start: "2026-05-13T10:00:00-05:00",
+      end: "2026-05-13T10:30:00-05:00",
+      attendees: [
+        { email: "bob@example.test", optional: true },
+        { email: "carol@example.test", response: "accepted" },
+        { email: "room-conf-a@example.test", resource: true },
+      ],
+    }) as Parameters<typeof createEventTool.handler>[0];
+
+    await createEventTool.handler(parsed, {
+      client: client as unknown as never,
+    });
+    expect(bodyFromInsert(client).attendees).toEqual([
+      { email: "bob@example.test", optional: true },
+      { email: "carol@example.test", responseStatus: "accepted" },
+      { email: "room-conf-a@example.test", resource: true },
+    ]);
+  });
+
+  it("string attendees still map to bare { email } objects (back-compat)", async () => {
+    const client = makeClient({
+      insertEvent: vi.fn().mockResolvedValue(rawEvent()),
+    });
+    const parsed = createEventTool.inputSchema.parse({
+      summary: "x",
+      start: "2026-05-13T10:00:00-05:00",
+      end: "2026-05-13T10:30:00-05:00",
+      attendees: ["bob@example.test"],
+    }) as Parameters<typeof createEventTool.handler>[0];
+
+    await createEventTool.handler(parsed, {
+      client: client as unknown as never,
+    });
+    expect(bodyFromInsert(client).attendees).toEqual([
+      { email: "bob@example.test" },
+    ]);
+  });
+});
+
+describe("createEventTool — send_updates query param wiring", () => {
+  it("an explicit send_updates wins over the attendee-based default", async () => {
+    const client = makeClient({
+      insertEvent: vi.fn().mockResolvedValue(rawEvent()),
+    });
+    const parsed = createEventTool.inputSchema.parse({
+      summary: "x",
+      start: "2026-05-13T10:00:00-05:00",
+      end: "2026-05-13T10:30:00-05:00",
+      attendees: ["bob@example.test"],
+      send_updates: "none",
+    }) as Parameters<typeof createEventTool.handler>[0];
+
+    await createEventTool.handler(parsed, {
+      client: client as unknown as never,
+    });
+    expect(optsFromInsert(client).sendUpdates).toBe("none");
+  });
+
+  it("forwards send_updates=externalOnly verbatim when provided", async () => {
+    const client = makeClient({
+      insertEvent: vi.fn().mockResolvedValue(rawEvent()),
+    });
+    const parsed = createEventTool.inputSchema.parse({
+      summary: "x",
+      start: "2026-05-13T10:00:00-05:00",
+      end: "2026-05-13T10:30:00-05:00",
+      attendees: ["bob@example.test"],
+      send_updates: "externalOnly",
+    }) as Parameters<typeof createEventTool.handler>[0];
+
+    await createEventTool.handler(parsed, {
+      client: client as unknown as never,
+    });
+    expect(optsFromInsert(client).sendUpdates).toBe("externalOnly");
   });
 });
 
