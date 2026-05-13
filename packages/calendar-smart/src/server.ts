@@ -7,6 +7,10 @@ import {
   weeklyAgendaTool,
   nextEventTool,
 } from "./tools/events-agenda.js";
+import {
+  listCalendarsTool,
+  getCalendarTool,
+} from "./tools/calendars.js";
 
 // Tool registry. Each tool definition is widened to the unknown-input/output
 // shape that `createMcpServer` expects; the per-tool generic types are
@@ -17,6 +21,8 @@ const tools: ToolDefinition<unknown, unknown, CalendarContext>[] = [
   dailyAgendaTool as ToolDefinition<unknown, unknown, CalendarContext>,
   weeklyAgendaTool as ToolDefinition<unknown, unknown, CalendarContext>,
   nextEventTool as ToolDefinition<unknown, unknown, CalendarContext>,
+  listCalendarsTool as ToolDefinition<unknown, unknown, CalendarContext>,
+  getCalendarTool as ToolDefinition<unknown, unknown, CalendarContext>,
 ];
 
 await createMcpServer<CalendarContext>({

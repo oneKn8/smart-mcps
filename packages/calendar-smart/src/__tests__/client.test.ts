@@ -22,6 +22,9 @@ const PRIMARY_LIST_URL = `${CALENDAR_API_BASE}/users/me/calendarList/primary`;
 const PRIMARY_EVENTS_URL = `${CALENDAR_API_BASE}/calendars/primary/events`;
 const PRIMARY_EVENT_URL = (id: string): string =>
   `${CALENDAR_API_BASE}/calendars/primary/events/${id}`;
+const CALENDAR_LIST_URL = `${CALENDAR_API_BASE}/users/me/calendarList`;
+const CALENDAR_LIST_ENTRY_URL = (id: string): string =>
+  `${CALENDAR_API_BASE}/users/me/calendarList/${id}`;
 
 const server = setupServer();
 beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
@@ -379,5 +382,123 @@ describe("CalendarClient.getEvent", () => {
     await expect(
       c.getEvent({ calendarId: "primary", eventId: "evt_missing" }),
     ).rejects.toBeInstanceOf(NotFoundError);
+  });
+});
+
+describe("CalendarClient.listCalendars", () => {
+  it("GETs /users/me/calendarList and returns the items array", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    let bearer: string | null = null;
+    server.use(
+      http.get(CALENDAR_LIST_URL, ({ request }) => {
+        bearer = request.headers.get("authorization");
+        return HttpResponse.json({
+          items: [
+            { id: "primary", summary: "Personal", primary: true },
+            { id: "cal_work", summary: "Work" },
+          ],
+        });
+      }),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    const out = await c.listCalendars();
+    expect(bearer).toBe("Bearer test-access-token");
+    expect(out).toEqual([
+      { id: "primary", summary: "Personal", primary: true },
+      { id: "cal_work", summary: "Work" },
+    ]);
+  });
+
+  it("normalizes a missing items array to []", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    server.use(http.get(CALENDAR_LIST_URL, () => HttpResponse.json({})));
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    const out = await c.listCalendars();
+    expect(out).toEqual([]);
+  });
+});
+
+describe("CalendarClient.getCalendarListEntry", () => {
+  it("GETs /users/me/calendarList/{id} and returns the raw entry", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    server.use(
+      http.get(CALENDAR_LIST_ENTRY_URL("cal_work"), () =>
+        HttpResponse.json({
+          id: "cal_work",
+          summary: "Work",
+          accessRole: "owner",
+          timeZone: "America/Chicago",
+        }),
+      ),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    const out = await c.getCalendarListEntry("cal_work");
+    expect(out).toEqual({
+      id: "cal_work",
+      summary: "Work",
+      accessRole: "owner",
+      timeZone: "America/Chicago",
+    });
+  });
+
+  it("URL-encodes the calendarId", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    let captured: URL | undefined;
+    server.use(
+      http.get(
+        `${CALENDAR_API_BASE}/users/me/calendarList/:calendarId`,
+        ({ request }) => {
+          captured = new URL(request.url);
+          return HttpResponse.json({ id: "x" });
+        },
+      ),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    await c.getCalendarListEntry("alice@example.test");
+    expect(captured?.pathname).toContain("alice%40example.test");
+  });
+
+  it("wraps a 404 from Google as NotFoundError naming the calendar", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    server.use(
+      http.get(CALENDAR_LIST_ENTRY_URL("cal_missing"), () =>
+        HttpResponse.json(
+          { error: { code: 404, message: "Not Found" } },
+          { status: 404 },
+        ),
+      ),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    await expect(c.getCalendarListEntry("cal_missing")).rejects.toMatchObject(
+      {
+        name: "NotFoundError",
+        message: expect.stringContaining("cal_missing"),
+      },
+    );
   });
 });

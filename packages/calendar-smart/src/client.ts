@@ -123,6 +123,51 @@ export class CalendarClient {
   }
 
   /**
+   * GET /users/me/calendarList — every calendar the user has on their list
+   * (owned, subscribed, and shared). Each entry carries `accessRole` and
+   * `primary` (the bare `/calendars/{id}` endpoint does not), which is why
+   * we use this endpoint for the slim calendar mapper. Items are returned
+   * raw; the tool layer maps to SlimCalendar.
+   */
+  async listCalendars(): Promise<unknown[]> {
+    const token = await this.oauthClient.getAccessToken();
+    let raw: { items?: unknown[] };
+    try {
+      raw = await fetchJson<{ items?: unknown[] }>(
+        `${CALENDAR_API_BASE}/users/me/calendarList`,
+        { token },
+      );
+    } catch (err) {
+      throw mapCalendarAuthError(err, this.account);
+    }
+    return raw.items ?? [];
+  }
+
+  /**
+   * GET /users/me/calendarList/{calendarId} — single calendarList entry.
+   * Used over the bare `/calendars/{id}` endpoint because only the
+   * calendarList shape carries `accessRole` and `primary`. A 404 is
+   * rewritten into a NotFoundError naming the calendar id.
+   */
+  async getCalendarListEntry(calendarId: string): Promise<unknown> {
+    const token = await this.oauthClient.getAccessToken();
+    try {
+      return await fetchJson<unknown>(
+        `${CALENDAR_API_BASE}/users/me/calendarList/${encodeURIComponent(calendarId)}`,
+        { token },
+      );
+    } catch (err) {
+      if (err instanceof NotFoundError) {
+        throw new NotFoundError(
+          `Calendar \`${calendarId}\` not found.`,
+          { cause: err },
+        );
+      }
+      throw mapCalendarAuthError(err, this.account);
+    }
+  }
+
+  /**
    * GET /calendars/{calendarId}/events/{eventId} — single event resource.
    * Returns the raw upstream shape so callers feed it to `mapEvent` with
    * the calendar id they already know. A 404 from Google is rewritten
