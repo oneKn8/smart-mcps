@@ -16,7 +16,7 @@ import { runAuth, AUTHORIZATION_URL_BASE } from "../calendar-smart-auth.js";
 
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar";
-const OOB_REDIRECT = "urn:ietf:wg:oauth:2.0:oob";
+const FAKE_REDIRECT = "http://127.0.0.1:54321";
 
 const server = setupServer();
 beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
@@ -81,7 +81,8 @@ describe("runAuth — happy path", () => {
     const result = await runAuth({
       account: "your-account",
       home: tmpHome,
-      codeReader: async () => "auth-code-from-google",
+      redirectUri: FAKE_REDIRECT,
+        codeReader: async () => "auth-code-from-google",
       now: () => new Date("2026-05-13T10:00:00.000Z"),
     });
 
@@ -119,7 +120,7 @@ describe("runAuth — happy path", () => {
       "cal-test-client.apps.googleusercontent.com",
     );
     expect(params.get("client_secret")).toBe("cal-test-secret");
-    expect(params.get("redirect_uri")).toBe(OOB_REDIRECT);
+    expect(params.get("redirect_uri")).toBe(FAKE_REDIRECT);
   });
 
   it("accepts a top-level (non-installed-wrapper) client.json shape", async () => {
@@ -141,7 +142,8 @@ describe("runAuth — happy path", () => {
     const result = await runAuth({
       account: "alice",
       home: tmpHome,
-      codeReader: async () => "the-code",
+      redirectUri: FAKE_REDIRECT,
+        codeReader: async () => "the-code",
       now: () => new Date("2026-01-01T00:00:00.000Z"),
     });
 
@@ -155,7 +157,7 @@ describe("runAuth — happy path", () => {
     // AUTHORIZATION_URL_BASE so the prompt prints the right thing).
     const url = new URL(AUTHORIZATION_URL_BASE);
     url.searchParams.set("client_id", "abc");
-    url.searchParams.set("redirect_uri", OOB_REDIRECT);
+    url.searchParams.set("redirect_uri", FAKE_REDIRECT);
     url.searchParams.set("response_type", "code");
     url.searchParams.set("access_type", "offline");
     url.searchParams.set("prompt", "consent");
@@ -176,6 +178,7 @@ describe("runAuth — error paths", () => {
       runAuth({
         account: "",
         home: tmpHome,
+        redirectUri: FAKE_REDIRECT,
         codeReader: async () => "irrelevant",
       }),
     ).rejects.toThrow(/account/i);
@@ -187,6 +190,7 @@ describe("runAuth — error paths", () => {
       runAuth({
         account: "alice",
         home: tmpHome,
+        redirectUri: FAKE_REDIRECT,
         codeReader: async () => "irrelevant",
       }),
     ).rejects.toThrow(/client\.json/);
@@ -197,6 +201,7 @@ describe("runAuth — error paths", () => {
       await runAuth({
         account: "alice",
         home: tmpHome,
+        redirectUri: FAKE_REDIRECT,
         codeReader: async () => "irrelevant",
       });
       throw new Error("should have thrown");
@@ -213,6 +218,7 @@ describe("runAuth — error paths", () => {
       runAuth({
         account: "alice",
         home: tmpHome,
+        redirectUri: FAKE_REDIRECT,
         codeReader: async () => "x",
       }),
     ).rejects.toThrow(/client_secret/);
@@ -241,6 +247,7 @@ describe("runAuth — error paths", () => {
       runAuth({
         account: "alice",
         home: tmpHome,
+        redirectUri: FAKE_REDIRECT,
         codeReader: async () => "stale-code",
       }),
     ).rejects.toThrow(/invalid_grant|400/);
@@ -272,6 +279,7 @@ describe("runAuth — error paths", () => {
       runAuth({
         account: "alice",
         home: tmpHome,
+        redirectUri: FAKE_REDIRECT,
         codeReader: async () => "code",
       }),
     ).rejects.toThrow(/access_token/);

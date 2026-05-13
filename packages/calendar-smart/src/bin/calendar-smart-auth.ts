@@ -1,26 +1,32 @@
 #!/usr/bin/env node
 import * as fs from "node:fs";
+import * as http from "node:http";
 import * as path from "node:path";
-import * as readline from "node:readline";
+import { AddressInfo } from "node:net";
 
 /**
  * OAuth 2.0 token-mint CLI for calendar-smart. Reads
  * `~/.santo-agent/oauth/client.json` for the Google OAuth client id/secret,
- * prints an authorization URL with the calendar scope, prompts for the code
- * pasted back from the consent screen, exchanges it at the Google token
- * endpoint, and writes the result to
+ * spins up a localhost loopback HTTP server, prints an authorization URL with
+ * the calendar scope and a `redirect_uri=http://127.0.0.1:<port>` parameter,
+ * waits for Google to redirect back with the code, exchanges it at the Google
+ * token endpoint, and writes the result to
  * `~/.santo-agent/oauth/<account>.calendar.json` at mode 0600.
  *
+ * Loopback (not OOB) — Google deprecated `urn:ietf:wg:oauth:2.0:oob` in
+ * October 2022 for installed apps. The user's existing Desktop OAuth client
+ * already has `http://localhost` (and `http://127.0.0.1`) registered as
+ * redirect URIs, matching this flow.
+ *
  * The exchange logic is factored out into `runAuth(...)` so unit tests can
- * inject a deterministic `codeReader` and `now` clock without driving stdin
- * or wall-time.
+ * inject a deterministic `codeReader` and `now` clock without driving real
+ * HTTP or wall-time.
  */
 
 export const TOKEN_URL = "https://oauth2.googleapis.com/token";
 export const AUTHORIZATION_URL_BASE =
   "https://accounts.google.com/o/oauth2/v2/auth";
 export const CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar";
-export const OOB_REDIRECT_URI = "urn:ietf:wg:oauth:2.0:oob";
 
 const CLIENT_JSON_RELATIVE = path.join(".santo-agent", "oauth", "client.json");
 const TOKEN_FILE_SUFFIX = ".calendar.json";
@@ -28,7 +34,9 @@ const TOKEN_FILE_SUFFIX = ".calendar.json";
 export type RunAuthOpts = {
   account: string;
   home: string;
-  /** Async reader for the authorization code pasted by the user. */
+  /** The redirect URI registered on the Google OAuth client; passed back to Google in the token exchange. */
+  redirectUri: string;
+  /** Async reader for the authorization code. In production, the loopback server resolves this. */
   codeReader: () => Promise<string>;
   /** Clock seam for expiry computation. Defaults to `() => new Date()`. */
   now?: () => Date;
@@ -41,12 +49,6 @@ export type RunAuthResult = {
   expiry: string;
 };
 
-/**
- * Shape of the (subset of) `~/.santo-agent/oauth/client.json` we consume.
- * Google's downloaded "Desktop app" file uses the wrapped form
- * `{ installed: { client_id, client_secret, ... } }`; we also accept a flat
- * `{ client_id, client_secret }` for users who have already de-wrapped it.
- */
 type GoogleClientFile =
   | { installed: { client_id?: unknown; client_secret?: unknown } }
   | { client_id?: unknown; client_secret?: unknown };
@@ -59,12 +61,6 @@ type TokenExchangeResponse = {
   token_type?: unknown;
 };
 
-/**
- * Read the OAuth client id + secret from `~/.santo-agent/oauth/client.json`.
- * Throws a clear error if the file is missing or malformed; the user message
- * names the expected path and tells them to download a Desktop-app OAuth
- * client from Google Cloud Console.
- */
 function readClientJson(home: string): { client_id: string; client_secret: string } {
   const clientJsonPath = path.join(home, CLIENT_JSON_RELATIVE);
   if (!fs.existsSync(clientJsonPath)) {
@@ -93,12 +89,13 @@ function readClientJson(home: string): { client_id: string; client_secret: strin
 }
 
 /**
- * Build the consent-screen URL the user opens in their browser.
+ * Build the consent-screen URL the user opens in their browser. `redirectUri`
+ * must match a value registered on the Google OAuth client.
  */
-export function buildAuthorizationUrl(clientId: string): string {
+export function buildAuthorizationUrl(clientId: string, redirectUri: string): string {
   const url = new URL(AUTHORIZATION_URL_BASE);
   url.searchParams.set("client_id", clientId);
-  url.searchParams.set("redirect_uri", OOB_REDIRECT_URI);
+  url.searchParams.set("redirect_uri", redirectUri);
   url.searchParams.set("response_type", "code");
   url.searchParams.set("access_type", "offline");
   url.searchParams.set("prompt", "consent");
@@ -106,10 +103,6 @@ export function buildAuthorizationUrl(clientId: string): string {
   return url.toString();
 }
 
-/**
- * Token-mint flow exposed for testing. The CLI's `main()` wraps this with a
- * stdin-driven `codeReader` and a console logger.
- */
 export async function runAuth(opts: RunAuthOpts): Promise<RunAuthResult> {
   if (!opts.account || opts.account.length === 0) {
     throw new Error(
@@ -121,8 +114,9 @@ export async function runAuth(opts: RunAuthOpts): Promise<RunAuthResult> {
 
   const { client_id, client_secret } = readClientJson(opts.home);
 
-  const authUrl = buildAuthorizationUrl(client_id);
-  log(`Open this URL in your browser, grant access, then paste the code:\n${authUrl}`);
+  const authUrl = buildAuthorizationUrl(client_id, opts.redirectUri);
+  log(`Open this URL in your browser, sign in, and grant access:\n\n${authUrl}\n`);
+  log("Waiting for the redirect to complete...");
 
   const code = (await opts.codeReader()).trim();
   if (!code) {
@@ -133,7 +127,7 @@ export async function runAuth(opts: RunAuthOpts): Promise<RunAuthResult> {
     code,
     client_id,
     client_secret,
-    redirect_uri: OOB_REDIRECT_URI,
+    redirect_uri: opts.redirectUri,
     grant_type: "authorization_code",
   });
 
@@ -162,7 +156,7 @@ export async function runAuth(opts: RunAuthOpts): Promise<RunAuthResult> {
   }
   if (typeof json.refresh_token !== "string" || json.refresh_token.length === 0) {
     throw new Error(
-      "Token exchange response invalid: missing refresh_token. Re-run consent with prompt=consent (the URL printed above already does this — try revoking the app at https://myaccount.google.com/permissions and try again).",
+      "Token exchange response invalid: missing refresh_token. Revoke the app at https://myaccount.google.com/permissions and re-run consent.",
     );
   }
   if (
@@ -208,15 +202,64 @@ export async function runAuth(opts: RunAuthOpts): Promise<RunAuthResult> {
 }
 
 /**
- * stdin-driven prompt used by the CLI entry point. Resolves with the line
- * the user pastes (trim handled by `runAuth`).
+ * Spin up a localhost HTTP server to catch Google's OAuth redirect. Returns
+ * `{ redirectUri, codeReader, close }`. The codeReader resolves with the
+ * `code` query parameter as soon as Google redirects to the loopback URL.
+ *
+ * Binds to 127.0.0.1 explicitly so the registered redirect (which Google
+ * accepts on either `http://localhost` or `http://127.0.0.1`) matches.
  */
-function stdinPrompt(): Promise<string> {
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  return new Promise((resolve) => {
-    rl.question("Paste authorization code: ", (answer) => {
-      rl.close();
-      resolve(answer);
+export function startLoopbackServer(): Promise<{
+  redirectUri: string;
+  codeReader: () => Promise<string>;
+  close: () => void;
+}> {
+  return new Promise((resolve, reject) => {
+    let resolveCode: (code: string) => void;
+    let rejectCode: (err: Error) => void;
+    const codePromise = new Promise<string>((res, rej) => {
+      resolveCode = res;
+      rejectCode = rej;
+    });
+
+    const server = http.createServer((req, res) => {
+      try {
+        const url = new URL(req.url ?? "/", "http://127.0.0.1");
+        const code = url.searchParams.get("code");
+        const error = url.searchParams.get("error");
+        if (error) {
+          res.writeHead(400, { "content-type": "text/plain; charset=utf-8" });
+          res.end(`OAuth error: ${error}. You can close this tab.`);
+          rejectCode(new Error(`OAuth error from Google: ${error}`));
+          return;
+        }
+        if (code) {
+          res.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
+          res.end(
+            "calendar-smart-auth: authorization received. You can close this tab and return to the terminal.",
+          );
+          resolveCode(code);
+          return;
+        }
+        res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+        res.end("not found");
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        res.writeHead(500, { "content-type": "text/plain; charset=utf-8" });
+        res.end(`server error: ${msg}`);
+        rejectCode(err instanceof Error ? err : new Error(msg));
+      }
+    });
+
+    server.once("error", (err) => reject(err));
+    server.listen(0, "127.0.0.1", () => {
+      const addr = server.address() as AddressInfo;
+      const redirectUri = `http://127.0.0.1:${addr.port}`;
+      resolve({
+        redirectUri,
+        codeReader: () => codePromise,
+        close: () => server.close(),
+      });
     });
   });
 }
@@ -235,27 +278,30 @@ async function main(): Promise<void> {
     process.stderr.write("HOME environment variable is not set.\n");
     process.exit(2);
   }
+
+  let loopback: Awaited<ReturnType<typeof startLoopbackServer>> | undefined;
   try {
+    loopback = await startLoopbackServer();
     const result = await runAuth({
       account,
       home,
-      codeReader: stdinPrompt,
+      redirectUri: loopback.redirectUri,
+      codeReader: loopback.codeReader,
       log: (line) => process.stdout.write(line + "\n"),
     });
     process.stdout.write(
-      `OK. Wrote ${result.tokenPath} (expires ${result.expiry}).\n` +
+      `\nOK. Wrote ${result.tokenPath} (expires ${result.expiry}).\n` +
         `Restart Claude Code to pick up calendar-smart.\n`,
     );
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     process.stderr.write(`calendar-smart-auth: ${msg}\n`);
     process.exit(1);
+  } finally {
+    loopback?.close();
   }
 }
 
-// Only run main() when executed directly (not when imported by tests).
-// `import.meta.url` matches `file://${process.argv[1]}` exactly when the file
-// is the entry point under Node's ESM loader.
 if (import.meta.url === `file://${process.argv[1]}`) {
   await main();
 }
