@@ -7,12 +7,26 @@ import { mapEvent, type SlimEvent } from "../event-mapper.js";
 // list_events
 // =============================================================================
 
+const eventTypesFilterSchema = z.array(
+  z.enum([
+    "default",
+    "outOfOffice",
+    "focusTime",
+    "workingLocation",
+    "birthday",
+  ]),
+);
+
 const listEventsInputSchema = z.object({
   calendar_id: z.string().optional().default("primary"),
   time_min: z.string().optional(),
   time_max: z.string().optional(),
   query: z.string().optional(),
   max_results: z.number().int().min(1).max(250).optional().default(50),
+  // Wave 2 filters (additive — no breaking change to existing callers).
+  event_types: eventTypesFilterSchema.optional(),
+  private_extended_property: z.record(z.string(), z.string()).optional(),
+  show_deleted: z.boolean().optional().default(false),
 });
 
 type ListEventsInput = z.input<typeof listEventsInputSchema>;
@@ -36,13 +50,19 @@ export const listEventsTool = defineTool<
   inputSchema: listEventsInputSchema as unknown as z.ZodType<ListEventsInput>,
   handler: async (input, ctx) => {
     const parsed = input as ListEventsParsed;
-    const result = await ctx.client.listEvents({
+    const opts: Parameters<typeof ctx.client.listEvents>[0] = {
       calendarId: parsed.calendar_id,
       timeMin: parsed.time_min,
       timeMax: parsed.time_max,
       q: parsed.query,
       maxResults: parsed.max_results,
-    });
+      showDeleted: parsed.show_deleted,
+    };
+    if (parsed.event_types !== undefined) opts.eventTypes = parsed.event_types;
+    if (parsed.private_extended_property !== undefined) {
+      opts.privateExtendedProperty = parsed.private_extended_property;
+    }
+    const result = await ctx.client.listEvents(opts);
     return {
       events: result.items.map((item) =>
         mapEvent(item, parsed.calendar_id),

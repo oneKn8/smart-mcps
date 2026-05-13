@@ -1243,3 +1243,160 @@ describe("CalendarClient.listInstances", () => {
     ).rejects.toBeInstanceOf(AuthError);
   });
 });
+
+describe("CalendarClient.listEvents — Wave 2 filters", () => {
+  it("forwards eventTypes as a repeated query parameter", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    let captured: URL | undefined;
+    server.use(
+      http.get(PRIMARY_EVENTS_URL, ({ request }) => {
+        captured = new URL(request.url);
+        return HttpResponse.json({ items: [] });
+      }),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    await c.listEvents({
+      calendarId: "primary",
+      eventTypes: ["focusTime", "outOfOffice"],
+    });
+
+    expect(captured?.searchParams.getAll("eventTypes")).toEqual([
+      "focusTime",
+      "outOfOffice",
+    ]);
+  });
+
+  it("forwards privateExtendedProperty as repeated key=value pairs", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    let captured: URL | undefined;
+    server.use(
+      http.get(PRIMARY_EVENTS_URL, ({ request }) => {
+        captured = new URL(request.url);
+        return HttpResponse.json({ items: [] });
+      }),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    await c.listEvents({
+      calendarId: "primary",
+      privateExtendedProperty: { trace_id: "abc-123", project: "alpha" },
+    });
+
+    expect(
+      captured?.searchParams.getAll("privateExtendedProperty").sort(),
+    ).toEqual(["project=alpha", "trace_id=abc-123"].sort());
+  });
+
+  it("forwards showDeleted=true when requested", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    let captured: URL | undefined;
+    server.use(
+      http.get(PRIMARY_EVENTS_URL, ({ request }) => {
+        captured = new URL(request.url);
+        return HttpResponse.json({ items: [] });
+      }),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    await c.listEvents({ calendarId: "primary", showDeleted: true });
+
+    expect(captured?.searchParams.get("showDeleted")).toBe("true");
+  });
+
+  it("syncToken forwards as syncToken and omits incompatible timeMin/timeMax/q/orderBy", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    let captured: URL | undefined;
+    server.use(
+      http.get(PRIMARY_EVENTS_URL, ({ request }) => {
+        captured = new URL(request.url);
+        return HttpResponse.json({
+          items: [],
+          nextSyncToken: "tok_sync_next",
+        });
+      }),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    await c.listEvents({
+      calendarId: "primary",
+      syncToken: "tok_sync_in",
+      // These would normally be forwarded but must be SKIPPED when
+      // syncToken is set (Google rejects the combination).
+      timeMin: "2026-05-13T00:00:00Z",
+      timeMax: "2026-05-14T00:00:00Z",
+      q: "standup",
+    });
+
+    expect(captured?.searchParams.get("syncToken")).toBe("tok_sync_in");
+    expect(captured?.searchParams.get("timeMin")).toBeNull();
+    expect(captured?.searchParams.get("timeMax")).toBeNull();
+    expect(captured?.searchParams.get("q")).toBeNull();
+    expect(captured?.searchParams.get("orderBy")).toBeNull();
+    // singleEvents IS still allowed with syncToken and recommended for parity
+    // with the non-sync path.
+    expect(captured?.searchParams.get("singleEvents")).toBe("true");
+  });
+
+  it("returns nextSyncToken when Google emits one", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    server.use(
+      http.get(PRIMARY_EVENTS_URL, () =>
+        HttpResponse.json({
+          items: [],
+          nextSyncToken: "tok_sync_emitted",
+        }),
+      ),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    const out = await c.listEvents({ calendarId: "primary" });
+    expect(out.nextSyncToken).toBe("tok_sync_emitted");
+  });
+
+  it("returns syncTokenInvalid=true when Google responds 410 Gone", async () => {
+    // Real timers because the retry loop sleeps between 410s on each attempt.
+    vi.useRealTimers();
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2030-05-13T13:00:00.000Z" }),
+    );
+    server.use(
+      http.get(PRIMARY_EVENTS_URL, () =>
+        HttpResponse.json(
+          { error: { code: 410, message: "Sync token expired" } },
+          { status: 410 },
+        ),
+      ),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    const out = await c.listEvents({
+      calendarId: "primary",
+      syncToken: "tok_old",
+    });
+    expect(out.syncTokenInvalid).toBe(true);
+    expect(out.items).toEqual([]);
+  }, 10_000);
+});

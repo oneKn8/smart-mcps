@@ -41,6 +41,36 @@ export type ListEventsOpts = {
   q?: string;
   maxResults?: number;
   pageToken?: string;
+  /**
+   * Wave-2 filters. `eventTypes` and `privateExtendedProperty` need
+   * repeated query-parameter encoding (`?eventTypes=focusTime&eventTypes=outOfOffice`,
+   * `?privateExtendedProperty=key=value&privateExtendedProperty=other=v2`),
+   * which the shared `appendSearch` helper does not support — so listEvents
+   * builds the URL with `URLSearchParams.append` directly when these are set.
+   */
+  eventTypes?: string[];
+  privateExtendedProperty?: Record<string, string>;
+  showDeleted?: boolean;
+  /**
+   * When set, switches the call to incremental sync mode. Google rejects
+   * `timeMin`/`timeMax`/`q`/`orderBy` in combination with `syncToken`, so
+   * this method silently drops those params. `singleEvents=true` IS allowed
+   * and required for sync to work.
+   */
+  syncToken?: string;
+};
+
+export type ListEventsResult = {
+  items: unknown[];
+  nextPageToken?: string;
+  nextSyncToken?: string;
+  /**
+   * Set to `true` when Google returns 410 Gone — the supplied `syncToken`
+   * has expired (Google retains them for ~30 days) and the caller must
+   * restart with no syncToken to do a full resync. `items` is empty in
+   * this case and no token is returned.
+   */
+  syncTokenInvalid?: true;
 };
 
 /**
@@ -489,38 +519,67 @@ export class CalendarClient {
     };
   }
 
-  async listEvents(
-    opts: ListEventsOpts,
-  ): Promise<{ items: unknown[]; nextPageToken?: string }> {
+  async listEvents(opts: ListEventsOpts): Promise<ListEventsResult> {
     const token = await this.oauthClient.getAccessToken();
-    const searchParams: Record<string, string | number | boolean | undefined> =
-      {
-        singleEvents: "true",
-        orderBy: "startTime",
-        maxResults: String(opts.maxResults ?? 50),
-        timeMin: opts.timeMin,
-        timeMax: opts.timeMax,
-        q: opts.q,
-        pageToken: opts.pageToken,
-      };
-    let raw: { items?: unknown[]; nextPageToken?: string };
+    // Build the URL by hand so we can carry repeated query parameters
+    // (`eventTypes` and `privateExtendedProperty` may appear multiple times).
+    // `URL.searchParams.append` preserves duplicates; the shared
+    // `appendSearch` helper in core uses `.set` and would clobber repeats.
+    const url = new URL(
+      `${CALENDAR_API_BASE}/calendars/${encodeURIComponent(opts.calendarId)}/events`,
+    );
+    const params = url.searchParams;
+    params.set("singleEvents", "true");
+    params.set("maxResults", String(opts.maxResults ?? 50));
+    if (opts.syncToken !== undefined) {
+      // Sync mode: Google rejects timeMin/timeMax/q/orderBy when syncToken
+      // is set. We silently drop them so callers can pass a uniform input
+      // shape across both list-by-window and incremental-sync paths.
+      params.set("syncToken", opts.syncToken);
+    } else {
+      params.set("orderBy", "startTime");
+      if (opts.timeMin !== undefined) params.set("timeMin", opts.timeMin);
+      if (opts.timeMax !== undefined) params.set("timeMax", opts.timeMax);
+      if (opts.q !== undefined) params.set("q", opts.q);
+    }
+    if (opts.pageToken !== undefined) params.set("pageToken", opts.pageToken);
+    if (opts.showDeleted === true) params.set("showDeleted", "true");
+    if (opts.eventTypes !== undefined) {
+      for (const t of opts.eventTypes) params.append("eventTypes", t);
+    }
+    if (opts.privateExtendedProperty !== undefined) {
+      for (const [k, v] of Object.entries(opts.privateExtendedProperty)) {
+        params.append("privateExtendedProperty", `${k}=${v}`);
+      }
+    }
+
+    let raw: {
+      items?: unknown[];
+      nextPageToken?: string;
+      nextSyncToken?: string;
+    };
     try {
       raw = await fetchJson<{
         items?: unknown[];
         nextPageToken?: string;
-      }>(
-        `${CALENDAR_API_BASE}/calendars/${encodeURIComponent(opts.calendarId)}/events`,
-        { token, searchParams },
-      );
+        nextSyncToken?: string;
+      }>(url.toString(), { token });
     } catch (err) {
+      // 410 Gone = syncToken expired (Google retains them ~30 days). Return
+      // a clean signal so the caller can restart with no syncToken.
+      if (
+        opts.syncToken !== undefined &&
+        err instanceof UpstreamError &&
+        err.message.includes("→ 410")
+      ) {
+        return { items: [], syncTokenInvalid: true };
+      }
       throw mapCalendarAuthError(err, this.account);
     }
-    return {
-      items: raw.items ?? [],
-      ...(raw.nextPageToken !== undefined
-        ? { nextPageToken: raw.nextPageToken }
-        : {}),
-    };
+    const out: ListEventsResult = { items: raw.items ?? [] };
+    if (raw.nextPageToken !== undefined) out.nextPageToken = raw.nextPageToken;
+    if (raw.nextSyncToken !== undefined) out.nextSyncToken = raw.nextSyncToken;
+    return out;
   }
 }
 

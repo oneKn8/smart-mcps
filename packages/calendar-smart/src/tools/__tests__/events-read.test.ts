@@ -73,6 +73,7 @@ describe("listEventsTool — handler", () => {
       timeMin: undefined,
       timeMax: undefined,
       q: undefined,
+      showDeleted: false,
     });
   });
 
@@ -94,6 +95,29 @@ describe("listEventsTool — handler", () => {
       timeMax: "2026-05-14T00:00:00-05:00",
       q: "standup",
       maxResults: 25,
+      showDeleted: false,
+    });
+  });
+
+  it("forwards Wave-2 filters: event_types, private_extended_property, show_deleted", async () => {
+    const client = makeClient();
+    const parsed = listEventsTool.inputSchema.parse({
+      event_types: ["focusTime", "outOfOffice"],
+      private_extended_property: { trace_id: "abc-123" },
+      show_deleted: true,
+    }) as Parameters<typeof listEventsTool.handler>[0];
+    await listEventsTool.handler(parsed, {
+      client: client as unknown as never,
+    });
+    expect(client.listEvents).toHaveBeenCalledWith({
+      calendarId: "primary",
+      maxResults: 50,
+      timeMin: undefined,
+      timeMax: undefined,
+      q: undefined,
+      eventTypes: ["focusTime", "outOfOffice"],
+      privateExtendedProperty: { trace_id: "abc-123" },
+      showDeleted: true,
     });
   });
 
