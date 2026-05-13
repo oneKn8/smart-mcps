@@ -29,6 +29,14 @@ import {
   eventWithInvitePreviewTool,
   outdoorEventCheckTool,
 } from "./shortcuts.js";
+import {
+  listInstancesTool,
+  updateInstanceTool,
+  cancelInstanceTool,
+  splitRecurrenceTool,
+} from "./events-recurring.js";
+import { searchEventsTool } from "./events-search.js";
+import { syncEventsTool } from "./events-sync.js";
 
 /**
  * Registry of every calendar-smart tool. Imported by both `server.ts` (to
@@ -65,4 +73,13 @@ export const tools = [
   findMeetingTimeTool,
   eventWithInvitePreviewTool,
   outdoorEventCheckTool,
+  // Wave 2: recurring expansion + occurrence ops (4)
+  listInstancesTool,
+  updateInstanceTool,
+  cancelInstanceTool,
+  splitRecurrenceTool,
+  // Wave 2: search (1)
+  searchEventsTool,
+  // Wave 2: incremental sync (1)
+  syncEventsTool,
 ] as unknown as ToolDefinition<unknown, unknown, CalendarContext>[];

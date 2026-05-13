@@ -6,8 +6,8 @@ import { tools } from "../tools/index.js";
 // Counts and the explicit name list both come from the Phase 5 spec.
 
 describe("calendar-smart wire", () => {
-  it("registers exactly 21 tools", () => {
-    expect(tools).toHaveLength(21);
+  it("registers exactly 27 tools", () => {
+    expect(tools).toHaveLength(27);
   });
 
   it("all tool names are snake_case", () => {
@@ -22,7 +22,7 @@ describe("calendar-smart wire", () => {
     expect(new Set(names).size).toBe(names.length);
   });
 
-  it("matches the spec's 21 tool names exactly", () => {
+  it("matches the spec's 27 tool names exactly", () => {
     const expected = [
       // Read agenda (5)
       "list_events",
@@ -50,6 +50,13 @@ describe("calendar-smart wire", () => {
       "find_meeting_time",
       "event_with_invite_preview",
       "outdoor_event_check",
+      // Wave 2: recurring (4) + search (1) + sync (1)
+      "list_instances",
+      "update_instance",
+      "cancel_instance",
+      "split_recurrence",
+      "search_events",
+      "sync_events",
     ].sort();
     expect(tools.map((t) => t.name).sort()).toEqual(expected);
   });
