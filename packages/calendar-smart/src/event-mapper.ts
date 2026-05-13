@@ -11,6 +11,26 @@ export type SlimAttendee = {
 };
 
 /**
+ * Slim source shape. Mirrors Google's `source` block — a URL the event was
+ * created from (e.g. a doc, an email thread). `title` is null when absent.
+ */
+export type SlimSource = {
+  url: string;
+  title: string | null;
+};
+
+/**
+ * Slim extended-properties shape. `private` is single-user metadata visible
+ * only to the calendar owner; `shared` propagates to copies on attendees'
+ * calendars. Both are string→string maps. Returned as `null` when neither
+ * sub-block is present.
+ */
+export type SlimExtendedProperties = {
+  private: Record<string, string>;
+  shared: Record<string, string>;
+};
+
+/**
  * Slim event shape. Strips upstream noise (`iCalUID`, `etag`, `created`,
  * `updated`, `kind`, `reminders`, etc.). Field-stripping is asserted in the
  * mapper unit tests via `Object.keys(...).sort()`.
@@ -21,6 +41,12 @@ export type SlimAttendee = {
  * - For all-day events both fields are bare `YYYY-MM-DD` strings.
  *   `all_day` is the explicit boolean signal so callers do not have to
  *   parse the string format.
+ *
+ * Surface fields added in Phase 5.5 (read-side parity with the expanded
+ * write-side schema): `visibility`, `transparency`, `color_id`,
+ * `event_type`, the three `guests_can_*` permissions, `source`, and
+ * `extended_properties`. All carry sensible Google defaults when the
+ * upstream resource omits them so the slim shape stays total.
  */
 export type SlimEvent = {
   id: string;
@@ -37,6 +63,21 @@ export type SlimEvent = {
   recurrence: string[] | null;
   status: "confirmed" | "tentative" | "cancelled";
   html_link: string;
+  visibility: "default" | "public" | "private" | "confidential";
+  transparency: "opaque" | "transparent";
+  color_id: string | null;
+  event_type:
+    | "default"
+    | "outOfOffice"
+    | "focusTime"
+    | "workingLocation"
+    | "birthday"
+    | "fromGmail";
+  guests_can_invite_others: boolean;
+  guests_can_modify: boolean;
+  guests_can_see_other_guests: boolean;
+  source: SlimSource | null;
+  extended_properties: SlimExtendedProperties | null;
 };
 
 // Conferencing URL detection. Order matters within a single string scan but
@@ -52,6 +93,24 @@ const ATTENDEE_RESPONSES = new Set([
 ]);
 
 const STATUS_VALUES = new Set(["confirmed", "tentative", "cancelled"]);
+
+const VISIBILITY_VALUES = new Set([
+  "default",
+  "public",
+  "private",
+  "confidential",
+]);
+
+const TRANSPARENCY_VALUES = new Set(["opaque", "transparent"]);
+
+const EVENT_TYPE_VALUES = new Set([
+  "default",
+  "outOfOffice",
+  "focusTime",
+  "workingLocation",
+  "birthday",
+  "fromGmail",
+]);
 
 function asObject(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -156,6 +215,77 @@ function pickOrganizerEmail(raw: Record<string, unknown>): string | null {
 }
 
 /**
+ * Default to "default" when the upstream value is missing or unrecognized.
+ * Mirrors Google's documented enum.
+ */
+function pickVisibility(raw: Record<string, unknown>): SlimEvent["visibility"] {
+  if (typeof raw.visibility === "string" && VISIBILITY_VALUES.has(raw.visibility)) {
+    return raw.visibility as SlimEvent["visibility"];
+  }
+  return "default";
+}
+
+function pickTransparency(
+  raw: Record<string, unknown>,
+): SlimEvent["transparency"] {
+  if (
+    typeof raw.transparency === "string" &&
+    TRANSPARENCY_VALUES.has(raw.transparency)
+  ) {
+    return raw.transparency as SlimEvent["transparency"];
+  }
+  return "opaque";
+}
+
+function pickEventType(raw: Record<string, unknown>): SlimEvent["event_type"] {
+  if (
+    typeof raw.eventType === "string" &&
+    EVENT_TYPE_VALUES.has(raw.eventType)
+  ) {
+    return raw.eventType as SlimEvent["event_type"];
+  }
+  return "default";
+}
+
+/**
+ * Extract a string→string sub-map from an `extendedProperties` block. Skips
+ * non-string values silently — Google's docs constrain values to strings,
+ * but we narrow defensively for safety.
+ */
+function pickStringMap(value: unknown): Record<string, string> {
+  const obj = asObject(value);
+  if (!obj) return {};
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (typeof v === "string") out[k] = v;
+  }
+  return out;
+}
+
+function pickExtendedProperties(
+  raw: Record<string, unknown>,
+): SlimExtendedProperties | null {
+  const ext = asObject(raw.extendedProperties);
+  if (!ext) return null;
+  const priv = pickStringMap(ext.private);
+  const shared = pickStringMap(ext.shared);
+  if (Object.keys(priv).length === 0 && Object.keys(shared).length === 0) {
+    return null;
+  }
+  return { private: priv, shared };
+}
+
+function pickSource(raw: Record<string, unknown>): SlimSource | null {
+  const src = asObject(raw.source);
+  if (!src) return null;
+  if (typeof src.url !== "string" || src.url.length === 0) return null;
+  return {
+    url: src.url,
+    title: nullableString(src.title),
+  };
+}
+
+/**
  * Convert a raw Google Calendar event resource into the slim shape.
  * Unknown / missing fields collapse to nulls / empty arrays so the slim
  * shape is total — every key is always present.
@@ -188,6 +318,15 @@ export function mapEvent(raw: unknown, calendarId: string): SlimEvent {
     recurrence: pickRecurrence(obj),
     status: pickStatus(obj),
     html_link: typeof obj.htmlLink === "string" ? obj.htmlLink : "",
+    visibility: pickVisibility(obj),
+    transparency: pickTransparency(obj),
+    color_id: nullableString(obj.colorId),
+    event_type: pickEventType(obj),
+    guests_can_invite_others: obj.guestsCanInviteOthers !== false,
+    guests_can_modify: obj.guestsCanModify === true,
+    guests_can_see_other_guests: obj.guestsCanSeeOtherGuests !== false,
+    source: pickSource(obj),
+    extended_properties: pickExtendedProperties(obj),
   };
 }
 

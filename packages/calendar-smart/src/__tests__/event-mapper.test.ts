@@ -16,6 +16,15 @@ const SLIM_KEYS: ReadonlyArray<keyof SlimEvent> = [
   "recurrence",
   "status",
   "html_link",
+  "visibility",
+  "transparency",
+  "color_id",
+  "event_type",
+  "guests_can_invite_others",
+  "guests_can_modify",
+  "guests_can_see_other_guests",
+  "source",
+  "extended_properties",
 ];
 
 function timedFixture(over: Record<string, unknown> = {}): Record<string, unknown> {
@@ -79,6 +88,172 @@ describe("mapEvent — timed event basics", () => {
   it("returns null organizer_email when organizer block missing", () => {
     const slim = mapEvent(timedFixture(), "primary");
     expect(slim.organizer_email).toBeNull();
+  });
+
+  it("defaults the new SlimEvent fields when upstream omits them", () => {
+    const slim = mapEvent(timedFixture(), "primary");
+    expect(slim.visibility).toBe("default");
+    expect(slim.transparency).toBe("opaque");
+    expect(slim.color_id).toBeNull();
+    expect(slim.event_type).toBe("default");
+    // Google's documented defaults: invite-others=true, modify=false, see-others=true.
+    expect(slim.guests_can_invite_others).toBe(true);
+    expect(slim.guests_can_modify).toBe(false);
+    expect(slim.guests_can_see_other_guests).toBe(true);
+    expect(slim.source).toBeNull();
+    expect(slim.extended_properties).toBeNull();
+  });
+});
+
+describe("mapEvent — visibility / transparency / colorId / eventType", () => {
+  it("passes through a recognized visibility value", () => {
+    const slim = mapEvent(timedFixture({ visibility: "private" }), "primary");
+    expect(slim.visibility).toBe("private");
+  });
+
+  it("collapses an unknown visibility to 'default'", () => {
+    const slim = mapEvent(timedFixture({ visibility: "weird" }), "primary");
+    expect(slim.visibility).toBe("default");
+  });
+
+  it("passes through 'transparent' (free) transparency", () => {
+    const slim = mapEvent(
+      timedFixture({ transparency: "transparent" }),
+      "primary",
+    );
+    expect(slim.transparency).toBe("transparent");
+  });
+
+  it("collapses an unknown transparency to 'opaque'", () => {
+    const slim = mapEvent(timedFixture({ transparency: "weird" }), "primary");
+    expect(slim.transparency).toBe("opaque");
+  });
+
+  it("surfaces colorId verbatim when present", () => {
+    const slim = mapEvent(timedFixture({ colorId: "5" }), "primary");
+    expect(slim.color_id).toBe("5");
+  });
+
+  it("passes through every documented eventType", () => {
+    for (const t of [
+      "default",
+      "outOfOffice",
+      "focusTime",
+      "workingLocation",
+      "birthday",
+      "fromGmail",
+    ] as const) {
+      const slim = mapEvent(timedFixture({ eventType: t }), "primary");
+      expect(slim.event_type).toBe(t);
+    }
+  });
+
+  it("collapses an unknown eventType to 'default'", () => {
+    const slim = mapEvent(timedFixture({ eventType: "weird" }), "primary");
+    expect(slim.event_type).toBe("default");
+  });
+});
+
+describe("mapEvent — guest permissions", () => {
+  it("respects an explicit guestsCanInviteOthers=false (Google's only override)", () => {
+    const slim = mapEvent(
+      timedFixture({ guestsCanInviteOthers: false }),
+      "primary",
+    );
+    expect(slim.guests_can_invite_others).toBe(false);
+  });
+
+  it("respects an explicit guestsCanModify=true", () => {
+    const slim = mapEvent(timedFixture({ guestsCanModify: true }), "primary");
+    expect(slim.guests_can_modify).toBe(true);
+  });
+
+  it("respects an explicit guestsCanSeeOtherGuests=false", () => {
+    const slim = mapEvent(
+      timedFixture({ guestsCanSeeOtherGuests: false }),
+      "primary",
+    );
+    expect(slim.guests_can_see_other_guests).toBe(false);
+  });
+});
+
+describe("mapEvent — source", () => {
+  it("maps a source block with url + title", () => {
+    const slim = mapEvent(
+      timedFixture({
+        source: { url: "https://docs.example.test/agenda", title: "Agenda" },
+      }),
+      "primary",
+    );
+    expect(slim.source).toEqual({
+      url: "https://docs.example.test/agenda",
+      title: "Agenda",
+    });
+  });
+
+  it("title is null when the source block omits it", () => {
+    const slim = mapEvent(
+      timedFixture({ source: { url: "https://docs.example.test/x" } }),
+      "primary",
+    );
+    expect(slim.source).toEqual({ url: "https://docs.example.test/x", title: null });
+  });
+
+  it("returns null when the source block has no url", () => {
+    const slim = mapEvent(timedFixture({ source: { title: "no url" } }), "primary");
+    expect(slim.source).toBeNull();
+  });
+});
+
+describe("mapEvent — extended_properties", () => {
+  it("surfaces both private and shared sub-maps", () => {
+    const slim = mapEvent(
+      timedFixture({
+        extendedProperties: {
+          private: { trace_id: "abc-123" },
+          shared: { project: "alpha" },
+        },
+      }),
+      "primary",
+    );
+    expect(slim.extended_properties).toEqual({
+      private: { trace_id: "abc-123" },
+      shared: { project: "alpha" },
+    });
+  });
+
+  it("missing private/shared sub-blocks default to empty maps when the other is present", () => {
+    const slim = mapEvent(
+      timedFixture({ extendedProperties: { private: { only: "private" } } }),
+      "primary",
+    );
+    expect(slim.extended_properties).toEqual({
+      private: { only: "private" },
+      shared: {},
+    });
+  });
+
+  it("returns null when extendedProperties is present but empty", () => {
+    const slim = mapEvent(
+      timedFixture({ extendedProperties: { private: {}, shared: {} } }),
+      "primary",
+    );
+    expect(slim.extended_properties).toBeNull();
+  });
+
+  it("skips non-string values defensively", () => {
+    const slim = mapEvent(
+      timedFixture({
+        extendedProperties: {
+          private: { good: "ok", bad: 123 as unknown as string },
+        },
+      }),
+      "primary",
+    );
+    expect(slim.extended_properties).toEqual({
+      private: { good: "ok" },
+      shared: {},
+    });
   });
 });
 
@@ -225,7 +400,7 @@ describe("mapEvent — organizer", () => {
 });
 
 describe("mapEvent — field stripping", () => {
-  it("returns exactly the 13 SlimEvent keys (no upstream noise)", () => {
+  it("returns exactly the SlimEvent key set (no upstream noise)", () => {
     const slim = mapEvent(
       timedFixture({
         // Upstream noise that must NOT appear on the slim shape.
@@ -241,7 +416,7 @@ describe("mapEvent — field stripping", () => {
     expect(Object.keys(slim).sort()).toEqual([...SLIM_KEYS].sort());
   });
 
-  it("all-day event also produces exactly the 13 SlimEvent keys", () => {
+  it("all-day event also produces exactly the SlimEvent key set", () => {
     const slim = mapEvent(allDayFixture({ etag: "x" }), "primary");
     expect(Object.keys(slim).sort()).toEqual([...SLIM_KEYS].sort());
   });
