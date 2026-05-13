@@ -16,6 +16,11 @@ import {
   busyBlocksTool,
   conflictsCheckTool,
 } from "./tools/availability.js";
+import {
+  quickAddTool,
+  createEventTool,
+  respondToEventTool,
+} from "./tools/events-create.js";
 
 // Tool registry. Each tool definition is widened to the unknown-input/output
 // shape that `createMcpServer` expects; the per-tool generic types are
@@ -31,6 +36,9 @@ const tools: ToolDefinition<unknown, unknown, CalendarContext>[] = [
   findAvailabilityTool as ToolDefinition<unknown, unknown, CalendarContext>,
   busyBlocksTool as ToolDefinition<unknown, unknown, CalendarContext>,
   conflictsCheckTool as ToolDefinition<unknown, unknown, CalendarContext>,
+  quickAddTool as ToolDefinition<unknown, unknown, CalendarContext>,
+  createEventTool as ToolDefinition<unknown, unknown, CalendarContext>,
+  respondToEventTool as ToolDefinition<unknown, unknown, CalendarContext>,
 ];
 
 await createMcpServer<CalendarContext>({

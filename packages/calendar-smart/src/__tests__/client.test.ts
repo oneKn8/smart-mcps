@@ -97,6 +97,16 @@ describe("CalendarClient — constructor", () => {
     const c = new CalendarClient("alice");
     expect(c.getCachedTimeZone()).toBeUndefined();
   });
+
+  it("getAccountEmail appends @gmail.com when account has no @", () => {
+    const c = new CalendarClient("your-account");
+    expect(c.getAccountEmail()).toBe("your-account@gmail.com");
+  });
+
+  it("getAccountEmail returns account verbatim when it already contains @", () => {
+    const c = new CalendarClient("alice@example.test");
+    expect(c.getAccountEmail()).toBe("alice@example.test");
+  });
 });
 
 describe("CalendarClient.ensureTimeZone", () => {
@@ -624,5 +634,248 @@ describe("CalendarClient.freeBusy", () => {
       name: "AuthError",
       message: expect.stringContaining("calendar-smart-auth"),
     });
+  });
+});
+
+describe("CalendarClient.quickAdd", () => {
+  it("POSTs /calendars/{id}/events/quickAdd?text=... and returns the created event", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    let captured: URL | undefined;
+    let bearer: string | null = null;
+    server.use(
+      http.post(
+        `${PRIMARY_EVENTS_URL}/quickAdd`,
+        ({ request }) => {
+          captured = new URL(request.url);
+          bearer = request.headers.get("authorization");
+          return HttpResponse.json({
+            id: "evt_alpha",
+            summary: "Lunch with Bob",
+          });
+        },
+      ),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    const out = await c.quickAdd({
+      calendarId: "primary",
+      text: "Lunch with Bob tomorrow at noon",
+    });
+
+    expect(bearer).toBe("Bearer test-access-token");
+    expect(captured?.searchParams.get("text")).toBe(
+      "Lunch with Bob tomorrow at noon",
+    );
+    expect(out).toEqual({ id: "evt_alpha", summary: "Lunch with Bob" });
+  });
+
+  it("URL-encodes the calendarId", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    let captured: URL | undefined;
+    server.use(
+      http.post(
+        `${CALENDAR_API_BASE}/calendars/:calendarId/events/quickAdd`,
+        ({ request }) => {
+          captured = new URL(request.url);
+          return HttpResponse.json({ id: "x" });
+        },
+      ),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    await c.quickAdd({
+      calendarId: "alice@example.test",
+      text: "Hello",
+    });
+    expect(captured?.pathname).toContain("alice%40example.test");
+  });
+
+  it("propagates AuthError when the calendar token file is missing", async () => {
+    const c = new CalendarClient("ghost", { home: tmpHome });
+    await expect(
+      c.quickAdd({ calendarId: "primary", text: "x" }),
+    ).rejects.toBeInstanceOf(AuthError);
+  });
+});
+
+describe("CalendarClient.insertEvent", () => {
+  it("POSTs /calendars/{id}/events with the supplied body", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    let captured: unknown;
+    let bearer: string | null = null;
+    server.use(
+      http.post(PRIMARY_EVENTS_URL, async ({ request }) => {
+        bearer = request.headers.get("authorization");
+        captured = await request.json();
+        return HttpResponse.json({
+          id: "evt_alpha",
+          summary: "Coffee",
+        });
+      }),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    const out = await c.insertEvent({
+      calendarId: "primary",
+      body: {
+        summary: "Coffee",
+        start: { dateTime: "2026-05-13T10:00:00-05:00" },
+        end: { dateTime: "2026-05-13T10:30:00-05:00" },
+      },
+    });
+
+    expect(bearer).toBe("Bearer test-access-token");
+    expect(captured).toEqual({
+      summary: "Coffee",
+      start: { dateTime: "2026-05-13T10:00:00-05:00" },
+      end: { dateTime: "2026-05-13T10:30:00-05:00" },
+    });
+    expect(out).toEqual({ id: "evt_alpha", summary: "Coffee" });
+  });
+
+  it("URL-encodes the calendarId", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    let captured: URL | undefined;
+    server.use(
+      http.post(
+        `${CALENDAR_API_BASE}/calendars/:calendarId/events`,
+        ({ request }) => {
+          captured = new URL(request.url);
+          return HttpResponse.json({ id: "x" });
+        },
+      ),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    await c.insertEvent({
+      calendarId: "alice@example.test",
+      body: { summary: "x" },
+    });
+    expect(captured?.pathname).toContain("alice%40example.test");
+  });
+
+  it("propagates AuthError when the calendar token file is missing", async () => {
+    const c = new CalendarClient("ghost", { home: tmpHome });
+    await expect(
+      c.insertEvent({ calendarId: "primary", body: {} }),
+    ).rejects.toBeInstanceOf(AuthError);
+  });
+});
+
+describe("CalendarClient.patchEvent", () => {
+  it("PATCHes /calendars/{id}/events/{eventId} with the supplied body", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    let captured: unknown;
+    let bearer: string | null = null;
+    server.use(
+      http.patch(
+        PRIMARY_EVENT_URL("evt_alpha"),
+        async ({ request }) => {
+          bearer = request.headers.get("authorization");
+          captured = await request.json();
+          return HttpResponse.json({
+            id: "evt_alpha",
+            summary: "Renamed",
+          });
+        },
+      ),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    const out = await c.patchEvent({
+      calendarId: "primary",
+      eventId: "evt_alpha",
+      body: { summary: "Renamed" },
+    });
+
+    expect(bearer).toBe("Bearer test-access-token");
+    expect(captured).toEqual({ summary: "Renamed" });
+    expect(out).toEqual({ id: "evt_alpha", summary: "Renamed" });
+  });
+
+  it("URL-encodes the calendarId and eventId", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    let captured: URL | undefined;
+    server.use(
+      http.patch(
+        `${CALENDAR_API_BASE}/calendars/:calendarId/events/:eventId`,
+        ({ request }) => {
+          captured = new URL(request.url);
+          return HttpResponse.json({ id: "x" });
+        },
+      ),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    await c.patchEvent({
+      calendarId: "alice@example.test",
+      eventId: "evt with spaces",
+      body: {},
+    });
+    expect(captured?.pathname).toContain("alice%40example.test");
+    expect(captured?.pathname).toContain("evt%20with%20spaces");
+  });
+
+  it("wraps a 404 from Google as NotFoundError naming the event", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    server.use(
+      http.patch(PRIMARY_EVENT_URL("evt_missing"), () =>
+        HttpResponse.json(
+          { error: { code: 404, message: "Not Found" } },
+          { status: 404 },
+        ),
+      ),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    await expect(
+      c.patchEvent({
+        calendarId: "primary",
+        eventId: "evt_missing",
+        body: { summary: "x" },
+      }),
+    ).rejects.toMatchObject({
+      name: "NotFoundError",
+      message: expect.stringContaining("evt_missing"),
+    });
+  });
+
+  it("propagates AuthError when the calendar token file is missing", async () => {
+    const c = new CalendarClient("ghost", { home: tmpHome });
+    await expect(
+      c.patchEvent({
+        calendarId: "primary",
+        eventId: "evt_alpha",
+        body: {},
+      }),
+    ).rejects.toBeInstanceOf(AuthError);
   });
 });

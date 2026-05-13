@@ -83,6 +83,20 @@ export class CalendarClient {
   }
 
   /**
+   * Resolve the user's email address from the bound account name. When
+   * `account` already looks like an email (`contains @`) it is returned
+   * verbatim; otherwise we append `@gmail.com`. Used by `respond_to_event`
+   * to find the calling user's attendee record on an event.
+   *
+   * NOTE: this is a pragmatic shortcut, not a verified identity lookup.
+   * For non-Gmail OAuth accounts this would need to read the token's
+   * userinfo profile; out of scope for Phase 5.
+   */
+  getAccountEmail(): string {
+    return this.account.includes("@") ? this.account : `${this.account}@gmail.com`;
+  }
+
+  /**
    * Cached time zone IANA identifier (e.g. `"America/Chicago"`) sourced
    * from the primary calendar. `undefined` until `ensureTimeZone()` runs
    * for the first time on this instance.
@@ -183,6 +197,94 @@ export class CalendarClient {
         `${CALENDAR_API_BASE}/calendars/${encodeURIComponent(opts.calendarId)}` +
           `/events/${encodeURIComponent(opts.eventId)}`,
         { token },
+      );
+    } catch (err) {
+      if (err instanceof NotFoundError) {
+        throw new NotFoundError(
+          `Event \`${opts.eventId}\` not found in \`${opts.calendarId}\`.`,
+          { cause: err },
+        );
+      }
+      throw mapCalendarAuthError(err, this.account);
+    }
+  }
+
+  /**
+   * POST /calendars/{calendarId}/events/quickAdd?text=... — natural-language
+   * event creation. Google parses the free-text string ("Lunch with Bob
+   * tomorrow at noon") and returns the resulting event resource.
+   *
+   * The request body is empty; the parsed text rides on the query string.
+   * Returns the raw event resource so callers can feed it to `mapEvent`.
+   */
+  async quickAdd(opts: {
+    calendarId: string;
+    text: string;
+  }): Promise<unknown> {
+    const token = await this.oauthClient.getAccessToken();
+    try {
+      return await fetchJson<unknown>(
+        `${CALENDAR_API_BASE}/calendars/${encodeURIComponent(opts.calendarId)}` +
+          `/events/quickAdd`,
+        {
+          method: "POST",
+          token,
+          searchParams: { text: opts.text },
+        },
+      );
+    } catch (err) {
+      throw mapCalendarAuthError(err, this.account);
+    }
+  }
+
+  /**
+   * POST /calendars/{calendarId}/events — create an event from a structured
+   * body. The caller is responsible for shaping `body` (start/end as
+   * `{ dateTime }` blocks, attendees as `{ email }` objects, etc.); this
+   * method just wraps auth + transport.
+   */
+  async insertEvent(opts: {
+    calendarId: string;
+    body: Record<string, unknown>;
+  }): Promise<unknown> {
+    const token = await this.oauthClient.getAccessToken();
+    try {
+      return await fetchJson<unknown>(
+        `${CALENDAR_API_BASE}/calendars/${encodeURIComponent(opts.calendarId)}/events`,
+        {
+          method: "POST",
+          token,
+          body: opts.body,
+        },
+      );
+    } catch (err) {
+      throw mapCalendarAuthError(err, this.account);
+    }
+  }
+
+  /**
+   * PATCH /calendars/{calendarId}/events/{eventId} — partial update of an
+   * existing event. Only the fields present in `body` are touched. Used by
+   * `update_event`, `reschedule`, and `respond_to_event`.
+   *
+   * A 404 from Google is rewritten into a NotFoundError that names the
+   * event id and calendar id, matching `getEvent`'s behavior.
+   */
+  async patchEvent(opts: {
+    calendarId: string;
+    eventId: string;
+    body: Record<string, unknown>;
+  }): Promise<unknown> {
+    const token = await this.oauthClient.getAccessToken();
+    try {
+      return await fetchJson<unknown>(
+        `${CALENDAR_API_BASE}/calendars/${encodeURIComponent(opts.calendarId)}` +
+          `/events/${encodeURIComponent(opts.eventId)}`,
+        {
+          method: "PATCH",
+          token,
+          body: opts.body,
+        },
       );
     } catch (err) {
       if (err instanceof NotFoundError) {
