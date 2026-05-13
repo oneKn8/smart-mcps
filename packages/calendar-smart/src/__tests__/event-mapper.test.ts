@@ -25,6 +25,8 @@ const SLIM_KEYS: ReadonlyArray<keyof SlimEvent> = [
   "guests_can_see_other_guests",
   "source",
   "extended_properties",
+  "recurring_event_id",
+  "original_start_time",
 ];
 
 function timedFixture(over: Record<string, unknown> = {}): Record<string, unknown> {
@@ -102,6 +104,42 @@ describe("mapEvent — timed event basics", () => {
     expect(slim.guests_can_see_other_guests).toBe(true);
     expect(slim.source).toBeNull();
     expect(slim.extended_properties).toBeNull();
+    expect(slim.recurring_event_id).toBeNull();
+    expect(slim.original_start_time).toBeNull();
+  });
+});
+
+describe("mapEvent — recurring instance fields", () => {
+  it("surfaces recurringEventId on a recurring instance", () => {
+    const slim = mapEvent(
+      timedFixture({
+        id: "evt_alpha_20260513T150000Z",
+        recurringEventId: "evt_alpha",
+        originalStartTime: { dateTime: "2026-05-13T10:00:00-05:00" },
+      }),
+      "primary",
+    );
+    expect(slim.recurring_event_id).toBe("evt_alpha");
+    expect(slim.original_start_time).toBe("2026-05-13T10:00:00-05:00");
+  });
+
+  it("surfaces originalStartTime as { date } for an all-day instance", () => {
+    const slim = mapEvent(
+      allDayFixture({
+        id: "evt_beta_20260513",
+        recurringEventId: "evt_beta",
+        originalStartTime: { date: "2026-05-13" },
+      }),
+      "primary",
+    );
+    expect(slim.recurring_event_id).toBe("evt_beta");
+    expect(slim.original_start_time).toBe("2026-05-13");
+  });
+
+  it("returns null for both fields on a non-instance event", () => {
+    const slim = mapEvent(timedFixture(), "primary");
+    expect(slim.recurring_event_id).toBeNull();
+    expect(slim.original_start_time).toBeNull();
   });
 });
 

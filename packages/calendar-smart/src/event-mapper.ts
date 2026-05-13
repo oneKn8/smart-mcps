@@ -78,6 +78,19 @@ export type SlimEvent = {
   guests_can_see_other_guests: boolean;
   source: SlimSource | null;
   extended_properties: SlimExtendedProperties | null;
+  /**
+   * For a recurring-series instance: the master series event id. `null` for
+   * one-off events and for the master series itself. Pair with
+   * `original_start_time` to identify which occurrence this is.
+   */
+  recurring_event_id: string | null;
+  /**
+   * For a recurring-series instance: the originally-scheduled start time
+   * (ISO 8601 string for timed events, `YYYY-MM-DD` for all-day). Stays
+   * fixed across per-instance reschedules so callers can detect "this
+   * instance was moved from its original slot". `null` for one-off events.
+   */
+  original_start_time: string | null;
 };
 
 // Conferencing URL detection. Order matters within a single string scan but
@@ -327,7 +340,19 @@ export function mapEvent(raw: unknown, calendarId: string): SlimEvent {
     guests_can_see_other_guests: obj.guestsCanSeeOtherGuests !== false,
     source: pickSource(obj),
     extended_properties: pickExtendedProperties(obj),
+    recurring_event_id: nullableString(obj.recurringEventId),
+    original_start_time: pickOriginalStartTime(obj),
   };
+}
+
+/**
+ * Extract the `originalStartTime` block (present on recurring instances) as
+ * a single ISO/date string. Mirrors `pickTimePoint` but returns the bare
+ * string and tolerates absence (returns `null`).
+ */
+function pickOriginalStartTime(raw: Record<string, unknown>): string | null {
+  const point = pickTimePoint(raw.originalStartTime);
+  return point ? point.iso : null;
 }
 
 /**
