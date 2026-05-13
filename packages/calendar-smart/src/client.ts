@@ -313,6 +313,91 @@ export class CalendarClient {
   }
 
   /**
+   * POST /users/me/calendarList — subscribe to (add to your sidebar) an
+   * existing calendar by id. The body MUST include `id`; optional fields
+   * include `selected`, `hidden`, `colorId`, `backgroundColor`,
+   * `foregroundColor`, `summaryOverride`, etc. Returns the new CalendarList
+   * entry.
+   *
+   * `colorRgbFormat=true` query param tells Google to honor explicit hex
+   * colors (`backgroundColor`/`foregroundColor`) instead of treating them
+   * as a request to use the matching `colorId` palette entry.
+   */
+  async insertCalendarListEntry(opts: {
+    body: Record<string, unknown>;
+    colorRgbFormat?: boolean;
+  }): Promise<unknown> {
+    const token = await this.oauthClient.getAccessToken();
+    const searchParams: Record<string, string | number | boolean | undefined> =
+      {};
+    if (opts.colorRgbFormat === true) {
+      searchParams.colorRgbFormat = true;
+    }
+    try {
+      return await fetchJson<unknown>(
+        `${CALENDAR_API_BASE}/users/me/calendarList`,
+        {
+          method: "POST",
+          token,
+          body: opts.body,
+          ...(Object.keys(searchParams).length > 0 ? { searchParams } : {}),
+        },
+      );
+    } catch (err) {
+      throw mapCalendarAuthError(err, this.account);
+    }
+  }
+
+  /**
+   * PATCH /users/me/calendarList/{calendarId} — partial update of a
+   * subscribed calendar's per-user appearance (color, label, visibility,
+   * default reminders, notification settings). Only fields in `body` are
+   * touched. `colorRgbFormat=true` query enables explicit hex colors.
+   */
+  async patchCalendarListEntry(opts: {
+    calendarId: string;
+    body: Record<string, unknown>;
+    colorRgbFormat?: boolean;
+  }): Promise<unknown> {
+    const token = await this.oauthClient.getAccessToken();
+    const searchParams: Record<string, string | number | boolean | undefined> =
+      {};
+    if (opts.colorRgbFormat === true) {
+      searchParams.colorRgbFormat = true;
+    }
+    try {
+      return await fetchJson<unknown>(
+        `${CALENDAR_API_BASE}/users/me/calendarList/${encodeURIComponent(opts.calendarId)}`,
+        {
+          method: "PATCH",
+          token,
+          body: opts.body,
+          ...(Object.keys(searchParams).length > 0 ? { searchParams } : {}),
+        },
+      );
+    } catch (err) {
+      throw mapCalendarAuthError(err, this.account);
+    }
+  }
+
+  /**
+   * DELETE /users/me/calendarList/{calendarId} — unsubscribe from a
+   * calendar (remove it from the user's sidebar). The underlying calendar
+   * resource is unaffected; the user can re-subscribe later. Returns 204.
+   */
+  async deleteCalendarListEntry(opts: { calendarId: string }): Promise<void> {
+    const token = await this.oauthClient.getAccessToken();
+    try {
+      await fetchJson<unknown>(
+        `${CALENDAR_API_BASE}/users/me/calendarList/${encodeURIComponent(opts.calendarId)}`,
+        { method: "DELETE", token },
+      );
+    } catch (err) {
+      throw mapCalendarAuthError(err, this.account);
+    }
+  }
+
+  /**
    * GET /calendars/{calendarId}/events/{eventId} — single event resource.
    * Returns the raw upstream shape so callers feed it to `mapEvent` with
    * the calendar id they already know. A 404 from Google is rewritten

@@ -1645,3 +1645,240 @@ describe("CalendarClient.clearPrimaryCalendar", () => {
     await expect(c.clearPrimaryCalendar()).rejects.toBeInstanceOf(AuthError);
   });
 });
+
+// =============================================================================
+// Wave 3: CalendarList subscription (insert / patch / delete)
+// =============================================================================
+
+describe("CalendarClient.insertCalendarListEntry", () => {
+  it("POSTs /users/me/calendarList with the supplied body", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    let captured: unknown;
+    let bearer: string | null = null;
+    server.use(
+      http.post(CALENDAR_LIST_URL, async ({ request }) => {
+        bearer = request.headers.get("authorization");
+        captured = await request.json();
+        return HttpResponse.json({
+          id: "cal_team",
+          summary: "Team",
+          accessRole: "reader",
+          timeZone: "America/Chicago",
+        });
+      }),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    const out = await c.insertCalendarListEntry({
+      body: { id: "cal_team", selected: true },
+    });
+
+    expect(bearer).toBe("Bearer test-access-token");
+    expect(captured).toEqual({ id: "cal_team", selected: true });
+    expect(out).toEqual({
+      id: "cal_team",
+      summary: "Team",
+      accessRole: "reader",
+      timeZone: "America/Chicago",
+    });
+  });
+
+  it("forwards colorRgbFormat=true as a query param when set", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    let captured: URL | undefined;
+    server.use(
+      http.post(CALENDAR_LIST_URL, ({ request }) => {
+        captured = new URL(request.url);
+        return HttpResponse.json({ id: "cal_team" });
+      }),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    await c.insertCalendarListEntry({
+      body: { id: "cal_team", backgroundColor: "#ff0000" },
+      colorRgbFormat: true,
+    });
+    expect(captured?.searchParams.get("colorRgbFormat")).toBe("true");
+  });
+
+  it("omits the query string when colorRgbFormat is not set", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    let captured: URL | undefined;
+    server.use(
+      http.post(CALENDAR_LIST_URL, ({ request }) => {
+        captured = new URL(request.url);
+        return HttpResponse.json({ id: "cal_team" });
+      }),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    await c.insertCalendarListEntry({ body: { id: "cal_team" } });
+    expect(captured?.search).toBe("");
+  });
+
+  it("propagates AuthError when the calendar token file is missing", async () => {
+    const c = new CalendarClient("ghost", { home: tmpHome });
+    await expect(
+      c.insertCalendarListEntry({ body: { id: "x" } }),
+    ).rejects.toBeInstanceOf(AuthError);
+  });
+});
+
+describe("CalendarClient.patchCalendarListEntry", () => {
+  it("PATCHes /users/me/calendarList/{id} with the supplied body", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    let captured: unknown;
+    let bearer: string | null = null;
+    server.use(
+      http.patch(CALENDAR_LIST_ENTRY_URL("cal_team"), async ({ request }) => {
+        bearer = request.headers.get("authorization");
+        captured = await request.json();
+        return HttpResponse.json({
+          id: "cal_team",
+          summary: "Team",
+          summaryOverride: "Renamed",
+        });
+      }),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    const out = await c.patchCalendarListEntry({
+      calendarId: "cal_team",
+      body: { summaryOverride: "Renamed", hidden: true },
+    });
+
+    expect(bearer).toBe("Bearer test-access-token");
+    expect(captured).toEqual({
+      summaryOverride: "Renamed",
+      hidden: true,
+    });
+    expect(out).toEqual({
+      id: "cal_team",
+      summary: "Team",
+      summaryOverride: "Renamed",
+    });
+  });
+
+  it("URL-encodes the calendarId", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    let captured: URL | undefined;
+    server.use(
+      http.patch(
+        `${CALENDAR_API_BASE}/users/me/calendarList/:calendarId`,
+        ({ request }) => {
+          captured = new URL(request.url);
+          return HttpResponse.json({ id: "x" });
+        },
+      ),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    await c.patchCalendarListEntry({
+      calendarId: "alice@example.test",
+      body: { hidden: true },
+    });
+    expect(captured?.pathname).toContain("alice%40example.test");
+  });
+
+  it("forwards colorRgbFormat=true as a query param when set", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    let captured: URL | undefined;
+    server.use(
+      http.patch(CALENDAR_LIST_ENTRY_URL("cal_team"), ({ request }) => {
+        captured = new URL(request.url);
+        return HttpResponse.json({ id: "cal_team" });
+      }),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    await c.patchCalendarListEntry({
+      calendarId: "cal_team",
+      body: { backgroundColor: "#00ff00" },
+      colorRgbFormat: true,
+    });
+    expect(captured?.searchParams.get("colorRgbFormat")).toBe("true");
+  });
+
+  it("propagates AuthError when the calendar token file is missing", async () => {
+    const c = new CalendarClient("ghost", { home: tmpHome });
+    await expect(
+      c.patchCalendarListEntry({ calendarId: "x", body: {} }),
+    ).rejects.toBeInstanceOf(AuthError);
+  });
+});
+
+describe("CalendarClient.deleteCalendarListEntry", () => {
+  it("DELETEs /users/me/calendarList/{id} and returns nothing on 204", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    let bearer: string | null = null;
+    server.use(
+      http.delete(CALENDAR_LIST_ENTRY_URL("cal_team"), ({ request }) => {
+        bearer = request.headers.get("authorization");
+        return new HttpResponse(null, { status: 204 });
+      }),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    await expect(
+      c.deleteCalendarListEntry({ calendarId: "cal_team" }),
+    ).resolves.toBeUndefined();
+    expect(bearer).toBe("Bearer test-access-token");
+  });
+
+  it("URL-encodes the calendarId", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    let captured: URL | undefined;
+    server.use(
+      http.delete(
+        `${CALENDAR_API_BASE}/users/me/calendarList/:calendarId`,
+        ({ request }) => {
+          captured = new URL(request.url);
+          return new HttpResponse(null, { status: 204 });
+        },
+      ),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    await c.deleteCalendarListEntry({ calendarId: "alice@example.test" });
+    expect(captured?.pathname).toContain("alice%40example.test");
+  });
+
+  it("propagates AuthError when the calendar token file is missing", async () => {
+    const c = new CalendarClient("ghost", { home: tmpHome });
+    await expect(
+      c.deleteCalendarListEntry({ calendarId: "x" }),
+    ).rejects.toBeInstanceOf(AuthError);
+  });
+});
