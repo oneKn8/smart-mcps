@@ -1,65 +1,7 @@
 #!/usr/bin/env node
-import { createMcpServer, type ToolDefinition } from "smart-mcp-core";
+import { createMcpServer } from "smart-mcp-core";
 import { buildContext, type CalendarContext } from "./context.js";
-import { listEventsTool, getEventTool } from "./tools/events-read.js";
-import {
-  dailyAgendaTool,
-  weeklyAgendaTool,
-  nextEventTool,
-} from "./tools/events-agenda.js";
-import {
-  listCalendarsTool,
-  getCalendarTool,
-} from "./tools/calendars.js";
-import {
-  findAvailabilityTool,
-  busyBlocksTool,
-  conflictsCheckTool,
-} from "./tools/availability.js";
-import {
-  quickAddTool,
-  createEventTool,
-  respondToEventTool,
-} from "./tools/events-create.js";
-import {
-  updateEventTool,
-  rescheduleTool,
-  cancelEventTool,
-} from "./tools/events-update.js";
-import {
-  dailyBriefTool,
-  weeklyBriefTool,
-  findMeetingTimeTool,
-  eventWithInvitePreviewTool,
-  outdoorEventCheckTool,
-} from "./tools/shortcuts.js";
-
-// Tool registry. Each tool definition is widened to the unknown-input/output
-// shape that `createMcpServer` expects; the per-tool generic types are
-// preserved at the source of truth (each tool's `defineTool<...>` call).
-const tools: ToolDefinition<unknown, unknown, CalendarContext>[] = [
-  listEventsTool as ToolDefinition<unknown, unknown, CalendarContext>,
-  getEventTool as ToolDefinition<unknown, unknown, CalendarContext>,
-  dailyAgendaTool as ToolDefinition<unknown, unknown, CalendarContext>,
-  weeklyAgendaTool as ToolDefinition<unknown, unknown, CalendarContext>,
-  nextEventTool as ToolDefinition<unknown, unknown, CalendarContext>,
-  listCalendarsTool as ToolDefinition<unknown, unknown, CalendarContext>,
-  getCalendarTool as ToolDefinition<unknown, unknown, CalendarContext>,
-  findAvailabilityTool as ToolDefinition<unknown, unknown, CalendarContext>,
-  busyBlocksTool as ToolDefinition<unknown, unknown, CalendarContext>,
-  conflictsCheckTool as ToolDefinition<unknown, unknown, CalendarContext>,
-  quickAddTool as ToolDefinition<unknown, unknown, CalendarContext>,
-  createEventTool as ToolDefinition<unknown, unknown, CalendarContext>,
-  respondToEventTool as ToolDefinition<unknown, unknown, CalendarContext>,
-  updateEventTool as ToolDefinition<unknown, unknown, CalendarContext>,
-  rescheduleTool as ToolDefinition<unknown, unknown, CalendarContext>,
-  cancelEventTool as ToolDefinition<unknown, unknown, CalendarContext>,
-  dailyBriefTool as ToolDefinition<unknown, unknown, CalendarContext>,
-  weeklyBriefTool as ToolDefinition<unknown, unknown, CalendarContext>,
-  findMeetingTimeTool as ToolDefinition<unknown, unknown, CalendarContext>,
-  eventWithInvitePreviewTool as ToolDefinition<unknown, unknown, CalendarContext>,
-  outdoorEventCheckTool as ToolDefinition<unknown, unknown, CalendarContext>,
-];
+import { tools } from "./tools/index.js";
 
 await createMcpServer<CalendarContext>({
   name: "calendar-smart",
