@@ -1,13 +1,13 @@
 import { describe, it, expect } from "vitest";
 import { tools } from "../tools/index.js";
 
-// Wire test: the canary that proves all 34 tools land correctly. If a tool
+// Wire test: the canary that proves all 44 tools land correctly. If a tool
 // is added/removed/renamed, exactly one assertion below fires — by design.
 // Counts and the explicit name list both come from the Phase 5 + 5.5 spec.
 
 describe("calendar-smart wire", () => {
-  it("registers exactly 34 tools", () => {
-    expect(tools).toHaveLength(34);
+  it("registers exactly 44 tools", () => {
+    expect(tools).toHaveLength(44);
   });
 
   it("all tool names are snake_case", () => {
@@ -22,7 +22,7 @@ describe("calendar-smart wire", () => {
     expect(new Set(names).size).toBe(names.length);
   });
 
-  it("matches the spec's 34 tool names exactly", () => {
+  it("matches the spec's 44 tool names exactly", () => {
     const expected = [
       // Read agenda (5)
       "list_events",
@@ -66,6 +66,19 @@ describe("calendar-smart wire", () => {
       "subscribe_calendar",
       "unsubscribe_calendar",
       "update_calendar_subscription",
+      // Wave 4: ACL sharing (4)
+      "list_calendar_shares",
+      "share_calendar",
+      "update_calendar_share",
+      "revoke_calendar_share",
+      // Wave 4: settings (2) + colors (1)
+      "list_user_settings",
+      "get_user_setting",
+      "get_colors",
+      // Wave 4: event move (1) + group freebusy (1) + bare metadata (1)
+      "move_event",
+      "freebusy_group",
+      "get_calendar_metadata",
     ].sort();
     expect(tools.map((t) => t.name).sort()).toEqual(expected);
   });

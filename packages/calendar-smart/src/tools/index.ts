@@ -48,6 +48,20 @@ import {
   unsubscribeCalendarTool,
   updateCalendarSubscriptionTool,
 } from "./calendar-subscriptions.js";
+import {
+  listCalendarSharesTool,
+  shareCalendarTool,
+  updateCalendarShareTool,
+  revokeCalendarShareTool,
+} from "./acl.js";
+import {
+  listUserSettingsTool,
+  getUserSettingTool,
+} from "./settings.js";
+import { getColorsTool } from "./colors.js";
+import { moveEventTool } from "./events-move.js";
+import { freebusyGroupTool } from "./freebusy-group.js";
+import { getCalendarMetadataTool } from "./calendar-metadata.js";
 
 /**
  * Registry of every calendar-smart tool. Imported by both `server.ts` (to
@@ -102,4 +116,17 @@ export const tools = [
   subscribeCalendarTool,
   unsubscribeCalendarTool,
   updateCalendarSubscriptionTool,
+  // Wave 4: ACL (sharing) (4)
+  listCalendarSharesTool,
+  shareCalendarTool,
+  updateCalendarShareTool,
+  revokeCalendarShareTool,
+  // Wave 4: settings (2) + colors (1)
+  listUserSettingsTool,
+  getUserSettingTool,
+  getColorsTool,
+  // Wave 4: event-level move (1) + group freebusy (1) + bare metadata (1)
+  moveEventTool,
+  freebusyGroupTool,
+  getCalendarMetadataTool,
 ] as unknown as ToolDefinition<unknown, unknown, CalendarContext>[];
