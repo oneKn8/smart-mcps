@@ -4,19 +4,19 @@
   "private": true,
   "description": "Smart MCP for Google Calendar (read + write), single-account, wraps ~/.santo-agent OAuth token jar.",
   "type": "module",
-  "main": "dist/src/server.js",
+  "main": "dist/server.js",
   "bin": {
-    "calendar-smart": "dist/src/server.js",
+    "calendar-smart": "dist/server.js",
     "calendar-smart-auth": "dist/bin/calendar-smart-auth.js"
   },
   "files": ["dist"],
   "scripts": {
-    "build": "tsc -p tsconfig.json && chmod +x dist/src/server.js dist/bin/calendar-smart-auth.js",
+    "build": "tsc -p tsconfig.json && chmod +x dist/server.js dist/bin/calendar-smart-auth.js",
     "test": "vitest run --passWithNoTests",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src --ext .ts",
-    "smoke": "timeout 3 node dist/src/server.js < /dev/null"
+    "smoke": "timeout 3 node dist/server.js < /dev/null"
   },
   "dependencies": {
     "smart-mcp-core": "*",
