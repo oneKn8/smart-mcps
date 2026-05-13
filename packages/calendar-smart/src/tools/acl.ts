@@ -140,3 +140,124 @@ export const shareCalendarTool = defineTool<
     return { share: mapAclRule(raw) };
   },
 });
+
+// =============================================================================
+// update_calendar_share (destructive — changes permissions, confirm-gated)
+// =============================================================================
+
+const updateCalendarShareInputSchema = z.object({
+  calendar_id: z.string().optional().default("primary"),
+  rule_id: z.string().min(1),
+  role: roleSchema,
+  confirm: z.boolean().optional().default(false),
+});
+
+type UpdateCalendarShareInput = z.input<typeof updateCalendarShareInputSchema>;
+type UpdateCalendarShareParsed = z.infer<
+  typeof updateCalendarShareInputSchema
+>;
+type UpdateCalendarShareOutput = { share: SlimAclRule };
+
+/**
+ * Read the existing rule's `scope` block so the PUT body can carry it
+ * verbatim. Google's PUT requires the full `{ role, scope }` shape; sending
+ * just `role` clears the scope and effectively breaks the rule. The cleaner
+ * "fetch then mutate" flow keeps the tool surface to a single role-change
+ * input without forcing the LLM to know the scope.
+ */
+function readScopeBlock(raw: unknown): Record<string, unknown> {
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    const s = (raw as { scope?: unknown }).scope;
+    if (s && typeof s === "object" && !Array.isArray(s)) {
+      return s as Record<string, unknown>;
+    }
+  }
+  // Defensive default — Google should always return scope, but if it ever
+  // doesn't we'd rather pass a minimal default block than blow up.
+  return { type: "default" };
+}
+
+export const updateCalendarShareTool = defineTool<
+  UpdateCalendarShareInput,
+  UpdateCalendarShareOutput,
+  CalendarContext
+>({
+  name: "update_calendar_share",
+  description: "Change someone's calendar access level",
+  // Cast required because several fields have `.optional().default(...)`.
+  inputSchema:
+    updateCalendarShareInputSchema as unknown as z.ZodType<UpdateCalendarShareInput>,
+  handler: async (input, ctx) => {
+    const parsed = input as UpdateCalendarShareParsed;
+
+    const summary = await readCalendarSummaryOrFallback(
+      ctx,
+      parsed.calendar_id,
+    );
+    const preview =
+      `Change ${parsed.rule_id} on '${summary}' to role: ${parsed.role}`;
+    guardDestructive({ confirm: parsed.confirm, preview });
+
+    // Fetch the existing rule so the PUT body can carry its scope verbatim.
+    // 404s here surface as NotFoundError from the client, which is the
+    // correct behavior (caller is asked to fix the rule_id).
+    const existing = await ctx.client.getAclRule({
+      calendarId: parsed.calendar_id,
+      ruleId: parsed.rule_id,
+    });
+    const scope = readScopeBlock(existing);
+
+    const raw = await ctx.client.updateAclRule({
+      calendarId: parsed.calendar_id,
+      ruleId: parsed.rule_id,
+      body: { role: parsed.role, scope },
+    });
+    return { share: mapAclRule(raw) };
+  },
+});
+
+// =============================================================================
+// revoke_calendar_share (destructive — removes access, confirm-gated)
+// =============================================================================
+
+const revokeCalendarShareInputSchema = z.object({
+  calendar_id: z.string().optional().default("primary"),
+  rule_id: z.string().min(1),
+  confirm: z.boolean().optional().default(false),
+});
+
+type RevokeCalendarShareInput = z.input<typeof revokeCalendarShareInputSchema>;
+type RevokeCalendarShareParsed = z.infer<
+  typeof revokeCalendarShareInputSchema
+>;
+type RevokeCalendarShareOutput = { revoked: true };
+
+export const revokeCalendarShareTool = defineTool<
+  RevokeCalendarShareInput,
+  RevokeCalendarShareOutput,
+  CalendarContext
+>({
+  name: "revoke_calendar_share",
+  description: "Revoke someone's calendar access",
+  // Cast required because several fields have `.optional().default(...)`.
+  inputSchema:
+    revokeCalendarShareInputSchema as unknown as z.ZodType<RevokeCalendarShareInput>,
+  handler: async (input, ctx) => {
+    const parsed = input as RevokeCalendarShareParsed;
+
+    const summary = await readCalendarSummaryOrFallback(
+      ctx,
+      parsed.calendar_id,
+    );
+    const preview =
+      `Revoke ${parsed.rule_id} from calendar '${summary}' ` +
+      `(id: ${parsed.calendar_id})`;
+    guardDestructive({ confirm: parsed.confirm, preview });
+
+    await ctx.client.deleteAclRule({
+      calendarId: parsed.calendar_id,
+      ruleId: parsed.rule_id,
+    });
+    return { revoked: true };
+  },
+});

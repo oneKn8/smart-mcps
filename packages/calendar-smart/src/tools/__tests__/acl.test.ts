@@ -3,6 +3,8 @@ import { ConfirmRequiredError, ValidationError } from "smart-mcp-core";
 import {
   listCalendarSharesTool,
   shareCalendarTool,
+  updateCalendarShareTool,
+  revokeCalendarShareTool,
 } from "../acl.js";
 
 type FakeClient = {
@@ -373,5 +375,210 @@ describe("shareCalendarTool — scope-shape validation", () => {
         client: client as unknown as never,
       }),
     ).rejects.toBeInstanceOf(ValidationError);
+  });
+});
+
+// =============================================================================
+// update_calendar_share
+// =============================================================================
+
+describe("updateCalendarShareTool — metadata", () => {
+  it("name + description + token budget", () => {
+    expect(updateCalendarShareTool.name).toBe("update_calendar_share");
+    expect(updateCalendarShareTool.description).toBe(
+      "Change someone's calendar access level",
+    );
+    expect(
+      updateCalendarShareTool.description.split(/\s+/).length,
+    ).toBeLessThanOrEqual(15);
+  });
+
+  it("requires rule_id and role", () => {
+    expect(() => updateCalendarShareTool.inputSchema.parse({})).toThrow();
+    expect(() =>
+      updateCalendarShareTool.inputSchema.parse({ rule_id: "x" }),
+    ).toThrow();
+  });
+});
+
+describe("updateCalendarShareTool — destructive guard", () => {
+  it("throws ConfirmRequiredError with descriptive preview when confirm is false", async () => {
+    const client = makeClient({
+      getCalendarListEntry: vi.fn().mockResolvedValue(primaryEntry),
+    });
+    const parsed = updateCalendarShareTool.inputSchema.parse({
+      rule_id: "user:alice@example.test",
+      role: "writer",
+    }) as Parameters<typeof updateCalendarShareTool.handler>[0];
+
+    await expect(
+      updateCalendarShareTool.handler(parsed, {
+        client: client as unknown as never,
+      }),
+    ).rejects.toMatchObject({
+      name: "ConfirmRequiredError",
+      preview: expect.stringContaining(
+        "Change user:alice@example.test on 'Personal' to role: writer",
+      ),
+    });
+    expect(client.getAclRule).not.toHaveBeenCalled();
+    expect(client.updateAclRule).not.toHaveBeenCalled();
+  });
+});
+
+describe("updateCalendarShareTool — handler (confirmed)", () => {
+  it("re-fetches the existing rule, mutates only role, and PUTs the full {role,scope} body", async () => {
+    const updated = {
+      id: "user:alice@example.test",
+      role: "writer",
+      scope: { type: "user", value: "alice@example.test" },
+    };
+    const client = makeClient({
+      getCalendarListEntry: vi.fn().mockResolvedValue(primaryEntry),
+      getAclRule: vi.fn().mockResolvedValue(aliceRule),
+      updateAclRule: vi.fn().mockResolvedValue(updated),
+    });
+    const parsed = updateCalendarShareTool.inputSchema.parse({
+      rule_id: "user:alice@example.test",
+      role: "writer",
+      confirm: true,
+    }) as Parameters<typeof updateCalendarShareTool.handler>[0];
+
+    const out = await updateCalendarShareTool.handler(parsed, {
+      client: client as unknown as never,
+    });
+
+    expect(client.getAclRule).toHaveBeenCalledWith({
+      calendarId: "primary",
+      ruleId: "user:alice@example.test",
+    });
+    expect(client.updateAclRule).toHaveBeenCalledWith({
+      calendarId: "primary",
+      ruleId: "user:alice@example.test",
+      body: {
+        role: "writer",
+        scope: { type: "user", value: "alice@example.test" },
+      },
+    });
+    expect(out.share).toEqual({
+      id: "user:alice@example.test",
+      role: "writer",
+      scope_type: "user",
+      scope_value: "alice@example.test",
+    });
+  });
+
+  it("preserves a default-scope block when updating a public rule", async () => {
+    const updated = {
+      id: "default",
+      role: "reader",
+      scope: { type: "default" },
+    };
+    const client = makeClient({
+      getCalendarListEntry: vi.fn().mockResolvedValue(primaryEntry),
+      getAclRule: vi.fn().mockResolvedValue(defaultRule),
+      updateAclRule: vi.fn().mockResolvedValue(updated),
+    });
+    const parsed = updateCalendarShareTool.inputSchema.parse({
+      rule_id: "default",
+      role: "reader",
+      confirm: true,
+    }) as Parameters<typeof updateCalendarShareTool.handler>[0];
+
+    await updateCalendarShareTool.handler(parsed, {
+      client: client as unknown as never,
+    });
+
+    expect(client.updateAclRule).toHaveBeenCalledWith({
+      calendarId: "primary",
+      ruleId: "default",
+      body: { role: "reader", scope: { type: "default" } },
+    });
+  });
+
+  it("propagates a getAclRule failure (NotFoundError) without calling updateAclRule", async () => {
+    const client = makeClient({
+      getCalendarListEntry: vi.fn().mockResolvedValue(primaryEntry),
+      getAclRule: vi.fn().mockRejectedValue(new Error("not found")),
+    });
+    const parsed = updateCalendarShareTool.inputSchema.parse({
+      rule_id: "user:ghost@example.test",
+      role: "reader",
+      confirm: true,
+    }) as Parameters<typeof updateCalendarShareTool.handler>[0];
+
+    await expect(
+      updateCalendarShareTool.handler(parsed, {
+        client: client as unknown as never,
+      }),
+    ).rejects.toThrow();
+    expect(client.updateAclRule).not.toHaveBeenCalled();
+  });
+});
+
+// =============================================================================
+// revoke_calendar_share
+// =============================================================================
+
+describe("revokeCalendarShareTool — metadata", () => {
+  it("name + description + token budget", () => {
+    expect(revokeCalendarShareTool.name).toBe("revoke_calendar_share");
+    expect(revokeCalendarShareTool.description).toBe(
+      "Revoke someone's calendar access",
+    );
+    expect(
+      revokeCalendarShareTool.description.split(/\s+/).length,
+    ).toBeLessThanOrEqual(15);
+  });
+
+  it("requires rule_id", () => {
+    expect(() => revokeCalendarShareTool.inputSchema.parse({})).toThrow();
+  });
+});
+
+describe("revokeCalendarShareTool — destructive guard", () => {
+  it("throws ConfirmRequiredError with descriptive preview when confirm is false", async () => {
+    const client = makeClient({
+      getCalendarListEntry: vi.fn().mockResolvedValue(primaryEntry),
+    });
+    const parsed = revokeCalendarShareTool.inputSchema.parse({
+      rule_id: "user:alice@example.test",
+    }) as Parameters<typeof revokeCalendarShareTool.handler>[0];
+
+    await expect(
+      revokeCalendarShareTool.handler(parsed, {
+        client: client as unknown as never,
+      }),
+    ).rejects.toMatchObject({
+      name: "ConfirmRequiredError",
+      preview: expect.stringContaining(
+        "Revoke user:alice@example.test from calendar 'Personal' (id: primary)",
+      ),
+    });
+    expect(client.deleteAclRule).not.toHaveBeenCalled();
+  });
+});
+
+describe("revokeCalendarShareTool — handler (confirmed)", () => {
+  it("calls deleteAclRule with the supplied calendar_id + rule_id", async () => {
+    const client = makeClient({
+      getCalendarListEntry: vi.fn().mockResolvedValue(primaryEntry),
+      deleteAclRule: vi.fn().mockResolvedValue(undefined),
+    });
+    const parsed = revokeCalendarShareTool.inputSchema.parse({
+      calendar_id: "cal_work",
+      rule_id: "user:alice@example.test",
+      confirm: true,
+    }) as Parameters<typeof revokeCalendarShareTool.handler>[0];
+
+    const out = await revokeCalendarShareTool.handler(parsed, {
+      client: client as unknown as never,
+    });
+
+    expect(client.deleteAclRule).toHaveBeenCalledWith({
+      calendarId: "cal_work",
+      ruleId: "user:alice@example.test",
+    });
+    expect(out).toEqual({ revoked: true });
   });
 });
