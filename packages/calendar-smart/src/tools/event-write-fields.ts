@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
+import { eventTimeField } from "../event-mapper.js";
 
 /**
  * Shared zod schemas + body-building helpers for the extended write-side
@@ -266,4 +267,109 @@ export function buildBirthdayProperties(
     out.customTypeName = bd.custom_type_name;
   }
   return out;
+}
+
+/**
+ * Shared parsed-input shape for update_event / update_instance. Both tools
+ * accept the same field set (minus the id field, which differs by name).
+ * `event_type` is intentionally omitted — Google forbids changing the
+ * event type after insert and the caller-side guard rejects it before the
+ * body is built.
+ */
+export type UpdateEventBodyInput = {
+  summary?: string;
+  start?: string;
+  end?: string;
+  location?: string;
+  description?: string;
+  attendees?: AttendeesInput;
+  recurrence?: string[];
+  reminders?: RemindersInput;
+  create_meet_link?: boolean;
+  color_id?: string;
+  visibility?:
+    | "default"
+    | "public"
+    | "private"
+    | "confidential";
+  transparency?: "opaque" | "transparent";
+  guests_can_invite_others?: boolean;
+  guests_can_modify?: boolean;
+  guests_can_see_other_guests?: boolean;
+  source?: SourceInput;
+  extended_properties?: ExtendedPropertiesInput;
+  focus_time?: FocusTimeInput;
+  out_of_office?: OutOfOfficeInput;
+  working_location?: WorkingLocationInput;
+  birthday?: BirthdayInput;
+};
+
+/**
+ * Build the PATCH body for an event update. Only the fields actually
+ * present on the input are added to the body — Google's PATCH leaves
+ * untouched fields alone, which is the user intent.
+ *
+ * Mirrors the per-type-property attachment policy from update_event: each
+ * property block is forwarded unconditionally (no event_type gating).
+ * Google validates the property block matches the event's existing type
+ * and surfaces a clear error if it doesn't.
+ */
+export function buildUpdateEventBody(
+  parsed: UpdateEventBodyInput,
+): Record<string, unknown> {
+  const body: Record<string, unknown> = {};
+  if (parsed.summary !== undefined) body.summary = parsed.summary;
+  if (parsed.start !== undefined) body.start = eventTimeField(parsed.start);
+  if (parsed.end !== undefined) body.end = eventTimeField(parsed.end);
+  if (parsed.location !== undefined) body.location = parsed.location;
+  if (parsed.description !== undefined) body.description = parsed.description;
+  if (parsed.attendees !== undefined) {
+    body.attendees = normalizeAttendees(parsed.attendees);
+  }
+  if (parsed.recurrence !== undefined) body.recurrence = parsed.recurrence;
+
+  if (parsed.reminders !== undefined) {
+    body.reminders = buildRemindersField(parsed.reminders);
+  }
+  if (parsed.create_meet_link === true) {
+    body.conferenceData = buildMeetConferenceRequest();
+  }
+  if (parsed.color_id !== undefined) body.colorId = parsed.color_id;
+  if (parsed.visibility !== undefined) body.visibility = parsed.visibility;
+  if (parsed.transparency !== undefined) {
+    body.transparency = parsed.transparency;
+  }
+  if (parsed.guests_can_invite_others !== undefined) {
+    body.guestsCanInviteOthers = parsed.guests_can_invite_others;
+  }
+  if (parsed.guests_can_modify !== undefined) {
+    body.guestsCanModify = parsed.guests_can_modify;
+  }
+  if (parsed.guests_can_see_other_guests !== undefined) {
+    body.guestsCanSeeOtherGuests = parsed.guests_can_see_other_guests;
+  }
+  if (parsed.source !== undefined) {
+    body.source = buildSourceField(parsed.source);
+  }
+  if (parsed.extended_properties !== undefined) {
+    const ext = buildExtendedPropertiesField(parsed.extended_properties);
+    if (ext !== null) body.extendedProperties = ext;
+  }
+  if (parsed.focus_time !== undefined) {
+    body.focusTimeProperties = buildFocusTimeProperties(parsed.focus_time);
+  }
+  if (parsed.out_of_office !== undefined) {
+    body.outOfOfficeProperties = buildOutOfOfficeProperties(
+      parsed.out_of_office,
+    );
+  }
+  if (parsed.working_location !== undefined) {
+    body.workingLocationProperties = buildWorkingLocationProperties(
+      parsed.working_location,
+    );
+  }
+  if (parsed.birthday !== undefined) {
+    body.birthdayProperties = buildBirthdayProperties(parsed.birthday);
+  }
+  return body;
 }

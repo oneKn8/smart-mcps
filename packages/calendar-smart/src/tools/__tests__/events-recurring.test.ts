@@ -1,6 +1,14 @@
 import { describe, it, expect, vi } from "vitest";
 import { z } from "zod";
-import { listInstancesTool } from "../events-recurring.js";
+import {
+  ConfirmRequiredError,
+  ValidationError,
+} from "smart-mcp-core";
+import {
+  listInstancesTool,
+  updateInstanceTool,
+  cancelInstanceTool,
+} from "../events-recurring.js";
 
 type FakeClient = {
   listInstances?: ReturnType<typeof vi.fn>;
@@ -163,5 +171,205 @@ describe("listInstancesTool — handler", () => {
       client: client as unknown as never,
     });
     expect(out.instances[0]?.calendar_id).toBe("cal_work");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// updateInstanceTool
+// ---------------------------------------------------------------------------
+
+describe("updateInstanceTool — metadata", () => {
+  it("name and short description fit the budget", () => {
+    expect(updateInstanceTool.name).toBe("update_instance");
+    expect(
+      updateInstanceTool.description.split(/\s+/).length,
+    ).toBeLessThanOrEqual(15);
+  });
+
+  it("inputSchema requires instance_id and defaults calendar_id", () => {
+    expect(() => updateInstanceTool.inputSchema.parse({})).toThrow();
+    const parsed = updateInstanceTool.inputSchema.parse({
+      instance_id: "evt_alpha_20260513T150000Z",
+    }) as { calendar_id: string };
+    expect(parsed.calendar_id).toBe("primary");
+  });
+});
+
+describe("updateInstanceTool — handler", () => {
+  it("PATCHes the instance id with the supplied fields", async () => {
+    const client = makeClient({
+      patchEvent: vi.fn().mockResolvedValue(rawInstance({ summary: "Renamed" })),
+    });
+    const parsed = updateInstanceTool.inputSchema.parse({
+      instance_id: "evt_alpha_20260513T150000Z",
+      summary: "Renamed",
+      location: "Conf Room A",
+    }) as Parameters<typeof updateInstanceTool.handler>[0];
+
+    await updateInstanceTool.handler(parsed, {
+      client: client as unknown as never,
+    });
+
+    expect(client.patchEvent).toHaveBeenCalledWith({
+      calendarId: "primary",
+      eventId: "evt_alpha_20260513T150000Z",
+      body: { summary: "Renamed", location: "Conf Room A" },
+      sendUpdates: "none",
+    });
+  });
+
+  it("rejects event_type on instance updates with a ValidationError", () => {
+    expect(() =>
+      updateInstanceTool.inputSchema.parse({
+        instance_id: "evt_alpha_20260513T150000Z",
+        event_type: "focusTime",
+      }),
+    ).not.toThrow(); // schema accepts it; guard fires in handler
+
+    const parsed = updateInstanceTool.inputSchema.parse({
+      instance_id: "evt_alpha_20260513T150000Z",
+      event_type: "focusTime",
+    }) as Parameters<typeof updateInstanceTool.handler>[0];
+
+    return expect(
+      updateInstanceTool.handler(parsed, {
+        client: makeClient() as unknown as never,
+      }),
+    ).rejects.toBeInstanceOf(ValidationError);
+  });
+
+  it("forwards conferenceDataVersion=1 when create_meet_link is true", async () => {
+    const client = makeClient({
+      patchEvent: vi.fn().mockResolvedValue(rawInstance()),
+    });
+    const parsed = updateInstanceTool.inputSchema.parse({
+      instance_id: "evt_alpha_20260513T150000Z",
+      create_meet_link: true,
+    }) as Parameters<typeof updateInstanceTool.handler>[0];
+
+    await updateInstanceTool.handler(parsed, {
+      client: client as unknown as never,
+    });
+
+    const call = (client.patchEvent as ReturnType<typeof vi.fn>).mock
+      .calls[0]?.[0];
+    expect(call.conferenceDataVersion).toBe(1);
+  });
+
+  it("returns the mapped SlimEvent of the patched instance", async () => {
+    const client = makeClient({
+      patchEvent: vi.fn().mockResolvedValue(rawInstance({ summary: "Done" })),
+    });
+    const parsed = updateInstanceTool.inputSchema.parse({
+      instance_id: "evt_alpha_20260513T150000Z",
+      summary: "Done",
+    }) as Parameters<typeof updateInstanceTool.handler>[0];
+
+    const out = await updateInstanceTool.handler(parsed, {
+      client: client as unknown as never,
+    });
+    expect(out.event.summary).toBe("Done");
+    expect(out.event.recurring_event_id).toBe("evt_alpha");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cancelInstanceTool
+// ---------------------------------------------------------------------------
+
+describe("cancelInstanceTool — metadata", () => {
+  it("name and short description fit the budget", () => {
+    expect(cancelInstanceTool.name).toBe("cancel_instance");
+    expect(
+      cancelInstanceTool.description.split(/\s+/).length,
+    ).toBeLessThanOrEqual(15);
+  });
+});
+
+describe("cancelInstanceTool — handler", () => {
+  it("throws ConfirmRequiredError with a meaningful preview when confirm=false", async () => {
+    const client = makeClient({
+      getEvent: vi.fn().mockResolvedValue(rawInstance({ summary: "Standup" })),
+      getCalendarListEntry: vi
+        .fn()
+        .mockResolvedValue({ id: "primary", summary: "Personal" }),
+    });
+    const parsed = cancelInstanceTool.inputSchema.parse({
+      instance_id: "evt_alpha_20260513T150000Z",
+    }) as Parameters<typeof cancelInstanceTool.handler>[0];
+
+    await expect(
+      cancelInstanceTool.handler(parsed, {
+        client: client as unknown as never,
+      }),
+    ).rejects.toBeInstanceOf(ConfirmRequiredError);
+    await expect(
+      cancelInstanceTool.handler(parsed, {
+        client: client as unknown as never,
+      }),
+    ).rejects.toMatchObject({
+      preview: expect.stringContaining("Standup"),
+    });
+    // patchEvent must NOT have been called yet.
+    expect(client.patchEvent).not.toHaveBeenCalled();
+  });
+
+  it("preview names the originalStartTime when present", async () => {
+    const client = makeClient({
+      getEvent: vi.fn().mockResolvedValue(rawInstance()),
+    });
+    const parsed = cancelInstanceTool.inputSchema.parse({
+      instance_id: "evt_alpha_20260513T150000Z",
+    }) as Parameters<typeof cancelInstanceTool.handler>[0];
+
+    await expect(
+      cancelInstanceTool.handler(parsed, {
+        client: client as unknown as never,
+      }),
+    ).rejects.toMatchObject({
+      preview: expect.stringContaining("2026-05-13T10:00:00-05:00"),
+    });
+  });
+
+  it("PATCHes the instance with status=cancelled when confirm=true", async () => {
+    const client = makeClient({
+      getEvent: vi.fn().mockResolvedValue(rawInstance()),
+      patchEvent: vi.fn().mockResolvedValue({}),
+    });
+    const parsed = cancelInstanceTool.inputSchema.parse({
+      instance_id: "evt_alpha_20260513T150000Z",
+      confirm: true,
+    }) as Parameters<typeof cancelInstanceTool.handler>[0];
+
+    const out = await cancelInstanceTool.handler(parsed, {
+      client: client as unknown as never,
+    });
+
+    expect(client.patchEvent).toHaveBeenCalledWith({
+      calendarId: "primary",
+      eventId: "evt_alpha_20260513T150000Z",
+      body: { status: "cancelled" },
+    });
+    expect(out).toEqual({ cancelled: true });
+  });
+
+  it("falls back to the bare calendar id when getCalendarListEntry fails", async () => {
+    const client = makeClient({
+      getEvent: vi.fn().mockResolvedValue(rawInstance()),
+      getCalendarListEntry: vi
+        .fn()
+        .mockRejectedValue(new Error("boom")),
+    });
+    const parsed = cancelInstanceTool.inputSchema.parse({
+      instance_id: "evt_alpha_20260513T150000Z",
+    }) as Parameters<typeof cancelInstanceTool.handler>[0];
+
+    await expect(
+      cancelInstanceTool.handler(parsed, {
+        client: client as unknown as never,
+      }),
+    ).rejects.toMatchObject({
+      preview: expect.stringContaining("primary"),
+    });
   });
 });

@@ -5,18 +5,10 @@ import { mapEvent, eventTimeField, type SlimEvent } from "../event-mapper.js";
 import {
   attendeesSchema,
   birthdaySchema,
-  buildBirthdayProperties,
-  buildExtendedPropertiesField,
-  buildFocusTimeProperties,
-  buildMeetConferenceRequest,
-  buildOutOfOfficeProperties,
-  buildRemindersField,
-  buildSourceField,
-  buildWorkingLocationProperties,
+  buildUpdateEventBody,
   eventTypeSchema,
   extendedPropertiesSchema,
   focusTimeSchema,
-  normalizeAttendees,
   outOfOfficeSchema,
   remindersSchema,
   sendUpdatesSchema,
@@ -92,67 +84,8 @@ export const updateEventTool = defineTool<
 
     // Build the patch with only provided fields. Omitted fields are NOT sent;
     // Google's PATCH leaves untouched fields alone, which is the user intent.
-    const body: Record<string, unknown> = {};
-    if (parsed.summary !== undefined) body.summary = parsed.summary;
-    if (parsed.start !== undefined) body.start = eventTimeField(parsed.start);
-    if (parsed.end !== undefined) body.end = eventTimeField(parsed.end);
-    if (parsed.location !== undefined) body.location = parsed.location;
-    if (parsed.description !== undefined) body.description = parsed.description;
-    if (parsed.attendees !== undefined) {
-      body.attendees = normalizeAttendees(parsed.attendees);
-    }
-    if (parsed.recurrence !== undefined) body.recurrence = parsed.recurrence;
-
-    // Extended fields ---------------------------------------------------------
-    if (parsed.reminders !== undefined) {
-      body.reminders = buildRemindersField(parsed.reminders);
-    }
-    if (parsed.create_meet_link === true) {
-      body.conferenceData = buildMeetConferenceRequest();
-    }
-    if (parsed.color_id !== undefined) body.colorId = parsed.color_id;
-    if (parsed.visibility !== undefined) body.visibility = parsed.visibility;
-    if (parsed.transparency !== undefined) {
-      body.transparency = parsed.transparency;
-    }
-    if (parsed.guests_can_invite_others !== undefined) {
-      body.guestsCanInviteOthers = parsed.guests_can_invite_others;
-    }
-    if (parsed.guests_can_modify !== undefined) {
-      body.guestsCanModify = parsed.guests_can_modify;
-    }
-    if (parsed.guests_can_see_other_guests !== undefined) {
-      body.guestsCanSeeOtherGuests = parsed.guests_can_see_other_guests;
-    }
-    if (parsed.source !== undefined) {
-      body.source = buildSourceField(parsed.source);
-    }
-    if (parsed.extended_properties !== undefined) {
-      const ext = buildExtendedPropertiesField(parsed.extended_properties);
-      if (ext !== null) body.extendedProperties = ext;
-    }
-
-    // Per-event-type property blocks. event_type itself was rejected above,
-    // but the property blocks may be patched on an event of the matching
-    // type created earlier. We attach each unconditionally (no event_type
-    // gating) — Google validates the property block matches the event's
-    // existing type and surfaces a clear error if it doesn't.
-    if (parsed.focus_time !== undefined) {
-      body.focusTimeProperties = buildFocusTimeProperties(parsed.focus_time);
-    }
-    if (parsed.out_of_office !== undefined) {
-      body.outOfOfficeProperties = buildOutOfOfficeProperties(
-        parsed.out_of_office,
-      );
-    }
-    if (parsed.working_location !== undefined) {
-      body.workingLocationProperties = buildWorkingLocationProperties(
-        parsed.working_location,
-      );
-    }
-    if (parsed.birthday !== undefined) {
-      body.birthdayProperties = buildBirthdayProperties(parsed.birthday);
-    }
+    // Shared with update_instance — see buildUpdateEventBody.
+    const body = buildUpdateEventBody(parsed);
 
     // sendUpdates default differs from create_event: PATCH defaults to "none"
     // because most updates are non-invite-worthy (renaming a title, fixing a
