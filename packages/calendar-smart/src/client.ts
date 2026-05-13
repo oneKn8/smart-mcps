@@ -1,6 +1,7 @@
 import {
   AuthError,
   NotFoundError,
+  UpstreamError,
   fetchJson,
   GoogleOAuthClient,
 } from "smart-mcp-core";
@@ -290,6 +291,50 @@ export class CalendarClient {
       if (err instanceof NotFoundError) {
         throw new NotFoundError(
           `Event \`${opts.eventId}\` not found in \`${opts.calendarId}\`.`,
+          { cause: err },
+        );
+      }
+      throw mapCalendarAuthError(err, this.account);
+    }
+  }
+
+  /**
+   * DELETE /calendars/{calendarId}/events/{eventId} — cancel/remove an event.
+   * Returns 204 with an empty body on success; the resolved promise carries
+   * no value.
+   *
+   * Two upstream conditions are mapped to NotFoundError:
+   *   - 404: the event id was never valid (or already permanently deleted).
+   *   - 410: a recurring-instance id whose parent series was deleted; the
+   *     instance no longer exists and Google reports it as Gone.
+   */
+  async deleteEvent(opts: {
+    calendarId: string;
+    eventId: string;
+  }): Promise<void> {
+    const token = await this.oauthClient.getAccessToken();
+    try {
+      await fetchJson<unknown>(
+        `${CALENDAR_API_BASE}/calendars/${encodeURIComponent(opts.calendarId)}` +
+          `/events/${encodeURIComponent(opts.eventId)}`,
+        {
+          method: "DELETE",
+          token,
+        },
+      );
+    } catch (err) {
+      if (err instanceof NotFoundError) {
+        throw new NotFoundError(
+          `Event \`${opts.eventId}\` not found in \`${opts.calendarId}\`.`,
+          { cause: err },
+        );
+      }
+      // 410 Gone surfaces as UpstreamError because http.ts has no specific
+      // mapping; we detect by status suffix in the message and rewrite to
+      // NotFoundError so callers see a uniform "missing" error type.
+      if (err instanceof UpstreamError && err.message.includes("→ 410")) {
+        throw new NotFoundError(
+          `Recurring event instance \`${opts.eventId}\` no longer exists.`,
           { cause: err },
         );
       }

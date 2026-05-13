@@ -879,3 +879,114 @@ describe("CalendarClient.patchEvent", () => {
     ).rejects.toBeInstanceOf(AuthError);
   });
 });
+
+describe("CalendarClient.deleteEvent", () => {
+  it("DELETEs /calendars/{id}/events/{eventId} and returns nothing on 204", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    let bearer: string | null = null;
+    server.use(
+      http.delete(PRIMARY_EVENT_URL("evt_alpha"), ({ request }) => {
+        bearer = request.headers.get("authorization");
+        return new HttpResponse(null, { status: 204 });
+      }),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    await expect(
+      c.deleteEvent({ calendarId: "primary", eventId: "evt_alpha" }),
+    ).resolves.toBeUndefined();
+    expect(bearer).toBe("Bearer test-access-token");
+  });
+
+  it("URL-encodes the calendarId and eventId", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    let captured: URL | undefined;
+    server.use(
+      http.delete(
+        `${CALENDAR_API_BASE}/calendars/:calendarId/events/:eventId`,
+        ({ request }) => {
+          captured = new URL(request.url);
+          return new HttpResponse(null, { status: 204 });
+        },
+      ),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    await c.deleteEvent({
+      calendarId: "alice@example.test",
+      eventId: "evt with spaces",
+    });
+    expect(captured?.pathname).toContain("alice%40example.test");
+    expect(captured?.pathname).toContain("evt%20with%20spaces");
+  });
+
+  it("wraps a 404 from Google as NotFoundError naming the event", async () => {
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2026-05-13T13:00:00.000Z" }),
+    );
+    server.use(
+      http.delete(PRIMARY_EVENT_URL("evt_missing"), () =>
+        HttpResponse.json(
+          { error: { code: 404, message: "Not Found" } },
+          { status: 404 },
+        ),
+      ),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    await expect(
+      c.deleteEvent({ calendarId: "primary", eventId: "evt_missing" }),
+    ).rejects.toMatchObject({
+      name: "NotFoundError",
+      message: expect.stringContaining("evt_missing"),
+    });
+  });
+
+  it("wraps a 410 (gone, recurring instance) as NotFoundError with a recurring-instance message", async () => {
+    // Real timers here: the core retry loop reaches 410 via UpstreamError and
+    // sleeps between attempts; under fake timers the awaited setTimeout never
+    // fires and the test would deadlock.
+    vi.useRealTimers();
+    writeCalendarTokenFile(
+      tmpHome,
+      "alice",
+      fixtureFile({ expiry: "2030-05-13T13:00:00.000Z" }),
+    );
+    server.use(
+      http.delete(PRIMARY_EVENT_URL("evt_recur_instance"), () =>
+        HttpResponse.json(
+          { error: { code: 410, message: "Gone" } },
+          { status: 410 },
+        ),
+      ),
+    );
+
+    const c = new CalendarClient("alice", { home: tmpHome });
+    await expect(
+      c.deleteEvent({
+        calendarId: "primary",
+        eventId: "evt_recur_instance",
+      }),
+    ).rejects.toMatchObject({
+      name: "NotFoundError",
+      message: expect.stringMatching(/recurring|no longer exists/i),
+    });
+  }, 10_000);
+
+  it("propagates AuthError when the calendar token file is missing", async () => {
+    const c = new CalendarClient("ghost", { home: tmpHome });
+    await expect(
+      c.deleteEvent({ calendarId: "primary", eventId: "evt_alpha" }),
+    ).rejects.toBeInstanceOf(AuthError);
+  });
+});
