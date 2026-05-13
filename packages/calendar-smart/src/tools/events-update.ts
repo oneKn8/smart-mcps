@@ -82,10 +82,17 @@ export const updateEventTool = defineTool<
       );
     }
 
+    // When recurrence is being patched in, Google requires an IANA timeZone
+    // on start/end (DST disambiguation). Fetch the calendar's tz once.
+    const tz =
+      parsed.recurrence !== undefined && parsed.recurrence.length > 0
+        ? await ctx.client.ensureTimeZone()
+        : undefined;
+
     // Build the patch with only provided fields. Omitted fields are NOT sent;
     // Google's PATCH leaves untouched fields alone, which is the user intent.
     // Shared with update_instance — see buildUpdateEventBody.
-    const body = buildUpdateEventBody(parsed);
+    const body = buildUpdateEventBody(parsed, tz);
 
     // sendUpdates default differs from create_event: PATCH defaults to "none"
     // because most updates are non-invite-worthy (renaming a title, fixing a

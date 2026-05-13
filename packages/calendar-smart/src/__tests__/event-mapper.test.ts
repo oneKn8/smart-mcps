@@ -487,3 +487,24 @@ describe("eventTimeField", () => {
     expect(eventTimeField("2026-5-13")).toEqual({ dateTime: "2026-5-13" });
   });
 });
+
+describe("eventTimeField — timeZone arg", () => {
+  it("attaches timeZone to a timed event when provided", () => {
+    expect(eventTimeField("2026-05-13T10:00:00-05:00", "America/Chicago")).toEqual({
+      dateTime: "2026-05-13T10:00:00-05:00",
+      timeZone: "America/Chicago",
+    });
+  });
+
+  it("ignores timeZone for an all-day event", () => {
+    expect(eventTimeField("2026-05-13", "America/Chicago")).toEqual({
+      date: "2026-05-13",
+    });
+  });
+
+  it("omits timeZone when undefined", () => {
+    expect(eventTimeField("2026-05-13T10:00:00-05:00")).toEqual({
+      dateTime: "2026-05-13T10:00:00-05:00",
+    });
+  });
+});

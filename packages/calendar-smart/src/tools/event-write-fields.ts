@@ -316,11 +316,12 @@ export type UpdateEventBodyInput = {
  */
 export function buildUpdateEventBody(
   parsed: UpdateEventBodyInput,
+  timeZone?: string,
 ): Record<string, unknown> {
   const body: Record<string, unknown> = {};
   if (parsed.summary !== undefined) body.summary = parsed.summary;
-  if (parsed.start !== undefined) body.start = eventTimeField(parsed.start);
-  if (parsed.end !== undefined) body.end = eventTimeField(parsed.end);
+  if (parsed.start !== undefined) body.start = eventTimeField(parsed.start, timeZone);
+  if (parsed.end !== undefined) body.end = eventTimeField(parsed.end, timeZone);
   if (parsed.location !== undefined) body.location = parsed.location;
   if (parsed.description !== undefined) body.description = parsed.description;
   if (parsed.attendees !== undefined) {

@@ -153,7 +153,14 @@ export const updateInstanceTool = defineTool<
       );
     }
 
-    const body = buildUpdateEventBody(parsed);
+    // recurrence on a single instance is unusual but if provided, Google
+    // requires a timeZone on start/end. Mirror update_event behavior.
+    const tz =
+      parsed.recurrence !== undefined && parsed.recurrence.length > 0
+        ? await ctx.client.ensureTimeZone()
+        : undefined;
+
+    const body = buildUpdateEventBody(parsed, tz);
 
     // sendUpdates default mirrors update_event: "none" for the typical
     // single-instance tweak (renaming, rescheduling one occurrence).
@@ -364,11 +371,14 @@ function untilStampBefore(isoStart: string): string {
  * field-attachment policy: only attach the per-event-type property block
  * that matches `event_type`; Google rejects mismatched blocks.
  */
-function buildNewSeriesBody(ne: NewEventInput): Record<string, unknown> {
+function buildNewSeriesBody(
+  ne: NewEventInput,
+  timeZone?: string,
+): Record<string, unknown> {
   const body: Record<string, unknown> = {
     summary: ne.summary,
-    start: eventTimeField(ne.start),
-    end: eventTimeField(ne.end),
+    start: eventTimeField(ne.start, timeZone),
+    end: eventTimeField(ne.end, timeZone),
   };
   if (ne.attendees !== undefined) body.attendees = normalizeAttendees(ne.attendees);
   if (ne.location !== undefined) body.location = ne.location;
@@ -464,8 +474,9 @@ export const splitRecurrenceTool = defineTool<
       sendUpdates,
     });
 
-    // Step 2: insert the new series.
-    const insertBody = buildNewSeriesBody(parsed.new_event);
+    // Step 2: insert the new series. Always recurring → always needs tz.
+    const newSeriesTz = await ctx.client.ensureTimeZone();
+    const insertBody = buildNewSeriesBody(parsed.new_event, newSeriesTz);
     const insertOpts: {
       calendarId: string;
       body: Record<string, unknown>;

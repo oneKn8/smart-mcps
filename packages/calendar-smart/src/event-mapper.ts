@@ -364,10 +364,17 @@ function pickOriginalStartTime(raw: Record<string, unknown>): string | null {
  * form by exact regex and route to `{ date }`; everything else goes through
  * as `{ dateTime }`. Google itself validates the timed form; sending an
  * obviously-malformed string returns a 400 we surface to the caller.
+ *
+ * `timeZone` is added to the timed-event shape when provided. Required by
+ * Google for any event that has `recurrence`: the offset in `dateTime`
+ * alone is ambiguous across DST transitions, so the API rejects recurring
+ * events without an IANA `timeZone` name on `start`/`end`. Ignored for
+ * all-day events.
  */
 export function eventTimeField(
   value: string,
-): { date: string } | { dateTime: string } {
+  timeZone?: string,
+): { date: string } | { dateTime: string; timeZone?: string } {
   if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return { date: value };
-  return { dateTime: value };
+  return timeZone ? { dateTime: value, timeZone } : { dateTime: value };
 }

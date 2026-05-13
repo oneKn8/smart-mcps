@@ -17,6 +17,7 @@ type FakeClient = {
   getEvent?: ReturnType<typeof vi.fn>;
   insertEvent?: ReturnType<typeof vi.fn>;
   getCalendarListEntry?: ReturnType<typeof vi.fn>;
+  ensureTimeZone?: ReturnType<typeof vi.fn>;
 };
 
 function makeClient(over: FakeClient = {}): FakeClient {
@@ -30,6 +31,7 @@ function makeClient(over: FakeClient = {}): FakeClient {
     getCalendarListEntry: vi
       .fn()
       .mockResolvedValue({ id: "primary", summary: "Personal" }),
+    ensureTimeZone: vi.fn().mockResolvedValue("America/Chicago"),
     ...over,
   };
 }

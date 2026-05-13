@@ -12,6 +12,7 @@ type FakeClient = {
   patchEvent?: ReturnType<typeof vi.fn>;
   getEvent?: ReturnType<typeof vi.fn>;
   getAccountEmail?: ReturnType<typeof vi.fn>;
+  ensureTimeZone?: ReturnType<typeof vi.fn>;
 };
 
 function makeClient(over: FakeClient = {}): FakeClient {
@@ -21,6 +22,7 @@ function makeClient(over: FakeClient = {}): FakeClient {
     patchEvent: vi.fn().mockResolvedValue({}),
     getEvent: vi.fn().mockResolvedValue({}),
     getAccountEmail: vi.fn().mockReturnValue("your-account@gmail.com"),
+    ensureTimeZone: vi.fn().mockResolvedValue("America/Chicago"),
     ...over,
   };
 }
@@ -179,13 +181,14 @@ describe("createEventTool — handler", () => {
       client: client as unknown as never,
     });
 
-    // With attendees present, sendUpdates defaults to "all".
+    // With attendees present, sendUpdates defaults to "all". With recurrence,
+    // start/end carry the resolved IANA tz (Google requires it for DST).
     expect(client.insertEvent).toHaveBeenCalledWith({
       calendarId: "cal_work",
       body: {
         summary: "Sync",
-        start: { dateTime: "2026-05-13T10:00:00-05:00" },
-        end: { dateTime: "2026-05-13T11:00:00-05:00" },
+        start: { dateTime: "2026-05-13T10:00:00-05:00", timeZone: "America/Chicago" },
+        end: { dateTime: "2026-05-13T11:00:00-05:00", timeZone: "America/Chicago" },
         attendees: [
           { email: "bob@example.test" },
           { email: "carol@example.test" },

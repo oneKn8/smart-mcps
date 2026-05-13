@@ -124,14 +124,22 @@ export const createEventTool = defineTool<
   handler: async (input, ctx) => {
     const parsed = input as CreateEventParsed;
 
+    // Recurring events require an IANA timeZone on start/end (DST disambig);
+    // fetch the calendar's tz once when needed. Single-shot events can rely
+    // on the offset embedded in the dateTime string alone.
+    const tz =
+      parsed.recurrence !== undefined && parsed.recurrence.length > 0
+        ? await ctx.client.ensureTimeZone()
+        : undefined;
+
     // Build the body with only the keys that have values. Strip undefineds
     // explicitly so the upstream payload is minimal — Google echoes back
     // the exact fields we send and we don't want stray `attendees: null`
     // to wipe an existing attendee list on a future PATCH-like flow.
     const body: Record<string, unknown> = {
       summary: parsed.summary,
-      start: eventTimeField(parsed.start),
-      end: eventTimeField(parsed.end),
+      start: eventTimeField(parsed.start, tz),
+      end: eventTimeField(parsed.end, tz),
     };
     if (parsed.attendees !== undefined) {
       body.attendees = normalizeAttendees(parsed.attendees);
