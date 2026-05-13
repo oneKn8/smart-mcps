@@ -1,6 +1,10 @@
 import { describe, it, expect, vi } from "vitest";
 import { z } from "zod";
-import { ConfirmRequiredError, NotFoundError } from "smart-mcp-core";
+import {
+  ConfirmRequiredError,
+  NotFoundError,
+  ValidationError,
+} from "smart-mcp-core";
 import {
   updateEventTool,
   rescheduleTool,
@@ -79,10 +83,13 @@ describe("updateEventTool — handler", () => {
       client: client as unknown as never,
     });
 
+    // sendUpdates defaults to "none" on update_event (most updates are
+    // non-invite-worthy: title fixes, typos, etc.).
     expect(client.patchEvent).toHaveBeenCalledWith({
       calendarId: "primary",
       eventId: "evt_alpha",
       body: { summary: "New Title" },
+      sendUpdates: "none",
     });
   });
 
@@ -107,6 +114,7 @@ describe("updateEventTool — handler", () => {
         start: { dateTime: "2026-05-13T11:00:00-05:00" },
         end: { dateTime: "2026-05-13T11:30:00-05:00" },
       },
+      sendUpdates: "none",
     });
   });
 
@@ -133,6 +141,7 @@ describe("updateEventTool — handler", () => {
         description: "Updated agenda",
         attendees: [{ email: "bob@example.test" }],
       },
+      sendUpdates: "none",
     });
   });
 
@@ -168,6 +177,241 @@ describe("updateEventTool — handler", () => {
     expect(client.patchEvent).toHaveBeenCalledWith(
       expect.objectContaining({ calendarId: "cal_work" }),
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// updateEventTool — Phase 5.5 extended fields
+// ---------------------------------------------------------------------------
+
+function bodyFromPatch(client: FakeClient): Record<string, unknown> {
+  const call = (client.patchEvent as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as
+    | { body: Record<string, unknown> }
+    | undefined;
+  if (!call) throw new Error("patchEvent was not called");
+  return call.body;
+}
+
+function optsFromPatch(client: FakeClient): Record<string, unknown> {
+  const call = (client.patchEvent as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as
+    | Record<string, unknown>
+    | undefined;
+  if (!call) throw new Error("patchEvent was not called");
+  return call;
+}
+
+describe("updateEventTool — eventType change is forbidden", () => {
+  it("throws ValidationError when event_type is provided", async () => {
+    const client = makeClient();
+    const parsed = updateEventTool.inputSchema.parse({
+      event_id: "evt_alpha",
+      event_type: "focusTime",
+    }) as Parameters<typeof updateEventTool.handler>[0];
+
+    await expect(
+      updateEventTool.handler(parsed, {
+        client: client as unknown as never,
+      }),
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(client.patchEvent).not.toHaveBeenCalled();
+  });
+
+  it("error message names the constraint clearly", async () => {
+    const client = makeClient();
+    const parsed = updateEventTool.inputSchema.parse({
+      event_id: "evt_alpha",
+      event_type: "outOfOffice",
+    }) as Parameters<typeof updateEventTool.handler>[0];
+
+    await expect(
+      updateEventTool.handler(parsed, {
+        client: client as unknown as never,
+      }),
+    ).rejects.toThrow(/cannot change eventType/i);
+  });
+});
+
+describe("updateEventTool — extended fields", () => {
+  it("forwards reminders.overrides + flips useDefault to false", async () => {
+    const client = makeClient({
+      patchEvent: vi.fn().mockResolvedValue(rawEvent()),
+    });
+    const parsed = updateEventTool.inputSchema.parse({
+      event_id: "evt_alpha",
+      reminders: { overrides: [{ method: "email", minutes: 30 }] },
+    }) as Parameters<typeof updateEventTool.handler>[0];
+
+    await updateEventTool.handler(parsed, {
+      client: client as unknown as never,
+    });
+    expect(bodyFromPatch(client).reminders).toEqual({
+      useDefault: false,
+      overrides: [{ method: "email", minutes: 30 }],
+    });
+  });
+
+  it("attaches conferenceData + conferenceDataVersion=1 when create_meet_link=true", async () => {
+    const client = makeClient({
+      patchEvent: vi.fn().mockResolvedValue(rawEvent()),
+    });
+    const parsed = updateEventTool.inputSchema.parse({
+      event_id: "evt_alpha",
+      create_meet_link: true,
+    }) as Parameters<typeof updateEventTool.handler>[0];
+
+    await updateEventTool.handler(parsed, {
+      client: client as unknown as never,
+    });
+    const opts = optsFromPatch(client);
+    expect(opts.conferenceDataVersion).toBe(1);
+    const conf = (opts.body as Record<string, unknown>).conferenceData as {
+      createRequest: { conferenceSolutionKey: { type: string } };
+    };
+    expect(conf.createRequest.conferenceSolutionKey.type).toBe("hangoutsMeet");
+  });
+
+  it("forwards color_id, visibility, transparency, guests_can_* flags", async () => {
+    const client = makeClient({
+      patchEvent: vi.fn().mockResolvedValue(rawEvent()),
+    });
+    const parsed = updateEventTool.inputSchema.parse({
+      event_id: "evt_alpha",
+      color_id: "9",
+      visibility: "confidential",
+      transparency: "transparent",
+      guests_can_invite_others: false,
+      guests_can_modify: true,
+      guests_can_see_other_guests: false,
+    }) as Parameters<typeof updateEventTool.handler>[0];
+
+    await updateEventTool.handler(parsed, {
+      client: client as unknown as never,
+    });
+    const body = bodyFromPatch(client);
+    expect(body.colorId).toBe("9");
+    expect(body.visibility).toBe("confidential");
+    expect(body.transparency).toBe("transparent");
+    expect(body.guestsCanInviteOthers).toBe(false);
+    expect(body.guestsCanModify).toBe(true);
+    expect(body.guestsCanSeeOtherGuests).toBe(false);
+  });
+
+  it("forwards source { url, title } and extended_properties", async () => {
+    const client = makeClient({
+      patchEvent: vi.fn().mockResolvedValue(rawEvent()),
+    });
+    const parsed = updateEventTool.inputSchema.parse({
+      event_id: "evt_alpha",
+      source: { url: "https://docs.example.test/x", title: "X" },
+      extended_properties: {
+        private: { trace_id: "xyz" },
+        shared: { project: "beta" },
+      },
+    }) as Parameters<typeof updateEventTool.handler>[0];
+
+    await updateEventTool.handler(parsed, {
+      client: client as unknown as never,
+    });
+    const body = bodyFromPatch(client);
+    expect(body.source).toEqual({
+      url: "https://docs.example.test/x",
+      title: "X",
+    });
+    expect(body.extendedProperties).toEqual({
+      private: { trace_id: "xyz" },
+      shared: { project: "beta" },
+    });
+  });
+
+  it("attaches focusTimeProperties when focus_time provided (no event_type required)", async () => {
+    const client = makeClient({
+      patchEvent: vi.fn().mockResolvedValue(rawEvent()),
+    });
+    const parsed = updateEventTool.inputSchema.parse({
+      event_id: "evt_alpha",
+      focus_time: { decline_message: "Updated message" },
+    }) as Parameters<typeof updateEventTool.handler>[0];
+
+    await updateEventTool.handler(parsed, {
+      client: client as unknown as never,
+    });
+    expect(bodyFromPatch(client).focusTimeProperties).toEqual({
+      declineMessage: "Updated message",
+    });
+  });
+
+  it("attaches working_location.customLocation { label } on patch", async () => {
+    const client = makeClient({
+      patchEvent: vi.fn().mockResolvedValue(rawEvent()),
+    });
+    const parsed = updateEventTool.inputSchema.parse({
+      event_id: "evt_alpha",
+      working_location: {
+        type: "customLocation",
+        custom_label: "Library 2nd Floor",
+      },
+    }) as Parameters<typeof updateEventTool.handler>[0];
+
+    await updateEventTool.handler(parsed, {
+      client: client as unknown as never,
+    });
+    expect(bodyFromPatch(client).workingLocationProperties).toEqual({
+      customLocation: { label: "Library 2nd Floor" },
+    });
+  });
+
+  it("accepts attendees as the rich object form on patch", async () => {
+    const client = makeClient({
+      patchEvent: vi.fn().mockResolvedValue(rawEvent()),
+    });
+    const parsed = updateEventTool.inputSchema.parse({
+      event_id: "evt_alpha",
+      attendees: [
+        { email: "bob@example.test", optional: true },
+        { email: "carol@example.test", response: "tentative" },
+      ],
+    }) as Parameters<typeof updateEventTool.handler>[0];
+
+    await updateEventTool.handler(parsed, {
+      client: client as unknown as never,
+    });
+    expect(bodyFromPatch(client).attendees).toEqual([
+      { email: "bob@example.test", optional: true },
+      { email: "carol@example.test", responseStatus: "tentative" },
+    ]);
+  });
+});
+
+describe("updateEventTool — send_updates default", () => {
+  it("defaults to 'none' on update (different from create_event default)", async () => {
+    const client = makeClient({
+      patchEvent: vi.fn().mockResolvedValue(rawEvent()),
+    });
+    const parsed = updateEventTool.inputSchema.parse({
+      event_id: "evt_alpha",
+      summary: "Renamed",
+    }) as Parameters<typeof updateEventTool.handler>[0];
+
+    await updateEventTool.handler(parsed, {
+      client: client as unknown as never,
+    });
+    expect(optsFromPatch(client).sendUpdates).toBe("none");
+  });
+
+  it("forwards an explicit send_updates value verbatim", async () => {
+    const client = makeClient({
+      patchEvent: vi.fn().mockResolvedValue(rawEvent()),
+    });
+    const parsed = updateEventTool.inputSchema.parse({
+      event_id: "evt_alpha",
+      summary: "x",
+      send_updates: "all",
+    }) as Parameters<typeof updateEventTool.handler>[0];
+
+    await updateEventTool.handler(parsed, {
+      client: client as unknown as never,
+    });
+    expect(optsFromPatch(client).sendUpdates).toBe("all");
   });
 });
 

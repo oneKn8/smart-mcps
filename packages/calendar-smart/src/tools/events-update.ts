@@ -1,7 +1,30 @@
 import { z } from "zod";
-import { defineTool, guardDestructive } from "smart-mcp-core";
+import { defineTool, guardDestructive, ValidationError } from "smart-mcp-core";
 import type { CalendarContext } from "../context.js";
 import { mapEvent, eventTimeField, type SlimEvent } from "../event-mapper.js";
+import {
+  attendeesSchema,
+  birthdaySchema,
+  buildBirthdayProperties,
+  buildExtendedPropertiesField,
+  buildFocusTimeProperties,
+  buildMeetConferenceRequest,
+  buildOutOfOfficeProperties,
+  buildRemindersField,
+  buildSourceField,
+  buildWorkingLocationProperties,
+  eventTypeSchema,
+  extendedPropertiesSchema,
+  focusTimeSchema,
+  normalizeAttendees,
+  outOfOfficeSchema,
+  remindersSchema,
+  sendUpdatesSchema,
+  sourceSchema,
+  transparencySchema,
+  visibilitySchema,
+  workingLocationSchema,
+} from "./event-write-fields.js";
 
 // =============================================================================
 // update_event
@@ -15,7 +38,28 @@ const updateEventInputSchema = z.object({
   end: z.string().optional(),
   location: z.string().optional(),
   description: z.string().optional(),
-  attendees: z.array(z.string().email()).optional(),
+  attendees: attendeesSchema.optional(),
+  // Phase 5.5: extended fields
+  recurrence: z.array(z.string().min(1)).optional(),
+  reminders: remindersSchema.optional(),
+  create_meet_link: z.boolean().optional(),
+  color_id: z.string().optional(),
+  visibility: visibilitySchema.optional(),
+  transparency: transparencySchema.optional(),
+  guests_can_invite_others: z.boolean().optional(),
+  guests_can_modify: z.boolean().optional(),
+  guests_can_see_other_guests: z.boolean().optional(),
+  source: sourceSchema.optional(),
+  extended_properties: extendedPropertiesSchema.optional(),
+  send_updates: sendUpdatesSchema.optional(),
+  // event_type itself is rejected on update (Google forbids changing it
+  // post-insert), but the per-type property blocks ARE patchable on an
+  // event whose type was set at creation time.
+  event_type: eventTypeSchema.optional(),
+  focus_time: focusTimeSchema.optional(),
+  out_of_office: outOfOfficeSchema.optional(),
+  working_location: workingLocationSchema.optional(),
+  birthday: birthdaySchema.optional(),
 });
 
 type UpdateEventInput = z.input<typeof updateEventInputSchema>;
@@ -36,6 +80,16 @@ export const updateEventTool = defineTool<
     updateEventInputSchema as unknown as z.ZodType<UpdateEventInput>,
   handler: async (input, ctx) => {
     const parsed = input as UpdateEventParsed;
+
+    // Google forbids changing eventType after insert. Surface this as a
+    // ValidationError up front rather than letting Google return a 400 the
+    // caller has to decode.
+    if (parsed.event_type !== undefined) {
+      throw new ValidationError(
+        "Cannot change eventType after insert. Cancel the event and create a new one with the desired event_type instead.",
+      );
+    }
+
     // Build the patch with only provided fields. Omitted fields are NOT sent;
     // Google's PATCH leaves untouched fields alone, which is the user intent.
     const body: Record<string, unknown> = {};
@@ -45,13 +99,83 @@ export const updateEventTool = defineTool<
     if (parsed.location !== undefined) body.location = parsed.location;
     if (parsed.description !== undefined) body.description = parsed.description;
     if (parsed.attendees !== undefined) {
-      body.attendees = parsed.attendees.map((email) => ({ email }));
+      body.attendees = normalizeAttendees(parsed.attendees);
     }
-    const raw = await ctx.client.patchEvent({
+    if (parsed.recurrence !== undefined) body.recurrence = parsed.recurrence;
+
+    // Extended fields ---------------------------------------------------------
+    if (parsed.reminders !== undefined) {
+      body.reminders = buildRemindersField(parsed.reminders);
+    }
+    if (parsed.create_meet_link === true) {
+      body.conferenceData = buildMeetConferenceRequest();
+    }
+    if (parsed.color_id !== undefined) body.colorId = parsed.color_id;
+    if (parsed.visibility !== undefined) body.visibility = parsed.visibility;
+    if (parsed.transparency !== undefined) {
+      body.transparency = parsed.transparency;
+    }
+    if (parsed.guests_can_invite_others !== undefined) {
+      body.guestsCanInviteOthers = parsed.guests_can_invite_others;
+    }
+    if (parsed.guests_can_modify !== undefined) {
+      body.guestsCanModify = parsed.guests_can_modify;
+    }
+    if (parsed.guests_can_see_other_guests !== undefined) {
+      body.guestsCanSeeOtherGuests = parsed.guests_can_see_other_guests;
+    }
+    if (parsed.source !== undefined) {
+      body.source = buildSourceField(parsed.source);
+    }
+    if (parsed.extended_properties !== undefined) {
+      const ext = buildExtendedPropertiesField(parsed.extended_properties);
+      if (ext !== null) body.extendedProperties = ext;
+    }
+
+    // Per-event-type property blocks. event_type itself was rejected above,
+    // but the property blocks may be patched on an event of the matching
+    // type created earlier. We attach each unconditionally (no event_type
+    // gating) — Google validates the property block matches the event's
+    // existing type and surfaces a clear error if it doesn't.
+    if (parsed.focus_time !== undefined) {
+      body.focusTimeProperties = buildFocusTimeProperties(parsed.focus_time);
+    }
+    if (parsed.out_of_office !== undefined) {
+      body.outOfOfficeProperties = buildOutOfOfficeProperties(
+        parsed.out_of_office,
+      );
+    }
+    if (parsed.working_location !== undefined) {
+      body.workingLocationProperties = buildWorkingLocationProperties(
+        parsed.working_location,
+      );
+    }
+    if (parsed.birthday !== undefined) {
+      body.birthdayProperties = buildBirthdayProperties(parsed.birthday);
+    }
+
+    // sendUpdates default differs from create_event: PATCH defaults to "none"
+    // because most updates are non-invite-worthy (renaming a title, fixing a
+    // typo). Explicit caller value always wins.
+    const sendUpdates = parsed.send_updates ?? "none";
+
+    const patchOpts: {
+      calendarId: string;
+      eventId: string;
+      body: Record<string, unknown>;
+      conferenceDataVersion?: 0 | 1;
+      sendUpdates?: "all" | "externalOnly" | "none";
+    } = {
       calendarId: parsed.calendar_id,
       eventId: parsed.event_id,
       body,
-    });
+    };
+    if (parsed.create_meet_link === true) {
+      patchOpts.conferenceDataVersion = 1;
+    }
+    patchOpts.sendUpdates = sendUpdates;
+
+    const raw = await ctx.client.patchEvent(patchOpts);
     return { event: mapEvent(raw, parsed.calendar_id) };
   },
 });
