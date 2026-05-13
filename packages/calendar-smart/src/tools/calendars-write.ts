@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { defineTool } from "smart-mcp-core";
+import { defineTool, guardDestructive, ValidationError } from "smart-mcp-core";
 import type { CalendarContext } from "../context.js";
 import { mapCalendar, type SlimCalendar } from "../calendar-mapper.js";
 
@@ -108,5 +108,118 @@ export const updateCalendarTool = defineTool<
         input.calendar_id,
       ),
     };
+  },
+});
+
+// =============================================================================
+// delete_calendar (destructive — confirm-gated, primary guard)
+// =============================================================================
+
+const deleteCalendarInputSchema = z.object({
+  calendar_id: z.string().min(1),
+  confirm: z.boolean().optional().default(false),
+});
+
+type DeleteCalendarInput = z.input<typeof deleteCalendarInputSchema>;
+type DeleteCalendarParsed = z.infer<typeof deleteCalendarInputSchema>;
+type DeleteCalendarOutput = { deleted: true };
+
+const PRIMARY_GUARD_MSG =
+  "Cannot delete the primary calendar. Use clear_primary_calendar to wipe its events instead.";
+
+function readPrimaryFlag(entry: unknown): boolean {
+  if (entry && typeof entry === "object" && !Array.isArray(entry)) {
+    return (entry as { primary?: unknown }).primary === true;
+  }
+  return false;
+}
+
+function readSummary(entry: unknown): string {
+  if (entry && typeof entry === "object" && !Array.isArray(entry)) {
+    const s = (entry as { summary?: unknown }).summary;
+    if (typeof s === "string") return s;
+  }
+  return "";
+}
+
+export const deleteCalendarTool = defineTool<
+  DeleteCalendarInput,
+  DeleteCalendarOutput,
+  CalendarContext
+>({
+  name: "delete_calendar",
+  description: "Delete a secondary calendar permanently",
+  // Cast required because `confirm` has `.optional().default(...)`.
+  inputSchema:
+    deleteCalendarInputSchema as unknown as z.ZodType<DeleteCalendarInput>,
+  handler: async (input, ctx) => {
+    const parsed = input as DeleteCalendarParsed;
+
+    // Cheap up-front guard: literal "primary" never resolves to anything else.
+    if (parsed.calendar_id === "primary") {
+      throw new ValidationError(PRIMARY_GUARD_MSG);
+    }
+
+    // Best-effort lookup so we can both resolve "is this the primary calendar
+    // by id?" and build a descriptive preview. Failure here is non-fatal —
+    // we fall back to the raw id and skip the resolved-primary guard. If the
+    // calendar IS the primary and CalendarList lookup happens to fail,
+    // Google's API will refuse the delete with 403 anyway.
+    let entry: unknown = null;
+    try {
+      entry = await ctx.client.getCalendarListEntry(parsed.calendar_id);
+    } catch {
+      // swallow — preview falls back to id verbatim
+    }
+
+    if (entry !== null && readPrimaryFlag(entry)) {
+      throw new ValidationError(PRIMARY_GUARD_MSG);
+    }
+
+    const summary = readSummary(entry);
+    const label = summary.length > 0 ? summary : parsed.calendar_id;
+    const preview =
+      `Delete calendar '${label}' permanently (id: ${parsed.calendar_id})`;
+    guardDestructive({ confirm: parsed.confirm, preview });
+
+    await ctx.client.deleteCalendar({ calendarId: parsed.calendar_id });
+    return { deleted: true };
+  },
+});
+
+// =============================================================================
+// clear_primary_calendar (destructive, NUKE option)
+// =============================================================================
+
+const clearPrimaryCalendarInputSchema = z.object({
+  confirm: z.boolean().optional().default(false),
+});
+
+type ClearPrimaryCalendarInput = z.input<
+  typeof clearPrimaryCalendarInputSchema
+>;
+type ClearPrimaryCalendarParsed = z.infer<
+  typeof clearPrimaryCalendarInputSchema
+>;
+type ClearPrimaryCalendarOutput = { cleared: true };
+
+export const clearPrimaryCalendarTool = defineTool<
+  ClearPrimaryCalendarInput,
+  ClearPrimaryCalendarOutput,
+  CalendarContext
+>({
+  name: "clear_primary_calendar",
+  description: "Wipe ALL events from primary calendar",
+  // Cast required because `confirm` has `.optional().default(...)`.
+  inputSchema:
+    clearPrimaryCalendarInputSchema as unknown as z.ZodType<ClearPrimaryCalendarInput>,
+  handler: async (input, ctx) => {
+    const parsed = input as ClearPrimaryCalendarParsed;
+    const preview =
+      "Clear ALL events from your primary calendar (irreversible). " +
+      "Calendar metadata is preserved.";
+    guardDestructive({ confirm: parsed.confirm, preview });
+    await ctx.client.clearPrimaryCalendar();
+    return { cleared: true };
   },
 });
