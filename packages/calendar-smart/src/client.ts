@@ -1030,10 +1030,19 @@ export class CalendarClient {
       // shape across both list-by-window and incremental-sync paths.
       params.set("syncToken", opts.syncToken);
     } else {
-      params.set("orderBy", "startTime");
       if (opts.timeMin !== undefined) params.set("timeMin", opts.timeMin);
       if (opts.timeMax !== undefined) params.set("timeMax", opts.timeMax);
       if (opts.q !== undefined) params.set("q", opts.q);
+      // Google withholds nextSyncToken when orderBy is set. Skip orderBy in
+      // sync-init mode (showDeleted=true with no time window — the
+      // documented "give me everything so I can capture a syncToken"
+      // pattern); set orderBy=startTime in normal list mode for ergonomic
+      // ordering.
+      const isSyncInit =
+        opts.showDeleted === true &&
+        opts.timeMin === undefined &&
+        opts.timeMax === undefined;
+      if (!isSyncInit) params.set("orderBy", "startTime");
     }
     if (opts.pageToken !== undefined) params.set("pageToken", opts.pageToken);
     if (opts.showDeleted === true) params.set("showDeleted", "true");
