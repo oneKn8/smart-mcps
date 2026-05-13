@@ -190,3 +190,20 @@ export function mapEvent(raw: unknown, calendarId: string): SlimEvent {
     html_link: typeof obj.htmlLink === "string" ? obj.htmlLink : "",
   };
 }
+
+/**
+ * Build the Google Calendar `start` / `end` field for a write request.
+ *
+ * Google accepts two shapes: `{ dateTime: string }` for timed events (ISO
+ * 8601 with offset, e.g. `2026-05-13T10:00:00-05:00`) and `{ date: string }`
+ * for all-day events (calendar date `YYYY-MM-DD`). We detect the bare-date
+ * form by exact regex and route to `{ date }`; everything else goes through
+ * as `{ dateTime }`. Google itself validates the timed form; sending an
+ * obviously-malformed string returns a 400 we surface to the caller.
+ */
+export function eventTimeField(
+  value: string,
+): { date: string } | { dateTime: string } {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return { date: value };
+  return { dateTime: value };
+}

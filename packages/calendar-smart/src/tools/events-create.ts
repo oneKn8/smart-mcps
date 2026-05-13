@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { defineTool, ValidationError } from "smart-mcp-core";
 import type { CalendarContext } from "../context.js";
-import { mapEvent, type SlimEvent } from "../event-mapper.js";
+import { mapEvent, eventTimeField, type SlimEvent } from "../event-mapper.js";
 
 // =============================================================================
 // quick_add
@@ -74,8 +74,8 @@ export const createEventTool = defineTool<
     // to wipe an existing attendee list on a future PATCH-like flow.
     const body: Record<string, unknown> = {
       summary: parsed.summary,
-      start: { dateTime: parsed.start },
-      end: { dateTime: parsed.end },
+      start: eventTimeField(parsed.start),
+      end: eventTimeField(parsed.end),
     };
     if (parsed.attendees !== undefined) {
       body.attendees = parsed.attendees.map((email) => ({ email }));

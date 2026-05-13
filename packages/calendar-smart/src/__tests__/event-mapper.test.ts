@@ -246,3 +246,31 @@ describe("mapEvent — field stripping", () => {
     expect(Object.keys(slim).sort()).toEqual([...SLIM_KEYS].sort());
   });
 });
+
+import { eventTimeField } from "../event-mapper.js";
+
+describe("eventTimeField", () => {
+  it("routes a YYYY-MM-DD bare date to { date }", () => {
+    expect(eventTimeField("2026-05-13")).toEqual({ date: "2026-05-13" });
+  });
+
+  it("routes an ISO datetime with offset to { dateTime }", () => {
+    expect(eventTimeField("2026-05-13T10:00:00-05:00")).toEqual({
+      dateTime: "2026-05-13T10:00:00-05:00",
+    });
+  });
+
+  it("routes an ISO datetime with Z to { dateTime }", () => {
+    expect(eventTimeField("2026-05-13T15:00:00Z")).toEqual({
+      dateTime: "2026-05-13T15:00:00Z",
+    });
+  });
+
+  it("does not match a date with extra trailing text", () => {
+    expect(eventTimeField("2026-05-13 ")).toEqual({ dateTime: "2026-05-13 " });
+  });
+
+  it("does not match a YYYY-M-D shorthand (must be zero-padded 10 chars)", () => {
+    expect(eventTimeField("2026-5-13")).toEqual({ dateTime: "2026-5-13" });
+  });
+});

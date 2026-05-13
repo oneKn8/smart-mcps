@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { defineTool, guardDestructive } from "smart-mcp-core";
 import type { CalendarContext } from "../context.js";
-import { mapEvent, type SlimEvent } from "../event-mapper.js";
+import { mapEvent, eventTimeField, type SlimEvent } from "../event-mapper.js";
 
 // =============================================================================
 // update_event
@@ -40,8 +40,8 @@ export const updateEventTool = defineTool<
     // Google's PATCH leaves untouched fields alone, which is the user intent.
     const body: Record<string, unknown> = {};
     if (parsed.summary !== undefined) body.summary = parsed.summary;
-    if (parsed.start !== undefined) body.start = { dateTime: parsed.start };
-    if (parsed.end !== undefined) body.end = { dateTime: parsed.end };
+    if (parsed.start !== undefined) body.start = eventTimeField(parsed.start);
+    if (parsed.end !== undefined) body.end = eventTimeField(parsed.end);
     if (parsed.location !== undefined) body.location = parsed.location;
     if (parsed.description !== undefined) body.description = parsed.description;
     if (parsed.attendees !== undefined) {
@@ -87,8 +87,8 @@ export const rescheduleTool = defineTool<
       calendarId: parsed.calendar_id,
       eventId: parsed.event_id,
       body: {
-        start: { dateTime: parsed.start },
-        end: { dateTime: parsed.end },
+        start: eventTimeField(parsed.start),
+        end: eventTimeField(parsed.end),
       },
     });
     return { event: mapEvent(raw, parsed.calendar_id) };
