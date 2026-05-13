@@ -29,6 +29,9 @@ import {
 import {
   dailyBriefTool,
   weeklyBriefTool,
+  findMeetingTimeTool,
+  eventWithInvitePreviewTool,
+  outdoorEventCheckTool,
 } from "./tools/shortcuts.js";
 
 // Tool registry. Each tool definition is widened to the unknown-input/output
@@ -53,6 +56,9 @@ const tools: ToolDefinition<unknown, unknown, CalendarContext>[] = [
   cancelEventTool as ToolDefinition<unknown, unknown, CalendarContext>,
   dailyBriefTool as ToolDefinition<unknown, unknown, CalendarContext>,
   weeklyBriefTool as ToolDefinition<unknown, unknown, CalendarContext>,
+  findMeetingTimeTool as ToolDefinition<unknown, unknown, CalendarContext>,
+  eventWithInvitePreviewTool as ToolDefinition<unknown, unknown, CalendarContext>,
+  outdoorEventCheckTool as ToolDefinition<unknown, unknown, CalendarContext>,
 ];
 
 await createMcpServer<CalendarContext>({

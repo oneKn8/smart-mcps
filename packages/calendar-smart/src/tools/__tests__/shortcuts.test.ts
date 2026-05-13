@@ -10,6 +10,9 @@ import { z } from "zod";
 import {
   dailyBriefTool,
   weeklyBriefTool,
+  findMeetingTimeTool,
+  eventWithInvitePreviewTool,
+  outdoorEventCheckTool,
 } from "../shortcuts.js";
 
 // ----------------------------------------------------------------------------
@@ -376,5 +379,409 @@ describe("weeklyBriefTool — handler", () => {
     });
     expect(out.week_start).toBe("2026-05-11T00:00:00-05:00");
     expect(out.week_end).toBe("2026-05-18T00:00:00-05:00");
+  });
+});
+
+// ============================================================================
+// findMeetingTimeTool
+// ============================================================================
+
+describe("findMeetingTimeTool — metadata", () => {
+  it("name + token budget", () => {
+    expect(findMeetingTimeTool.name).toBe("find_meeting_time");
+    expect(
+      findMeetingTimeTool.description.split(/\s+/).length,
+    ).toBeLessThanOrEqual(15);
+    expect(findMeetingTimeTool.inputSchema).toBeInstanceOf(z.ZodType);
+  });
+
+  it("requires duration_minutes, time_min, time_max", () => {
+    expect(() => findMeetingTimeTool.inputSchema.parse({})).toThrow();
+    const parsed = findMeetingTimeTool.inputSchema.parse({
+      duration_minutes: 30,
+      time_min: "2026-05-13T09:00:00-05:00",
+      time_max: "2026-05-13T17:00:00-05:00",
+    }) as { top_n: number };
+    // top_n defaults to 5
+    expect(parsed.top_n).toBe(5);
+  });
+});
+
+describe("findMeetingTimeTool — handler", () => {
+  it("queries freeBusy for my_calendar_ids and finds slots", async () => {
+    const client = makeClient({
+      freeBusy: vi.fn().mockResolvedValue({
+        calendars: {
+          primary: {
+            busy: [
+              {
+                start: "2026-05-13T10:00:00-05:00",
+                end: "2026-05-13T11:00:00-05:00",
+              },
+            ],
+          },
+        },
+      }),
+    });
+    const parsed = findMeetingTimeTool.inputSchema.parse({
+      duration_minutes: 60,
+      time_min: "2026-05-13T09:00:00-05:00",
+      time_max: "2026-05-13T17:00:00-05:00",
+      my_calendar_ids: ["primary"],
+    }) as Parameters<typeof findMeetingTimeTool.handler>[0];
+    const out = await findMeetingTimeTool.handler(parsed, {
+      client: client as unknown as never,
+    });
+    expect(client.freeBusy).toHaveBeenCalledTimes(1);
+    // 9-10 (60m) + 11-17 (360m) — both >= 60.
+    expect(out.slots).toHaveLength(2);
+    expect(out.slots[0]?.duration_minutes).toBe(60);
+    expect(out.slots[0]?.start).toBe("2026-05-13T09:00:00-05:00");
+    expect(out.slots[1]?.duration_minutes).toBe(360);
+  });
+
+  it("uses extra_busy when no my_calendar_ids", async () => {
+    const client = makeClient({ freeBusy: vi.fn() });
+    const parsed = findMeetingTimeTool.inputSchema.parse({
+      duration_minutes: 30,
+      time_min: "2026-05-13T09:00:00-05:00",
+      time_max: "2026-05-13T11:00:00-05:00",
+      extra_busy: [
+        {
+          start: "2026-05-13T09:30:00-05:00",
+          end: "2026-05-13T10:00:00-05:00",
+        },
+      ],
+    }) as Parameters<typeof findMeetingTimeTool.handler>[0];
+    const out = await findMeetingTimeTool.handler(parsed, {
+      client: client as unknown as never,
+    });
+    expect(client.freeBusy).not.toHaveBeenCalled();
+    // Free: 9:00-9:30 (30m) + 10:00-11:00 (60m).
+    expect(out.slots).toHaveLength(2);
+  });
+
+  it("merges my_calendar_ids busy with extra_busy in one window list", async () => {
+    const client = makeClient({
+      freeBusy: vi.fn().mockResolvedValue({
+        calendars: {
+          primary: {
+            busy: [
+              {
+                start: "2026-05-13T09:00:00-05:00",
+                end: "2026-05-13T10:00:00-05:00",
+              },
+            ],
+          },
+          cal_work: {
+            busy: [
+              {
+                start: "2026-05-13T15:00:00-05:00",
+                end: "2026-05-13T16:00:00-05:00",
+              },
+            ],
+          },
+        },
+      }),
+    });
+    const parsed = findMeetingTimeTool.inputSchema.parse({
+      duration_minutes: 30,
+      time_min: "2026-05-13T09:00:00-05:00",
+      time_max: "2026-05-13T17:00:00-05:00",
+      my_calendar_ids: ["primary", "cal_work"],
+      extra_busy: [
+        {
+          start: "2026-05-13T12:00:00-05:00",
+          end: "2026-05-13T13:00:00-05:00",
+        },
+      ],
+    }) as Parameters<typeof findMeetingTimeTool.handler>[0];
+    const out = await findMeetingTimeTool.handler(parsed, {
+      client: client as unknown as never,
+    });
+    // Busy: 9-10, 12-13, 15-16. Free gaps: 10-12 (120m), 13-15 (120m), 16-17 (60m).
+    expect(out.slots.map((s) => s.duration_minutes)).toEqual([120, 120, 60]);
+  });
+
+  it("respects top_n cap", async () => {
+    const client = makeClient({
+      freeBusy: vi.fn().mockResolvedValue({
+        calendars: {
+          primary: { busy: [] },
+        },
+      }),
+    });
+    const parsed = findMeetingTimeTool.inputSchema.parse({
+      duration_minutes: 30,
+      time_min: "2026-05-13T09:00:00-05:00",
+      time_max: "2026-05-13T17:00:00-05:00",
+      my_calendar_ids: ["primary"],
+      top_n: 1,
+    }) as Parameters<typeof findMeetingTimeTool.handler>[0];
+    const out = await findMeetingTimeTool.handler(parsed, {
+      client: client as unknown as never,
+    });
+    expect(out.slots).toHaveLength(1);
+  });
+
+  it("returns empty slots when nothing fits", async () => {
+    const client = makeClient({ freeBusy: vi.fn() });
+    const parsed = findMeetingTimeTool.inputSchema.parse({
+      duration_minutes: 60,
+      time_min: "2026-05-13T09:00:00-05:00",
+      time_max: "2026-05-13T17:00:00-05:00",
+      extra_busy: [
+        {
+          start: "2026-05-13T08:00:00-05:00",
+          end: "2026-05-13T18:00:00-05:00",
+        },
+      ],
+    }) as Parameters<typeof findMeetingTimeTool.handler>[0];
+    const out = await findMeetingTimeTool.handler(parsed, {
+      client: client as unknown as never,
+    });
+    expect(out.slots).toEqual([]);
+  });
+});
+
+// ============================================================================
+// eventWithInvitePreviewTool
+// ============================================================================
+
+describe("eventWithInvitePreviewTool — metadata", () => {
+  it("name + token budget", () => {
+    expect(eventWithInvitePreviewTool.name).toBe("event_with_invite_preview");
+    expect(
+      eventWithInvitePreviewTool.description.split(/\s+/).length,
+    ).toBeLessThanOrEqual(15);
+    expect(eventWithInvitePreviewTool.inputSchema).toBeInstanceOf(z.ZodType);
+  });
+
+  it("requires summary/start/end/attendees", () => {
+    expect(() => eventWithInvitePreviewTool.inputSchema.parse({})).toThrow();
+  });
+});
+
+describe("eventWithInvitePreviewTool — handler", () => {
+  it("returns create_event_payload + subject + body for a fully-specified event", async () => {
+    const client = makeClient();
+    const parsed = eventWithInvitePreviewTool.inputSchema.parse({
+      summary: "Coffee with Bob",
+      start: "2026-05-15T10:00:00-05:00",
+      end: "2026-05-15T11:00:00-05:00",
+      attendees: ["bob@example.com"],
+      location: "Hi Coffee",
+      description: "Catch up",
+    }) as Parameters<typeof eventWithInvitePreviewTool.handler>[0];
+    const out = await eventWithInvitePreviewTool.handler(parsed, {
+      client: client as unknown as never,
+    });
+    expect(out.create_event_payload).toEqual({
+      summary: "Coffee with Bob",
+      start: "2026-05-15T10:00:00-05:00",
+      end: "2026-05-15T11:00:00-05:00",
+      attendees: ["bob@example.com"],
+      location: "Hi Coffee",
+      description: "Catch up",
+      calendar_id: "primary",
+    });
+    // Subject contains "Invite:" + summary + "on" + a date.
+    expect(out.invite_email_subject).toContain("Invite: Coffee with Bob on");
+    // Body contains When + Where + description.
+    expect(out.invite_email_body).toContain("When: ");
+    expect(out.invite_email_body).toContain("Where: Hi Coffee");
+    expect(out.invite_email_body).toContain("Catch up");
+  });
+
+  it("uses TBD when location omitted; empty description renders empty trailer", async () => {
+    const client = makeClient();
+    const parsed = eventWithInvitePreviewTool.inputSchema.parse({
+      summary: "Standup",
+      start: "2026-05-15T10:00:00-05:00",
+      end: "2026-05-15T10:30:00-05:00",
+      attendees: ["a@example.com"],
+    }) as Parameters<typeof eventWithInvitePreviewTool.handler>[0];
+    const out = await eventWithInvitePreviewTool.handler(parsed, {
+      client: client as unknown as never,
+    });
+    expect(out.invite_email_body).toContain("Where: TBD");
+    // Payload should NOT include location/description keys when omitted.
+    expect(out.create_event_payload.location).toBeUndefined();
+    expect(out.create_event_payload.description).toBeUndefined();
+  });
+
+  it("does not call any side-effect client method", async () => {
+    const client = makeClient({
+      // Provide spies that should not fire.
+      listEvents: vi.fn(),
+    });
+    // Add other potential side-effect methods as spies on the same object.
+    const spy = vi.fn();
+    (client as unknown as { insertEvent: typeof spy }).insertEvent = spy;
+    const parsed = eventWithInvitePreviewTool.inputSchema.parse({
+      summary: "X",
+      start: "2026-05-15T10:00:00-05:00",
+      end: "2026-05-15T10:30:00-05:00",
+      attendees: ["a@example.com"],
+    }) as Parameters<typeof eventWithInvitePreviewTool.handler>[0];
+    await eventWithInvitePreviewTool.handler(parsed, {
+      client: client as unknown as never,
+    });
+    expect(client.listEvents).not.toHaveBeenCalled();
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("subject formats the date in the cached tz", async () => {
+    const client = makeClient({
+      ensureTimeZone: vi.fn().mockResolvedValue("America/Chicago"),
+    });
+    const parsed = eventWithInvitePreviewTool.inputSchema.parse({
+      summary: "X",
+      // 2026-05-15T03:00Z is May 14 22:00 Chicago — the date should reflect
+      // Chicago, not UTC.
+      start: "2026-05-15T03:00:00Z",
+      end: "2026-05-15T04:00:00Z",
+      attendees: ["a@example.com"],
+    }) as Parameters<typeof eventWithInvitePreviewTool.handler>[0];
+    const out = await eventWithInvitePreviewTool.handler(parsed, {
+      client: client as unknown as never,
+    });
+    // Should contain "May 14" (Chicago view), not "May 15" (UTC view).
+    expect(out.invite_email_subject).toContain("May 14");
+  });
+
+  it("honors explicit calendar_id", async () => {
+    const client = makeClient();
+    const parsed = eventWithInvitePreviewTool.inputSchema.parse({
+      summary: "X",
+      start: "2026-05-15T10:00:00-05:00",
+      end: "2026-05-15T10:30:00-05:00",
+      attendees: ["a@example.com"],
+      calendar_id: "cal_work",
+    }) as Parameters<typeof eventWithInvitePreviewTool.handler>[0];
+    const out = await eventWithInvitePreviewTool.handler(parsed, {
+      client: client as unknown as never,
+    });
+    expect(out.create_event_payload.calendar_id).toBe("cal_work");
+  });
+});
+
+// ============================================================================
+// outdoorEventCheckTool
+// ============================================================================
+
+describe("outdoorEventCheckTool — metadata", () => {
+  it("name + token budget", () => {
+    expect(outdoorEventCheckTool.name).toBe("outdoor_event_check");
+    expect(
+      outdoorEventCheckTool.description.split(/\s+/).length,
+    ).toBeLessThanOrEqual(15);
+  });
+
+  it("requires event_id", () => {
+    expect(() => outdoorEventCheckTool.inputSchema.parse({})).toThrow();
+    const parsed = outdoorEventCheckTool.inputSchema.parse({
+      event_id: "evt_alpha",
+    }) as { event_id: string; calendar_id: string };
+    expect(parsed.calendar_id).toBe("primary");
+  });
+});
+
+describe("outdoorEventCheckTool — handler", () => {
+  it("returns event + location + composition hint when location present", async () => {
+    const client = makeClient({
+      getEvent: vi.fn().mockResolvedValue({
+        id: "evt_alpha",
+        summary: "Hike",
+        start: { dateTime: "2026-05-15T10:00:00-05:00" },
+        end: { dateTime: "2026-05-15T13:00:00-05:00" },
+        location: "Cedar Ridge Preserve, Dallas",
+        htmlLink: "https://calendar.google.com/event?eid=alpha",
+        status: "confirmed",
+      }),
+    });
+    const parsed = outdoorEventCheckTool.inputSchema.parse({
+      event_id: "evt_alpha",
+    }) as Parameters<typeof outdoorEventCheckTool.handler>[0];
+    const out = await outdoorEventCheckTool.handler(parsed, {
+      client: client as unknown as never,
+    });
+    expect(client.getEvent).toHaveBeenCalledWith({
+      calendarId: "primary",
+      eventId: "evt_alpha",
+    });
+    expect(out.event.id).toBe("evt_alpha");
+    expect(out.location).toBe("Cedar Ridge Preserve, Dallas");
+    expect(out.hint).toContain("weather-smart.geocode");
+    expect(out.hint).toContain("weather-smart.outdoor_window");
+  });
+
+  it("returns null location + hint when event has no location", async () => {
+    const client = makeClient({
+      getEvent: vi.fn().mockResolvedValue({
+        id: "evt_beta",
+        summary: "Standup",
+        start: { dateTime: "2026-05-15T10:00:00-05:00" },
+        end: { dateTime: "2026-05-15T10:30:00-05:00" },
+        htmlLink: "https://calendar.google.com/event?eid=beta",
+        status: "confirmed",
+      }),
+    });
+    const parsed = outdoorEventCheckTool.inputSchema.parse({
+      event_id: "evt_beta",
+    }) as Parameters<typeof outdoorEventCheckTool.handler>[0];
+    const out = await outdoorEventCheckTool.handler(parsed, {
+      client: client as unknown as never,
+    });
+    expect(out.location).toBeNull();
+    expect(out.hint).toContain("weather-smart");
+  });
+
+  it("does not call freeBusy / listEvents — pure composition hint", async () => {
+    const client = makeClient({
+      getEvent: vi.fn().mockResolvedValue({
+        id: "evt_x",
+        summary: "X",
+        start: { dateTime: "2026-05-15T10:00:00-05:00" },
+        end: { dateTime: "2026-05-15T10:30:00-05:00" },
+        htmlLink: "https://calendar.google.com/event?eid=x",
+        status: "confirmed",
+      }),
+      freeBusy: vi.fn(),
+      listEvents: vi.fn(),
+    });
+    const parsed = outdoorEventCheckTool.inputSchema.parse({
+      event_id: "evt_x",
+    }) as Parameters<typeof outdoorEventCheckTool.handler>[0];
+    await outdoorEventCheckTool.handler(parsed, {
+      client: client as unknown as never,
+    });
+    expect(client.freeBusy).not.toHaveBeenCalled();
+    expect(client.listEvents).not.toHaveBeenCalled();
+  });
+
+  it("honors explicit calendar_id", async () => {
+    const client = makeClient({
+      getEvent: vi.fn().mockResolvedValue({
+        id: "evt_x",
+        summary: "X",
+        start: { dateTime: "2026-05-15T10:00:00-05:00" },
+        end: { dateTime: "2026-05-15T10:30:00-05:00" },
+        htmlLink: "https://calendar.google.com/event?eid=x",
+        status: "confirmed",
+        location: "Somewhere",
+      }),
+    });
+    const parsed = outdoorEventCheckTool.inputSchema.parse({
+      event_id: "evt_x",
+      calendar_id: "cal_personal",
+    }) as Parameters<typeof outdoorEventCheckTool.handler>[0];
+    await outdoorEventCheckTool.handler(parsed, {
+      client: client as unknown as never,
+    });
+    expect(client.getEvent).toHaveBeenCalledWith({
+      calendarId: "cal_personal",
+      eventId: "evt_x",
+    });
   });
 });

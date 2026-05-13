@@ -307,3 +307,291 @@ function todayInTzAdd(tz: string, weekStart: Date, offsetDays: number): Date {
   // date in the tz.
   return new Date(weekStart.getTime() + offsetDays * 24 * 3600 * 1000);
 }
+
+// ============================================================================
+// find_meeting_time
+// ============================================================================
+
+const MAX_TOP_N = 20;
+const DEFAULT_TOP_N = 5;
+
+const findMeetingTimeInputSchema = z.object({
+  duration_minutes: z.number().int().min(1).max(24 * 60),
+  time_min: z.string().min(1),
+  time_max: z.string().min(1),
+  my_calendar_ids: z.array(z.string().min(1)).optional(),
+  extra_busy: z
+    .array(
+      z.object({
+        start: z.string().min(1),
+        end: z.string().min(1),
+      }),
+    )
+    .optional(),
+  top_n: z.number().int().min(1).max(MAX_TOP_N).optional().default(DEFAULT_TOP_N),
+});
+
+type FindMeetingTimeInput = z.input<typeof findMeetingTimeInputSchema>;
+type FindMeetingTimeParsed = z.infer<typeof findMeetingTimeInputSchema>;
+
+type FindMeetingTimeOutput = {
+  slots: FreeBlock[];
+};
+
+/**
+ * Compose-style "where can N people meet" finder. Combines two sources of
+ * busy windows:
+ *  - `my_calendar_ids`: queried via Google's `freeBusy` (any calendar the
+ *    bound account has ACL on — shared family cal, work cal, etc.).
+ *  - `extra_busy`: raw `{start, end}` windows the caller already knows
+ *    about (typically external participants whose calendars the user can't
+ *    see).
+ *
+ * Returns the top N earliest free blocks of at least `duration_minutes`.
+ * No side effects — this just surfaces candidate slots; the LLM caller
+ * picks one and follows up with `create_event` itself.
+ */
+export const findMeetingTimeTool = defineTool<
+  FindMeetingTimeInput,
+  FindMeetingTimeOutput,
+  CalendarContext
+>({
+  name: "find_meeting_time",
+  description: "Find best meeting times",
+  // Cast required: `top_n` has `.optional().default(...)`.
+  inputSchema:
+    findMeetingTimeInputSchema as unknown as z.ZodType<FindMeetingTimeInput>,
+  handler: async (input, ctx) => {
+    const parsed = input as FindMeetingTimeParsed;
+    const tz = await ctx.client.ensureTimeZone();
+    const windows: BusyWindow[] = [];
+
+    if (parsed.my_calendar_ids && parsed.my_calendar_ids.length > 0) {
+      const result = await ctx.client.freeBusy({
+        timeMin: parsed.time_min,
+        timeMax: parsed.time_max,
+        calendarIds: parsed.my_calendar_ids,
+      });
+      const calendarsRecord = result.calendars ?? {};
+      for (const calendarId of parsed.my_calendar_ids) {
+        const cal = calendarsRecord[calendarId];
+        if (cal === undefined) continue;
+        for (const b of cal.busy) {
+          windows.push({ start: new Date(b.start), end: new Date(b.end) });
+        }
+      }
+    }
+
+    if (parsed.extra_busy && parsed.extra_busy.length > 0) {
+      for (const w of parsed.extra_busy) {
+        windows.push({ start: new Date(w.start), end: new Date(w.end) });
+      }
+    }
+
+    const merged = mergeBusy(windows);
+    const rangeStart = new Date(parsed.time_min);
+    const rangeEnd = new Date(parsed.time_max);
+    const free = findFreeBlocks(
+      merged,
+      rangeStart,
+      rangeEnd,
+      parsed.duration_minutes,
+    );
+    const top = free.slice(0, parsed.top_n);
+    return {
+      slots: top.map((b) => toFreeBlockWire(b, tz)),
+    };
+  },
+});
+
+// ============================================================================
+// event_with_invite_preview
+// ============================================================================
+
+const eventWithInvitePreviewInputSchema = z.object({
+  summary: z.string().min(1),
+  start: z.string().min(1),
+  end: z.string().min(1),
+  attendees: z.array(z.string().min(1)),
+  location: z.string().optional(),
+  description: z.string().optional(),
+  calendar_id: z.string().optional().default("primary"),
+});
+
+type EventWithInvitePreviewInput = z.input<
+  typeof eventWithInvitePreviewInputSchema
+>;
+type EventWithInvitePreviewParsed = z.infer<
+  typeof eventWithInvitePreviewInputSchema
+>;
+
+type CreateEventPayload = {
+  summary: string;
+  start: string;
+  end: string;
+  attendees: string[];
+  location?: string;
+  description?: string;
+  calendar_id: string;
+};
+
+type EventWithInvitePreviewOutput = {
+  create_event_payload: CreateEventPayload;
+  invite_email_subject: string;
+  invite_email_body: string;
+};
+
+const WEEKDAY_NAMES = [
+  "Sunday",
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday",
+];
+
+const MONTH_NAMES = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+];
+
+/**
+ * Format an instant as `"<Weekday>, <Month> <Day>"` in the given tz, e.g.
+ * `"Friday, May 15"`. Used for the human-readable date in the invite
+ * subject. The weekday comes from `Intl.DateTimeFormat`'s `weekday: "long"`
+ * part; month + day come from the same parts pipe so the offset matches the
+ * cached calendar tz.
+ */
+function formatHumanDate(instant: Date, tz: string): string {
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+  });
+  // formatToParts ensures we render in a known order independent of locale
+  // tweaks. The "en-US" formatter normally returns "Friday, May 15" but
+  // building it from parts is less brittle.
+  const parts = fmt.formatToParts(instant);
+  const lookup: Record<string, string> = {};
+  for (const p of parts) {
+    if (p.type !== "literal") lookup[p.type] = p.value;
+  }
+  const weekday = lookup.weekday ?? "";
+  const month = lookup.month ?? MONTH_NAMES[instant.getUTCMonth()] ?? "";
+  const day = lookup.day ?? "";
+  return `${weekday}, ${month} ${day}`;
+}
+
+/**
+ * Pure preview builder. Composes two outputs the LLM caller will use to
+ * (1) call `create_event` and (2) call `email-smart.send_email` with the
+ * invite. NO side effects: this tool does not create the event and does
+ * not send the email.
+ */
+export const eventWithInvitePreviewTool = defineTool<
+  EventWithInvitePreviewInput,
+  EventWithInvitePreviewOutput,
+  CalendarContext
+>({
+  name: "event_with_invite_preview",
+  description: "Preview event + invite email",
+  // Cast required: `calendar_id` has `.optional().default(...)`.
+  inputSchema:
+    eventWithInvitePreviewInputSchema as unknown as z.ZodType<EventWithInvitePreviewInput>,
+  handler: async (input, ctx) => {
+    const parsed = input as EventWithInvitePreviewParsed;
+    const tz = await ctx.client.ensureTimeZone();
+    const startInstant = new Date(parsed.start);
+    const endInstant = new Date(parsed.end);
+    const humanDate = formatHumanDate(startInstant, tz);
+    const startFormatted = formatIso(startInstant, tz);
+    const endFormatted = formatIso(endInstant, tz);
+    const subject = `Invite: ${parsed.summary} on ${humanDate}`;
+    const body = [
+      `When: ${startFormatted} - ${endFormatted}`,
+      `Where: ${parsed.location ?? "TBD"}`,
+      "",
+      parsed.description ?? "",
+    ].join("\n");
+    const payload: CreateEventPayload = {
+      summary: parsed.summary,
+      start: parsed.start,
+      end: parsed.end,
+      attendees: parsed.attendees,
+      calendar_id: parsed.calendar_id,
+      ...(parsed.location !== undefined ? { location: parsed.location } : {}),
+      ...(parsed.description !== undefined
+        ? { description: parsed.description }
+        : {}),
+    };
+    return {
+      create_event_payload: payload,
+      invite_email_subject: subject,
+      invite_email_body: body,
+    };
+  },
+});
+
+// ============================================================================
+// outdoor_event_check
+// ============================================================================
+
+const OUTDOOR_HINT =
+  "Pass location to weather-smart.geocode then weather-smart.outdoor_window for forecast at this start time";
+
+const outdoorEventCheckInputSchema = z.object({
+  event_id: z.string().min(1),
+  calendar_id: z.string().optional().default("primary"),
+});
+
+type OutdoorEventCheckInput = z.input<typeof outdoorEventCheckInputSchema>;
+type OutdoorEventCheckParsed = z.infer<typeof outdoorEventCheckInputSchema>;
+
+type OutdoorEventCheckOutput = {
+  event: SlimEvent;
+  location: string | null;
+  hint: string;
+};
+
+/**
+ * Cross-MCP composition hint: surfaces an event's location and the exact
+ * follow-up tools the LLM should call to get a forecast. Does not geocode
+ * or call weather-smart itself — keeping the calendar/weather domain split
+ * clean (calendar-smart never imports weather-smart).
+ */
+export const outdoorEventCheckTool = defineTool<
+  OutdoorEventCheckInput,
+  OutdoorEventCheckOutput,
+  CalendarContext
+>({
+  name: "outdoor_event_check",
+  description: "Surface event location for weather check",
+  // Cast required: `calendar_id` has `.optional().default(...)`.
+  inputSchema:
+    outdoorEventCheckInputSchema as unknown as z.ZodType<OutdoorEventCheckInput>,
+  handler: async (input, ctx) => {
+    const parsed = input as OutdoorEventCheckParsed;
+    const raw = await ctx.client.getEvent({
+      calendarId: parsed.calendar_id,
+      eventId: parsed.event_id,
+    });
+    const slim = mapEvent(raw, parsed.calendar_id);
+    return {
+      event: slim,
+      location: slim.location,
+      hint: OUTDOOR_HINT,
+    };
+  },
+});
