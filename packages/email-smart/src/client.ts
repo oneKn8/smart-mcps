@@ -2,9 +2,9 @@ import {
   AuthError,
   NotFoundError,
   fetchJson,
+  GoogleOAuthClient,
   ValidationError,
 } from "smart-mcp-core";
-import { GoogleOAuthClient } from "./oauth.js";
 
 const GMAIL_API_BASE = "https://gmail.googleapis.com/gmail/v1";
 const GMAIL_SEND_URL = `${GMAIL_API_BASE}/users/me/messages/send`;
@@ -160,7 +160,7 @@ export class EmailClient {
   oauthFor(account: string): GoogleOAuthClient {
     let existing = this.oauthClients.get(account);
     if (existing === undefined) {
-      existing = new GoogleOAuthClient(account, this.resolveHome());
+      existing = new GoogleOAuthClient(account, { home: this.resolveHome() });
       this.oauthClients.set(account, existing);
     }
     return existing;
