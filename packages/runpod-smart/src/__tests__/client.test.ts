@@ -18,15 +18,25 @@ afterEach(() => server.resetHandlers());
 afterAll(() => server.close());
 
 let savedKey: string | undefined;
+let savedHome: string | undefined;
 
 beforeEach(() => {
   savedKey = process.env.RUNPOD_API_KEY;
+  savedHome = process.env.HOME;
   delete process.env.RUNPOD_API_KEY;
+  // Override HOME to a non-existent directory so loadCreds cannot fall back
+  // to the real `~/.config/smart-mcps/.env` (which has RUNPOD_API_KEY set on
+  // dev machines). Without this, the "throws AuthError when missing" test
+  // silently passes when running locally even with no key explicitly set.
+  // See CLAUDE.md "Test isolation gotcha".
+  process.env.HOME = "/nonexistent/runpod-test-home";
 });
 
 afterEach(() => {
   if (savedKey === undefined) delete process.env.RUNPOD_API_KEY;
   else process.env.RUNPOD_API_KEY = savedKey;
+  if (savedHome === undefined) delete process.env.HOME;
+  else process.env.HOME = savedHome;
 });
 
 describe("RunpodClient — constructor", () => {
