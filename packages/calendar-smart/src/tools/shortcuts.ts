@@ -441,16 +441,6 @@ type EventWithInvitePreviewOutput = {
   invite_email_body: string;
 };
 
-const WEEKDAY_NAMES = [
-  "Sunday",
-  "Monday",
-  "Tuesday",
-  "Wednesday",
-  "Thursday",
-  "Friday",
-  "Saturday",
-];
-
 const MONTH_NAMES = [
   "January",
   "February",

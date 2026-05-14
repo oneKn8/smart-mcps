@@ -206,17 +206,6 @@ function findHeader(
   return "";
 }
 
-function readDraftHeaders(rawDraft: unknown): {
-  from: string;
-  to: string;
-  cc: string;
-  bcc: string;
-  subject: string;
-} {
-  const message = unwrapDraftMessage(rawDraft);
-  return readMessageHeaders(message);
-}
-
 function readMessageHeaders(rawMessage: unknown): {
   from: string;
   to: string;

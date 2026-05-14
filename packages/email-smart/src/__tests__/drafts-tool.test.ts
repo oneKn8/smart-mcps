@@ -320,7 +320,7 @@ describe("list_drafts — happy path", () => {
       { id: "d1", messageId: "m1", threadId: "t1" },
       { id: "d2", messageId: "m2", threadId: "t2" },
     ];
-    let getDraftCalls: Array<{ id: string; format: string }> = [];
+    const getDraftCalls: Array<{ id: string; format: string }> = [];
     const fake = makeFakeClient({
       listDrafts: async (_account, _opts) => ({
         drafts: draftRefs,

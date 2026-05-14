@@ -265,7 +265,7 @@ describe("VercelClient.listAllProjects", () => {
     process.env.VERCEL_TOKEN = "test_token";
     process.env.VERCEL_TEAM_ID = "team_a";
     stubTeams([{ id: "team_a", slug: "alpha-team", name: "Alpha Team" }]);
-    let seenUrls: string[] = [];
+    const seenUrls: string[] = [];
     server.use(
       http.get("https://api.vercel.com/v9/projects", ({ request }) => {
         seenUrls.push(request.url);

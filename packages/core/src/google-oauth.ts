@@ -102,7 +102,6 @@ export class GoogleOAuthClient {
   private readonly fileSuffix: string;
   private readonly reauthHint: string;
   // requiredScope is stored but unused — see opts docstring.
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   private readonly requiredScope: string | undefined;
 
   constructor(account: string, opts: GoogleOAuthClientOpts = {}) {
