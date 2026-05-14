@@ -86,6 +86,10 @@ export const transparencySchema = z.enum(["opaque", "transparent"]);
 
 export const sendUpdatesSchema = z.enum(["all", "externalOnly", "none"]);
 
+// `outOfOffice`, `focusTime`, and `workingLocation` are Google Workspace-only
+// — Google rejects them with `malformedXxxEvent` on personal Gmail accounts.
+// Documented here so the schema surface stays accurate for all callers.
+// `birthday` works on both.
 export const eventTypeSchema = z.enum([
   "default",
   "outOfOffice",

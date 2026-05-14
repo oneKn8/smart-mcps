@@ -201,6 +201,12 @@ export const createEventTool = defineTool<
       body.workingLocationProperties = buildWorkingLocationProperties(
         parsed.working_location,
       );
+      // Google requires both on workingLocation events; auto-set unless the
+      // caller explicitly chose otherwise. Without these, Google returns 400
+      // "malformedWorkingLocationEvent" before even checking workspace
+      // eligibility — masking the real "not enterprise account" error.
+      if (parsed.transparency === undefined) body.transparency = "transparent";
+      if (parsed.visibility === undefined) body.visibility = "public";
     }
     if (parsed.event_type === "birthday" && parsed.birthday !== undefined) {
       body.birthdayProperties = buildBirthdayProperties(parsed.birthday);

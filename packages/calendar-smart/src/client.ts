@@ -2,6 +2,7 @@ import {
   AuthError,
   NotFoundError,
   UpstreamError,
+  ValidationError,
   fetchJson,
   GoogleOAuthClient,
 } from "smart-mcp-core";
@@ -1093,6 +1094,21 @@ export class CalendarClient {
  */
 function mapCalendarAuthError(err: unknown, account: string): unknown {
   if (err instanceof NotFoundError) return err;
+  // 400 from Google Calendar is almost always a malformed-event error with a
+  // useful `errors[].message` in the body. Surface it inline so callers don't
+  // have to dig into `.detail`. Keeps `ValidationError` so non-auth errors
+  // don't get reclassified.
+  if (err instanceof ValidationError) {
+    const detail = (err as { detail?: unknown }).detail;
+    const reason = extractGoogleErrorReason(detail);
+    if (reason) {
+      return new ValidationError(
+        `${err.message} — ${reason}`,
+        { detail, cause: err },
+      );
+    }
+    return err;
+  }
   if (!(err instanceof AuthError)) return err;
   const msg = err.message;
   if (msg.includes("→ 403")) {
@@ -1122,4 +1138,29 @@ function mapCalendarAuthError(err: unknown, account: string): unknown {
     );
   }
   return err;
+}
+
+/**
+ * Extract Google's human-readable error reason from the parsed body the
+ * core http layer attached as `.detail`. Google's standard shape is
+ * `{ error: { errors: [{ message, reason }], message, code } }`.
+ * Returns the most informative string, or null when nothing useful found.
+ */
+function extractGoogleErrorReason(detail: unknown): string | null {
+  if (typeof detail !== "object" || detail === null) return null;
+  const d = detail as { error?: unknown };
+  const errBlock = d.error;
+  if (typeof errBlock !== "object" || errBlock === null) return null;
+  const eb = errBlock as { message?: unknown; errors?: unknown };
+  // Prefer the per-error message (more specific) over the top-level message.
+  if (Array.isArray(eb.errors) && eb.errors.length > 0) {
+    const first = eb.errors[0] as { message?: unknown; reason?: unknown };
+    if (typeof first.message === "string" && first.message.length > 0) {
+      return first.message;
+    }
+  }
+  if (typeof eb.message === "string" && eb.message.length > 0) {
+    return eb.message;
+  }
+  return null;
 }
