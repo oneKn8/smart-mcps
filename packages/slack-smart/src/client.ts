@@ -488,4 +488,88 @@ export class SlackClient {
       };
     }>;
   }
+
+  // ---------------------------------------------------------------------------
+  // Users (user token, scope users:read [+users:read.email for email field])
+  // ---------------------------------------------------------------------------
+
+  async listUsers(args: {
+    limit?: number;
+    cursor?: string;
+  }): Promise<{
+    ok: true;
+    members: unknown[];
+    response_metadata?: { next_cursor?: string };
+  }> {
+    return this.slackCall<
+      SlackEnvelope & {
+        members: unknown[];
+        response_metadata?: { next_cursor?: string };
+      }
+    >("users.list", {
+      ...(args.limit !== undefined ? { limit: args.limit } : {}),
+      ...(args.cursor !== undefined ? { cursor: args.cursor } : {}),
+    }) as Promise<{
+      ok: true;
+      members: unknown[];
+      response_metadata?: { next_cursor?: string };
+    }>;
+  }
+
+  async getUserInfo(args: { user: string }): Promise<{
+    ok: true;
+    user: unknown;
+  }> {
+    return this.slackCall<SlackEnvelope & { user: unknown }>(
+      "users.info",
+      { user: args.user },
+    ) as Promise<{ ok: true; user: unknown }>;
+  }
+
+  async getUserProfile(args: { user?: string }): Promise<{
+    ok: true;
+    profile: unknown;
+  }> {
+    return this.slackCall<SlackEnvelope & { profile: unknown }>(
+      "users.profile.get",
+      {
+        ...(args.user !== undefined ? { user: args.user } : {}),
+      },
+    ) as Promise<{ ok: true; profile: unknown }>;
+  }
+
+  async lookupByEmail(args: { email: string }): Promise<{
+    ok: true;
+    user: unknown;
+  }> {
+    return this.slackCall<SlackEnvelope & { user: unknown }>(
+      "users.lookupByEmail",
+      { email: args.email },
+    ) as Promise<{ ok: true; user: unknown }>;
+  }
+
+  async getPresence(args: { user?: string }): Promise<{
+    ok: true;
+    presence: string;
+    online?: boolean;
+    auto_away?: boolean;
+    manual_away?: boolean;
+  }> {
+    return this.slackCall<
+      SlackEnvelope & {
+        presence: string;
+        online?: boolean;
+        auto_away?: boolean;
+        manual_away?: boolean;
+      }
+    >("users.getPresence", {
+      ...(args.user !== undefined ? { user: args.user } : {}),
+    }) as Promise<{
+      ok: true;
+      presence: string;
+      online?: boolean;
+      auto_away?: boolean;
+      manual_away?: boolean;
+    }>;
+  }
 }

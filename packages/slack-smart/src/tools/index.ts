@@ -18,12 +18,21 @@ import {
 } from "./messages.js";
 import { search_messages, search_files } from "./search.js";
 import { add_reaction, remove_reaction, get_reactions } from "./reactions.js";
+import {
+  list_users,
+  user_info,
+  user_profile,
+  lookup_by_email,
+  user_presence,
+  resolve_user,
+} from "./users.js";
 
 // identity (1)
 // conversations (6)
 // messages (5)
 // search (2)
 // reactions (3)
+// users (6)
 export const tools: ToolDefinition<unknown, unknown, SlackContext>[] = [
   whoami as unknown as ToolDefinition<unknown, unknown, SlackContext>,
   list_channels as unknown as ToolDefinition<unknown, unknown, SlackContext>,
@@ -42,4 +51,10 @@ export const tools: ToolDefinition<unknown, unknown, SlackContext>[] = [
   add_reaction as unknown as ToolDefinition<unknown, unknown, SlackContext>,
   remove_reaction as unknown as ToolDefinition<unknown, unknown, SlackContext>,
   get_reactions as unknown as ToolDefinition<unknown, unknown, SlackContext>,
+  list_users as unknown as ToolDefinition<unknown, unknown, SlackContext>,
+  user_info as unknown as ToolDefinition<unknown, unknown, SlackContext>,
+  user_profile as unknown as ToolDefinition<unknown, unknown, SlackContext>,
+  lookup_by_email as unknown as ToolDefinition<unknown, unknown, SlackContext>,
+  user_presence as unknown as ToolDefinition<unknown, unknown, SlackContext>,
+  resolve_user as unknown as ToolDefinition<unknown, unknown, SlackContext>,
 ];
