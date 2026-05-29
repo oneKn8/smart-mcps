@@ -3,7 +3,11 @@ import { tools } from "../tools/index.js";
 
 describe("slack-smart tool wiring", () => {
   it("exports the expected number of tools", () => {
-    expect(tools).toHaveLength(0);
+    expect(tools).toHaveLength(1);
+  });
+
+  it("tool names include whoami", () => {
+    expect(tools.map((t) => t.name)).toContain("whoami");
   });
 
   it("all names are unique", () => {
