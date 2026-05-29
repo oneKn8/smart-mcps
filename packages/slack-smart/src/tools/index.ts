@@ -30,6 +30,13 @@ import { list_files, file_info, upload_file } from "./files.js";
 import { list_pins, pin_message, unpin_message } from "./pins.js";
 import { dnd_status, set_snooze, end_snooze } from "./dnd.js";
 import { list_usergroups, team_info, list_emoji } from "./misc.js";
+import {
+  catch_me_up,
+  mentions,
+  unread_digest,
+  thread_catchup,
+  smart_send,
+} from "./smart.js";
 
 // identity (1)
 // conversations (6)
@@ -41,6 +48,7 @@ import { list_usergroups, team_info, list_emoji } from "./misc.js";
 // pins (3)
 // dnd (3)
 // misc (3)
+// smart (5)
 export const tools: ToolDefinition<unknown, unknown, SlackContext>[] = [
   whoami as unknown as ToolDefinition<unknown, unknown, SlackContext>,
   list_channels as unknown as ToolDefinition<unknown, unknown, SlackContext>,
@@ -80,4 +88,10 @@ export const tools: ToolDefinition<unknown, unknown, SlackContext>[] = [
   list_usergroups as unknown as ToolDefinition<unknown, unknown, SlackContext>,
   team_info as unknown as ToolDefinition<unknown, unknown, SlackContext>,
   list_emoji as unknown as ToolDefinition<unknown, unknown, SlackContext>,
+  // smart (5)
+  catch_me_up as unknown as ToolDefinition<unknown, unknown, SlackContext>,
+  mentions as unknown as ToolDefinition<unknown, unknown, SlackContext>,
+  unread_digest as unknown as ToolDefinition<unknown, unknown, SlackContext>,
+  thread_catchup as unknown as ToolDefinition<unknown, unknown, SlackContext>,
+  smart_send as unknown as ToolDefinition<unknown, unknown, SlackContext>,
 ];
