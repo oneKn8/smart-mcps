@@ -1,0 +1,393 @@
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { ConfirmRequiredError, ValidationError } from "smart-mcp-core";
+import { list_files, file_info, upload_file } from "../files.js";
+
+// ---------------------------------------------------------------------------
+// Fake client factory
+// ---------------------------------------------------------------------------
+
+type FakeClient = {
+  listFiles: ReturnType<typeof vi.fn>;
+  getFileInfo: ReturnType<typeof vi.fn>;
+  getUploadUrl: ReturnType<typeof vi.fn>;
+  uploadBytes: ReturnType<typeof vi.fn>;
+  completeUpload: ReturnType<typeof vi.fn>;
+};
+
+function makeClient(): FakeClient {
+  return {
+    listFiles: vi.fn(),
+    getFileInfo: vi.fn(),
+    getUploadUrl: vi.fn(),
+    uploadBytes: vi.fn(),
+    completeUpload: vi.fn(),
+  };
+}
+
+function ctx(client: FakeClient) {
+  return { client: client as unknown as never };
+}
+
+function parse<T>(
+  tool: { inputSchema: { parse: (v: unknown) => T } },
+  raw: unknown,
+): T {
+  return tool.inputSchema.parse(raw);
+}
+
+// ---------------------------------------------------------------------------
+// list_files — schema defaults + slim mapping
+// ---------------------------------------------------------------------------
+
+describe("list_files — schema defaults", () => {
+  it("defaults count to 100 and page to 1", () => {
+    const parsed = parse(list_files, {}) as { count: number; page: number };
+    expect(parsed.count).toBe(100);
+    expect(parsed.page).toBe(1);
+  });
+});
+
+describe("list_files — slim mapping", () => {
+  let client: FakeClient;
+
+  beforeEach(() => {
+    client = makeClient();
+  });
+
+  it("returns slimmed files and paging fields", async () => {
+    client.listFiles.mockResolvedValue({
+      ok: true,
+      files: [
+        {
+          id: "F001",
+          name: "report.pdf",
+          title: "Q1 Report",
+          mimetype: "application/pdf",
+          filetype: "pdf",
+          size: 20480,
+          permalink: "https://slack.com/files/F001",
+          permalink_public: "https://files.slack.com/files/F001",
+          user: "U001",
+          created: 1700000000,
+          channels: ["C001", "C002"],
+          extra_field: "should not appear",
+        },
+      ],
+      paging: { count: 1, total: 1, page: 1, pages: 1 },
+    });
+    const input = parse(list_files, {});
+    const result = (await list_files.handler(input, ctx(client))) as {
+      files: Array<Record<string, unknown>>;
+      count: number;
+      page: number;
+      pages: number;
+      total: number;
+    };
+    expect(result.count).toBe(1);
+    expect(result.page).toBe(1);
+    expect(result.pages).toBe(1);
+    expect(result.total).toBe(1);
+    const f = result.files[0];
+    expect(f).toBeDefined();
+    expect(f?.["id"]).toBe("F001");
+    expect(f?.["name"]).toBe("report.pdf");
+    expect(f?.["mimetype"]).toBe("application/pdf");
+    expect(f?.["channels"]).toEqual(["C001", "C002"]);
+    expect(f).not.toHaveProperty("extra_field");
+  });
+
+  it("omits paging fields when paging is absent", async () => {
+    client.listFiles.mockResolvedValue({
+      ok: true,
+      files: [],
+    });
+    const input = parse(list_files, {});
+    const result = (await list_files.handler(input, ctx(client))) as Record<
+      string,
+      unknown
+    >;
+    expect(result["page"]).toBeUndefined();
+    expect(result["pages"]).toBeUndefined();
+    expect(result["total"]).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// file_info — slim mapping
+// ---------------------------------------------------------------------------
+
+describe("file_info — slim mapping", () => {
+  let client: FakeClient;
+
+  beforeEach(() => {
+    client = makeClient();
+  });
+
+  it("returns a slimmed file object", async () => {
+    client.getFileInfo.mockResolvedValue({
+      ok: true,
+      file: {
+        id: "F002",
+        name: "notes.txt",
+        size: 512,
+        mimetype: "text/plain",
+        unwanted: "drop me",
+      },
+    });
+    const input = parse(file_info, { file: "F002" });
+    const result = (await file_info.handler(input, ctx(client))) as Record<
+      string,
+      unknown
+    >;
+    expect(result["id"]).toBe("F002");
+    expect(result["name"]).toBe("notes.txt");
+    expect(result["size"]).toBe(512);
+    expect(result).not.toHaveProperty("unwanted");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// upload_file — validation guards
+// ---------------------------------------------------------------------------
+
+describe("upload_file — validation: source selection", () => {
+  let client: FakeClient;
+
+  beforeEach(() => {
+    client = makeClient();
+  });
+
+  it("throws ValidationError when neither file_path nor content_base64 is provided", async () => {
+    const input = parse(upload_file, { confirm: true });
+    await expect(upload_file.handler(input, ctx(client))).rejects.toThrow(
+      ValidationError,
+    );
+    expect(client.getUploadUrl).not.toHaveBeenCalled();
+  });
+
+  it("throws ValidationError when both file_path and content_base64 are provided", async () => {
+    const input = parse(upload_file, {
+      file_path: "/tmp/x.txt",
+      content_base64: "aGVsbG8=",
+      filename: "x.txt",
+      confirm: true,
+    });
+    await expect(upload_file.handler(input, ctx(client))).rejects.toThrow(
+      ValidationError,
+    );
+    expect(client.getUploadUrl).not.toHaveBeenCalled();
+  });
+
+  it("throws ValidationError when content_base64 is given without filename", async () => {
+    const input = parse(upload_file, {
+      content_base64: "aGVsbG8=",
+      confirm: true,
+    });
+    await expect(upload_file.handler(input, ctx(client))).rejects.toThrow(
+      ValidationError,
+    );
+    expect(client.getUploadUrl).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// upload_file — confirm gate
+// ---------------------------------------------------------------------------
+
+describe("upload_file — confirm gate", () => {
+  let client: FakeClient;
+
+  beforeEach(() => {
+    client = makeClient();
+  });
+
+  it("throws ConfirmRequiredError without confirm and makes NO client calls", async () => {
+    const input = parse(upload_file, {
+      content_base64: "aGVsbG8=",
+      filename: "hello.txt",
+    });
+    await expect(upload_file.handler(input, ctx(client))).rejects.toThrow(
+      ConfirmRequiredError,
+    );
+    expect(client.getUploadUrl).not.toHaveBeenCalled();
+    expect(client.uploadBytes).not.toHaveBeenCalled();
+    expect(client.completeUpload).not.toHaveBeenCalled();
+  });
+
+  it("preview contains filename, byte count and channel", async () => {
+    const input = parse(upload_file, {
+      content_base64: "aGVsbG8=",
+      filename: "hello.txt",
+      channel_id: "C001",
+    });
+    let preview = "";
+    try {
+      await upload_file.handler(input, ctx(client));
+    } catch (err) {
+      if (err instanceof ConfirmRequiredError) preview = err.preview;
+    }
+    expect(preview).toContain("hello.txt");
+    expect(preview).toContain("C001");
+    // "aGVsbG8=" decodes to "hello" (5 bytes)
+    expect(preview).toContain("5 bytes");
+  });
+
+  it("preview uses (no channel) when channel_id is omitted", async () => {
+    const input = parse(upload_file, {
+      content_base64: "aGVsbG8=",
+      filename: "hello.txt",
+    });
+    let preview = "";
+    try {
+      await upload_file.handler(input, ctx(client));
+    } catch (err) {
+      if (err instanceof ConfirmRequiredError) preview = err.preview;
+    }
+    expect(preview).toContain("(no channel)");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// upload_file — happy path (content_base64)
+// ---------------------------------------------------------------------------
+
+describe("upload_file — happy path with content_base64", () => {
+  let client: FakeClient;
+
+  beforeEach(() => {
+    client = makeClient();
+    client.getUploadUrl.mockResolvedValue({
+      ok: true,
+      upload_url: "https://files.slack.com/upload/v1/XYZ",
+      file_id: "F999",
+    });
+    client.uploadBytes.mockResolvedValue(undefined);
+    client.completeUpload.mockResolvedValue({
+      ok: true,
+      files: [{ id: "F999", name: "hello.txt" }],
+    });
+  });
+
+  it("calls getUploadUrl, uploadBytes, completeUpload in order with correct args", async () => {
+    const input = parse(upload_file, {
+      content_base64: "aGVsbG8=",
+      filename: "hello.txt",
+      title: "Hello File",
+      channel_id: "C001",
+      initial_comment: "see attachment",
+      confirm: true,
+    });
+    const result = (await upload_file.handler(input, ctx(client))) as {
+      ok: boolean;
+      file_id: string;
+      files?: Array<Record<string, unknown>>;
+    };
+
+    // step 1: getUploadUrl
+    expect(client.getUploadUrl).toHaveBeenCalledTimes(1);
+    const [urlArgs] = client.getUploadUrl.mock.calls[0] as [
+      { filename: string; length: number },
+    ];
+    expect(urlArgs.filename).toBe("hello.txt");
+    expect(urlArgs.length).toBe(5); // "hello" is 5 bytes
+
+    // step 2: uploadBytes
+    expect(client.uploadBytes).toHaveBeenCalledTimes(1);
+    const [uploadUrl, bytes, uploadFilename] = client.uploadBytes.mock
+      .calls[0] as [string, Uint8Array, string];
+    expect(uploadUrl).toBe("https://files.slack.com/upload/v1/XYZ");
+    expect(bytes).toBeInstanceOf(Uint8Array);
+    expect(bytes.length).toBe(5);
+    expect(uploadFilename).toBe("hello.txt");
+
+    // step 3: completeUpload
+    expect(client.completeUpload).toHaveBeenCalledTimes(1);
+    const [completeArgs] = client.completeUpload.mock.calls[0] as [
+      {
+        files: Array<{ id: string; title?: string }>;
+        channel_id?: string;
+        initial_comment?: string;
+      },
+    ];
+    expect(completeArgs.files).toEqual([
+      { id: "F999", title: "Hello File" },
+    ]);
+    expect(completeArgs.channel_id).toBe("C001");
+    expect(completeArgs.initial_comment).toBe("see attachment");
+
+    // output
+    expect(result.ok).toBe(true);
+    expect(result.file_id).toBe("F999");
+    expect(result.files).toHaveLength(1);
+    expect(result.files?.[0]?.["id"]).toBe("F999");
+  });
+
+  it("omits title from completeUpload files entry when not provided", async () => {
+    const input = parse(upload_file, {
+      content_base64: "aGVsbG8=",
+      filename: "hello.txt",
+      confirm: true,
+    });
+    await upload_file.handler(input, ctx(client));
+    const [completeArgs] = client.completeUpload.mock.calls[0] as [
+      { files: Array<{ id: string; title?: string }> },
+    ];
+    expect(completeArgs.files[0]).toEqual({ id: "F999" });
+    expect(completeArgs.files[0]).not.toHaveProperty("title");
+  });
+
+  it("omits files field from output when completeUpload returns empty files", async () => {
+    client.completeUpload.mockResolvedValueOnce({ ok: true, files: [] });
+    const input = parse(upload_file, {
+      content_base64: "aGVsbG8=",
+      filename: "hello.txt",
+      confirm: true,
+    });
+    const result = (await upload_file.handler(input, ctx(client))) as Record<
+      string,
+      unknown
+    >;
+    expect(result).not.toHaveProperty("files");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// upload_file — file_path branch (vi.mock for node:fs)
+// ---------------------------------------------------------------------------
+
+describe("upload_file — file_path branch", () => {
+  it("reads bytes from file_path and derives filename from basename", async () => {
+    // Mock node:fs to avoid real filesystem access
+    vi.mock("node:fs", () => ({
+      readFileSync: vi.fn(() => Buffer.from("file content")),
+    }));
+    const { readFileSync } = await import("node:fs");
+
+    const client = makeClient();
+    client.getUploadUrl.mockResolvedValue({
+      ok: true,
+      upload_url: "https://files.slack.com/upload/v1/FSPATH",
+      file_id: "F888",
+    });
+    client.uploadBytes.mockResolvedValue(undefined);
+    client.completeUpload.mockResolvedValue({ ok: true, files: [] });
+
+    const input = parse(upload_file, {
+      file_path: "/some/dir/document.pdf",
+      confirm: true,
+    });
+    await upload_file.handler(input, ctx(client));
+
+    expect(readFileSync).toHaveBeenCalledWith("/some/dir/document.pdf");
+
+    const [urlArgs] = client.getUploadUrl.mock.calls[0] as [
+      { filename: string; length: number },
+    ];
+    // basename derived: "document.pdf"
+    expect(urlArgs.filename).toBe("document.pdf");
+    // "file content" is 12 bytes
+    expect(urlArgs.length).toBe(12);
+
+    vi.restoreAllMocks();
+  });
+});

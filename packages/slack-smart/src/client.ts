@@ -52,7 +52,11 @@ export class SlackClient {
 
   async slackCall<T extends SlackEnvelope>(
     method: string,
-    args: Record<string, string | number | boolean | undefined> = {},
+    // Widened from Record<string, string|number|boolean|undefined> to support
+    // array-valued fields (e.g. `files` in files.completeUploadExternal).
+    // GET callers only pass primitives; POST path JSON.stringifies, so arrays
+    // and objects serialize fine.
+    args: Record<string, unknown> = {},
     opts: { token?: "user" | "bot"; http?: "GET" | "POST" } = {},
   ): Promise<T> {
     const url = `https://slack.com/api/${method}`;
@@ -61,10 +65,14 @@ export class SlackClient {
 
     let body: T;
     if (httpMethod === "GET") {
-      body = await fetchJson<T>(url, { token, searchParams: args });
+      // GET callers only ever pass primitives — cast is safe.
+      body = await fetchJson<T>(url, {
+        token,
+        searchParams: args as Record<string, string | number | boolean | undefined>,
+      });
     } else {
       // Drop undefined keys before sending as JSON body
-      const cleanArgs: Record<string, string | number | boolean> = {};
+      const cleanArgs: Record<string, unknown> = {};
       for (const [k, v] of Object.entries(args)) {
         if (v !== undefined) cleanArgs[k] = v;
       }
@@ -571,5 +579,107 @@ export class SlackClient {
       auto_away?: boolean;
       manual_away?: boolean;
     }>;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Files (user token, scopes files:read / files:write)
+  // ---------------------------------------------------------------------------
+
+  async listFiles(args: {
+    channel?: string;
+    user?: string;
+    count?: number;
+    page?: number;
+    ts_from?: string;
+    ts_to?: string;
+    types?: string;
+  }): Promise<{
+    ok: true;
+    files: unknown[];
+    paging?: { count: number; total: number; page: number; pages: number };
+  }> {
+    return this.slackCall<
+      SlackEnvelope & {
+        files: unknown[];
+        paging?: { count: number; total: number; page: number; pages: number };
+      }
+    >("files.list", {
+      ...(args.channel !== undefined ? { channel: args.channel } : {}),
+      ...(args.user !== undefined ? { user: args.user } : {}),
+      ...(args.count !== undefined ? { count: args.count } : {}),
+      ...(args.page !== undefined ? { page: args.page } : {}),
+      ...(args.ts_from !== undefined ? { ts_from: args.ts_from } : {}),
+      ...(args.ts_to !== undefined ? { ts_to: args.ts_to } : {}),
+      ...(args.types !== undefined ? { types: args.types } : {}),
+    }) as Promise<{
+      ok: true;
+      files: unknown[];
+      paging?: { count: number; total: number; page: number; pages: number };
+    }>;
+  }
+
+  async getFileInfo(args: { file: string }): Promise<{
+    ok: true;
+    file: unknown;
+  }> {
+    return this.slackCall<SlackEnvelope & { file: unknown }>(
+      "files.info",
+      { file: args.file },
+    ) as Promise<{ ok: true; file: unknown }>;
+  }
+
+  async getUploadUrl(args: {
+    filename: string;
+    length: number;
+  }): Promise<{
+    ok: true;
+    upload_url: string;
+    file_id: string;
+  }> {
+    return this.slackCall<
+      SlackEnvelope & { upload_url: string; file_id: string }
+    >("files.getUploadURLExternal", {
+      filename: args.filename,
+      length: args.length,
+    }) as Promise<{ ok: true; upload_url: string; file_id: string }>;
+  }
+
+  // uploadBytes does NOT use slackCall/fetchJson — it POSTs raw multipart to the
+  // pre-signed upload_url returned by getUploadUrl. Node 22 has global FormData,
+  // Blob, and fetch.
+  async uploadBytes(
+    uploadUrl: string,
+    bytes: Uint8Array,
+    filename: string,
+  ): Promise<void> {
+    const form = new FormData();
+    form.append("file", new Blob([bytes]), filename);
+    const res = await fetch(uploadUrl, { method: "POST", body: form });
+    if (!res.ok) {
+      throw new UpstreamError(`File upload POST failed: ${res.status}`);
+    }
+  }
+
+  async completeUpload(args: {
+    files: Array<{ id: string; title?: string }>;
+    channel_id?: string;
+    initial_comment?: string;
+    thread_ts?: string;
+  }): Promise<{
+    ok: true;
+    files?: unknown[];
+  }> {
+    return this.slackCall<SlackEnvelope & { files?: unknown[] }>(
+      "files.completeUploadExternal",
+      {
+        files: args.files,
+        ...(args.channel_id !== undefined ? { channel_id: args.channel_id } : {}),
+        ...(args.initial_comment !== undefined
+          ? { initial_comment: args.initial_comment }
+          : {}),
+        ...(args.thread_ts !== undefined ? { thread_ts: args.thread_ts } : {}),
+      },
+      { token: "user", http: "POST" },
+    ) as Promise<{ ok: true; files?: unknown[] }>;
   }
 }

@@ -26,6 +26,7 @@ import {
   user_presence,
   resolve_user,
 } from "./users.js";
+import { list_files, file_info, upload_file } from "./files.js";
 
 // identity (1)
 // conversations (6)
@@ -33,6 +34,7 @@ import {
 // search (2)
 // reactions (3)
 // users (6)
+// files (3)
 export const tools: ToolDefinition<unknown, unknown, SlackContext>[] = [
   whoami as unknown as ToolDefinition<unknown, unknown, SlackContext>,
   list_channels as unknown as ToolDefinition<unknown, unknown, SlackContext>,
@@ -57,4 +59,7 @@ export const tools: ToolDefinition<unknown, unknown, SlackContext>[] = [
   lookup_by_email as unknown as ToolDefinition<unknown, unknown, SlackContext>,
   user_presence as unknown as ToolDefinition<unknown, unknown, SlackContext>,
   resolve_user as unknown as ToolDefinition<unknown, unknown, SlackContext>,
+  list_files as unknown as ToolDefinition<unknown, unknown, SlackContext>,
+  file_info as unknown as ToolDefinition<unknown, unknown, SlackContext>,
+  upload_file as unknown as ToolDefinition<unknown, unknown, SlackContext>,
 ];
