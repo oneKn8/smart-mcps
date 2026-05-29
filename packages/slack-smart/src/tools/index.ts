@@ -27,6 +27,9 @@ import {
   resolve_user,
 } from "./users.js";
 import { list_files, file_info, upload_file } from "./files.js";
+import { list_pins, pin_message, unpin_message } from "./pins.js";
+import { dnd_status, set_snooze, end_snooze } from "./dnd.js";
+import { list_usergroups, team_info, list_emoji } from "./misc.js";
 
 // identity (1)
 // conversations (6)
@@ -35,6 +38,9 @@ import { list_files, file_info, upload_file } from "./files.js";
 // reactions (3)
 // users (6)
 // files (3)
+// pins (3)
+// dnd (3)
+// misc (3)
 export const tools: ToolDefinition<unknown, unknown, SlackContext>[] = [
   whoami as unknown as ToolDefinition<unknown, unknown, SlackContext>,
   list_channels as unknown as ToolDefinition<unknown, unknown, SlackContext>,
@@ -62,4 +68,16 @@ export const tools: ToolDefinition<unknown, unknown, SlackContext>[] = [
   list_files as unknown as ToolDefinition<unknown, unknown, SlackContext>,
   file_info as unknown as ToolDefinition<unknown, unknown, SlackContext>,
   upload_file as unknown as ToolDefinition<unknown, unknown, SlackContext>,
+  // pins (3)
+  list_pins as unknown as ToolDefinition<unknown, unknown, SlackContext>,
+  pin_message as unknown as ToolDefinition<unknown, unknown, SlackContext>,
+  unpin_message as unknown as ToolDefinition<unknown, unknown, SlackContext>,
+  // dnd (3)
+  dnd_status as unknown as ToolDefinition<unknown, unknown, SlackContext>,
+  set_snooze as unknown as ToolDefinition<unknown, unknown, SlackContext>,
+  end_snooze as unknown as ToolDefinition<unknown, unknown, SlackContext>,
+  // misc (3)
+  list_usergroups as unknown as ToolDefinition<unknown, unknown, SlackContext>,
+  team_info as unknown as ToolDefinition<unknown, unknown, SlackContext>,
+  list_emoji as unknown as ToolDefinition<unknown, unknown, SlackContext>,
 ];

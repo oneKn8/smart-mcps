@@ -682,4 +682,164 @@ export class SlackClient {
       { token: "user", http: "POST" },
     ) as Promise<{ ok: true; files?: unknown[] }>;
   }
+
+  // ---------------------------------------------------------------------------
+  // Pins (user token, scopes pins:read / pins:write)
+  // ---------------------------------------------------------------------------
+
+  async listPins(args: { channel: string }): Promise<{
+    ok: true;
+    items: unknown[];
+  }> {
+    return this.slackCall<SlackEnvelope & { items: unknown[] }>(
+      "pins.list",
+      { channel: args.channel },
+      { token: "user", http: "GET" },
+    ) as Promise<{ ok: true; items: unknown[] }>;
+  }
+
+  async addPin(args: { channel: string; timestamp: string }): Promise<{ ok: true }> {
+    return this.slackCall<SlackEnvelope>(
+      "pins.add",
+      { channel: args.channel, timestamp: args.timestamp },
+      { token: "user", http: "POST" },
+    ) as Promise<{ ok: true }>;
+  }
+
+  async removePin(args: { channel: string; timestamp: string }): Promise<{ ok: true }> {
+    return this.slackCall<SlackEnvelope>(
+      "pins.remove",
+      { channel: args.channel, timestamp: args.timestamp },
+      { token: "user", http: "POST" },
+    ) as Promise<{ ok: true }>;
+  }
+
+  // ---------------------------------------------------------------------------
+  // DND (user token, scopes dnd:read / dnd:write)
+  // ---------------------------------------------------------------------------
+
+  async dndInfo(args: { user?: string }): Promise<{
+    ok: true;
+    dnd_enabled: boolean;
+    next_dnd_start_ts?: number;
+    next_dnd_end_ts?: number;
+    snooze_enabled?: boolean;
+    snooze_endtime?: number;
+    snooze_remaining?: number;
+  }> {
+    return this.slackCall<
+      SlackEnvelope & {
+        dnd_enabled: boolean;
+        next_dnd_start_ts?: number;
+        next_dnd_end_ts?: number;
+        snooze_enabled?: boolean;
+        snooze_endtime?: number;
+        snooze_remaining?: number;
+      }
+    >(
+      "dnd.info",
+      { ...(args.user !== undefined ? { user: args.user } : {}) },
+      { token: "user", http: "GET" },
+    ) as Promise<{
+      ok: true;
+      dnd_enabled: boolean;
+      next_dnd_start_ts?: number;
+      next_dnd_end_ts?: number;
+      snooze_enabled?: boolean;
+      snooze_endtime?: number;
+      snooze_remaining?: number;
+    }>;
+  }
+
+  async setSnooze(args: { num_minutes: number }): Promise<{
+    ok: true;
+    snooze_enabled: boolean;
+    snooze_endtime: number;
+    snooze_remaining: number;
+  }> {
+    return this.slackCall<
+      SlackEnvelope & {
+        snooze_enabled: boolean;
+        snooze_endtime: number;
+        snooze_remaining: number;
+      }
+    >(
+      "dnd.setSnooze",
+      { num_minutes: args.num_minutes },
+      { token: "user", http: "POST" },
+    ) as Promise<{
+      ok: true;
+      snooze_enabled: boolean;
+      snooze_endtime: number;
+      snooze_remaining: number;
+    }>;
+  }
+
+  async endSnooze(): Promise<{
+    ok: true;
+    dnd_enabled: boolean;
+    next_dnd_start_ts?: number;
+    next_dnd_end_ts?: number;
+    snooze_enabled?: boolean;
+  }> {
+    return this.slackCall<
+      SlackEnvelope & {
+        dnd_enabled: boolean;
+        next_dnd_start_ts?: number;
+        next_dnd_end_ts?: number;
+        snooze_enabled?: boolean;
+      }
+    >(
+      "dnd.endSnooze",
+      {},
+      { token: "user", http: "POST" },
+    ) as Promise<{
+      ok: true;
+      dnd_enabled: boolean;
+      next_dnd_start_ts?: number;
+      next_dnd_end_ts?: number;
+      snooze_enabled?: boolean;
+    }>;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Misc (user token)
+  // ---------------------------------------------------------------------------
+
+  async listUsergroups(args: { include_disabled?: boolean }): Promise<{
+    ok: true;
+    usergroups: unknown[];
+  }> {
+    return this.slackCall<SlackEnvelope & { usergroups: unknown[] }>(
+      "usergroups.list",
+      {
+        ...(args.include_disabled !== undefined
+          ? { include_disabled: args.include_disabled }
+          : {}),
+      },
+      { token: "user", http: "GET" },
+    ) as Promise<{ ok: true; usergroups: unknown[] }>;
+  }
+
+  async teamInfo(): Promise<{
+    ok: true;
+    team: unknown;
+  }> {
+    return this.slackCall<SlackEnvelope & { team: unknown }>(
+      "team.info",
+      {},
+      { token: "user", http: "GET" },
+    ) as Promise<{ ok: true; team: unknown }>;
+  }
+
+  async listEmoji(): Promise<{
+    ok: true;
+    emoji: Record<string, string>;
+  }> {
+    return this.slackCall<SlackEnvelope & { emoji: Record<string, string> }>(
+      "emoji.list",
+      {},
+      { token: "user", http: "GET" },
+    ) as Promise<{ ok: true; emoji: Record<string, string> }>;
+  }
 }
