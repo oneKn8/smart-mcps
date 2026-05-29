@@ -146,11 +146,11 @@ Write tools are confirm-gated: they throw a `ConfirmRequiredError` with a human-
 | `mentions` | Fetch recent messages that mention the authenticated user. |
 | `unread_digest` | Show latest activity across DMs and group DMs. |
 | `thread_catchup` | Fetch all replies in a thread, ordered for easy reading. |
-| `smart_send` | Resolve a channel by name and post a message with a confirm preview. |
+| `smart_send` | Resolve a channel or user by name and post a message with a confirm preview. |
 
 ## Safety
 
-Write tools (`post_message`, `reply_in_thread`, `update_message`, `delete_message`, `schedule_message`, `add_reaction`, `remove_reaction`, `upload_file`, `pin_message`, `unpin_message`, `set_snooze`, `end_snooze`) all call `guardDestructive` before touching the API. Without `confirm: true` they return a preview of the action and throw `ConfirmRequiredError`. Pass `confirm: true` to execute.
+Write tools (`post_message`, `reply_in_thread`, `update_message`, `delete_message`, `schedule_message`, `add_reaction`, `remove_reaction`, `upload_file`, `pin_message`, `unpin_message`, `set_snooze`, `end_snooze`, `smart_send`) all call `guardDestructive` before touching the API. Without `confirm: true` they return a preview of the action and throw `ConfirmRequiredError`. Pass `confirm: true` to execute.
 
 Read tools default to the user token (`xoxp`). `post_message`, `reply_in_thread`, `update_message`, `delete_message`, and `schedule_message` accept a `send_as` field: `"bot"` (default) uses `SLACK_BOT_TOKEN`; `"user"` uses `SLACK_USER_TOKEN`.
 
