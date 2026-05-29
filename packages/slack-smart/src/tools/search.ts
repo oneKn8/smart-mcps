@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { defineTool } from "smart-mcp-core";
 import type { SlackContext } from "../context.js";
-import { nullableString, nullableNumber } from "../null-helpers.js";
+import { nullableString, nullableNumber, asObject } from "../null-helpers.js";
 
 // ---------------------------------------------------------------------------
 // Slim mappers (single-use; defined here rather than shared)
@@ -26,10 +26,6 @@ type SlimFile = {
   user?: string;
   created?: number;
 };
-
-function asObject(v: unknown): Record<string, unknown> {
-  return typeof v === "object" && v !== null ? (v as Record<string, unknown>) : {};
-}
 
 function mapSearchMatch(raw: unknown): SlimSearchMatch {
   const obj = asObject(raw);

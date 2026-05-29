@@ -9,6 +9,7 @@ import type { SlackContext } from "../context.js";
 import { mapChannel } from "../channel-mapper.js";
 import { mapMessage, type SlimMessage } from "../message-mapper.js";
 import { mapUser } from "../user-mapper.js";
+import { asObject } from "../null-helpers.js";
 
 // ---------------------------------------------------------------------------
 // catch_me_up
@@ -44,10 +45,6 @@ type CatchMeUpOutput = {
   mentions: MentionMatch[];
   notes: string[];
 };
-
-function asObject(v: unknown): Record<string, unknown> {
-  return typeof v === "object" && v !== null ? (v as Record<string, unknown>) : {};
-}
 
 function asString(v: unknown): string | undefined {
   return typeof v === "string" ? v : undefined;

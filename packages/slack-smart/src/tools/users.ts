@@ -2,11 +2,7 @@ import { z } from "zod";
 import { defineTool, resolveOne, AmbiguousMatchError } from "smart-mcp-core";
 import type { SlackContext } from "../context.js";
 import { mapUser, type SlimUser } from "../user-mapper.js";
-import { nullableString, nullableBoolean } from "../null-helpers.js";
-
-function asObject(v: unknown): Record<string, unknown> {
-  return typeof v === "object" && v !== null ? (v as Record<string, unknown>) : {};
-}
+import { nullableString, nullableBoolean, asObject } from "../null-helpers.js";
 
 // ---------------------------------------------------------------------------
 // list_users

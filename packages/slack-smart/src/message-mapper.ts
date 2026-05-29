@@ -1,4 +1,4 @@
-import { nullableString, nullableNumber } from "./null-helpers.js";
+import { nullableString, nullableNumber, asObject } from "./null-helpers.js";
 
 export type SlimMessage = {
   ts: string;
@@ -10,10 +10,6 @@ export type SlimMessage = {
   reply_count?: number;
   bot_id?: string;
 };
-
-function asObject(v: unknown): Record<string, unknown> {
-  return typeof v === "object" && v !== null ? (v as Record<string, unknown>) : {};
-}
 
 export function mapMessage(raw: unknown): SlimMessage {
   const obj = asObject(raw);

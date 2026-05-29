@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { defineTool, guardDestructive } from "smart-mcp-core";
 import type { SlackContext } from "../context.js";
-import { nullableString } from "../null-helpers.js";
+import { nullableString, asObject } from "../null-helpers.js";
 
 // ---------------------------------------------------------------------------
 // list_pins
@@ -20,10 +20,6 @@ type SlimPinItem = {
   user?: string;
   file_id?: string;
 };
-
-function asObject(v: unknown): Record<string, unknown> {
-  return typeof v === "object" && v !== null ? (v as Record<string, unknown>) : {};
-}
 
 function mapPinItem(raw: unknown): SlimPinItem {
   const obj = asObject(raw);

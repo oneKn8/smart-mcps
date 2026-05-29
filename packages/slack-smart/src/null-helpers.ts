@@ -14,3 +14,11 @@ export function nullableNumber(value: unknown): number | null {
 export function nullableBoolean(value: unknown): boolean | null {
   return typeof value === "boolean" ? value : null;
 }
+
+// Coerce an unknown value to a plain object. Returns an empty object when the
+// value is null, a primitive, or an array — keeps mapper code concise.
+export function asObject(v: unknown): Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v)
+    ? (v as Record<string, unknown>)
+    : {};
+}

@@ -260,6 +260,17 @@ describe("reply_in_thread — confirm gate", () => {
 // update_message
 // ---------------------------------------------------------------------------
 
+describe("update_message — content validation", () => {
+  it("throws ValidationError when both text and blocks_json are absent, and does NOT call updateMessage", async () => {
+    const client = makeClient();
+    const input = parse(update_message, { channel: "C001", ts: "1234567890.000001" });
+    await expect(update_message.handler(input, ctx(client))).rejects.toThrow(
+      ValidationError,
+    );
+    expect(client.updateMessage).not.toHaveBeenCalled();
+  });
+});
+
 describe("update_message — confirm gate", () => {
   let client: FakeClient;
 

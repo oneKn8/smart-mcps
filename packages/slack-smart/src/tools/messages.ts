@@ -184,6 +184,12 @@ export const update_message = defineTool<
   // Cast required: ZodDefault on send_as/confirm widens schema input type.
   inputSchema: updateMessageInputSchema as unknown as z.ZodType<UpdateMessageInput>,
   handler: async (input, context) => {
+    if (input.text === undefined && input.blocks_json === undefined) {
+      throw new ValidationError(
+        "update_message requires at least one of text or blocks_json",
+      );
+    }
+
     let blocks: unknown[] | undefined;
     if (input.blocks_json !== undefined) {
       try {

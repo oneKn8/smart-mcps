@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { defineTool, guardDestructive } from "smart-mcp-core";
 import type { SlackContext } from "../context.js";
-import { nullableString, nullableNumber } from "../null-helpers.js";
+import { nullableString, nullableNumber, asObject } from "../null-helpers.js";
 
 // ---------------------------------------------------------------------------
 // add_reaction
@@ -90,10 +90,6 @@ type SlimReaction = {
   count: number;
   users?: string[];
 };
-
-function asObject(v: unknown): Record<string, unknown> {
-  return typeof v === "object" && v !== null ? (v as Record<string, unknown>) : {};
-}
 
 function mapReaction(raw: unknown): SlimReaction {
   const obj = asObject(raw);

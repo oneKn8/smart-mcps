@@ -1,4 +1,4 @@
-import { nullableString, nullableBoolean } from "./null-helpers.js";
+import { nullableString, nullableBoolean, asObject } from "./null-helpers.js";
 
 export type SlimUser = {
   id: string;
@@ -10,10 +10,6 @@ export type SlimUser = {
   email?: string;
   tz?: string;
 };
-
-function asObject(v: unknown): Record<string, unknown> {
-  return typeof v === "object" && v !== null ? (v as Record<string, unknown>) : {};
-}
 
 export function mapUser(raw: unknown): SlimUser {
   const obj = asObject(raw);

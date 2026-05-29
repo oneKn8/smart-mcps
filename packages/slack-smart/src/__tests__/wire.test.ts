@@ -1,7 +1,54 @@
 import { describe, it, expect } from "vitest";
 import { tools } from "../tools/index.js";
 
+const EXPECTED_TOOL_NAMES = [
+  "add_reaction",
+  "catch_me_up",
+  "channel_history",
+  "channel_info",
+  "channel_members",
+  "delete_message",
+  "dnd_status",
+  "end_snooze",
+  "file_info",
+  "get_reactions",
+  "list_channels",
+  "list_emoji",
+  "list_files",
+  "list_pins",
+  "list_usergroups",
+  "list_users",
+  "lookup_by_email",
+  "mentions",
+  "open_dm",
+  "pin_message",
+  "post_message",
+  "remove_reaction",
+  "reply_in_thread",
+  "resolve_user",
+  "schedule_message",
+  "search_files",
+  "search_messages",
+  "set_snooze",
+  "smart_send",
+  "team_info",
+  "thread_catchup",
+  "thread_replies",
+  "unpin_message",
+  "unread_digest",
+  "update_message",
+  "upload_file",
+  "user_info",
+  "user_presence",
+  "user_profile",
+  "whoami",
+];
+
 describe("slack-smart tool wiring", () => {
+  it("exports the exact set of 40 tool names (sorted)", () => {
+    expect(tools.map((t) => t.name).sort()).toEqual(EXPECTED_TOOL_NAMES);
+  });
+
   it("exports the expected number of tools", () => {
     expect(tools).toHaveLength(40);
   });

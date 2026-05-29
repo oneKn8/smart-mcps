@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { defineTool } from "smart-mcp-core";
 import type { SlackContext } from "../context.js";
-import { nullableString, nullableNumber } from "../null-helpers.js";
+import { nullableString, nullableNumber, asObject } from "../null-helpers.js";
 
 // ---------------------------------------------------------------------------
 // list_usergroups
@@ -20,10 +20,6 @@ type SlimUsergroup = {
   description?: string;
   user_count?: number;
 };
-
-function asObject(v: unknown): Record<string, unknown> {
-  return typeof v === "object" && v !== null ? (v as Record<string, unknown>) : {};
-}
 
 function mapUsergroup(raw: unknown): SlimUsergroup {
   const obj = asObject(raw);

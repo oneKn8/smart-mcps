@@ -1,4 +1,4 @@
-import { nullableString, nullableNumber, nullableBoolean } from "./null-helpers.js";
+import { nullableString, nullableNumber, nullableBoolean, asObject } from "./null-helpers.js";
 
 export type SlimChannel = {
   id: string;
@@ -13,10 +13,6 @@ export type SlimChannel = {
   purpose?: string;
   user?: string;
 };
-
-function asObject(v: unknown): Record<string, unknown> {
-  return typeof v === "object" && v !== null ? (v as Record<string, unknown>) : {};
-}
 
 export function mapChannel(raw: Record<string, unknown>): SlimChannel {
   const topicObj = asObject(raw["topic"]);
