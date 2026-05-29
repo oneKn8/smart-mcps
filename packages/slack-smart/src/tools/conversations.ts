@@ -1,0 +1,236 @@
+import { z } from "zod";
+import { defineTool } from "smart-mcp-core";
+import type { SlackContext } from "../context.js";
+import { mapChannel, type SlimChannel } from "../channel-mapper.js";
+import { mapMessage, type SlimMessage } from "../message-mapper.js";
+
+// ---------------------------------------------------------------------------
+// list_channels
+// ---------------------------------------------------------------------------
+
+const listChannelsInputSchema = z.object({
+  types: z.string().optional().default("public_channel"),
+  exclude_archived: z.boolean().optional().default(true),
+  limit: z.number().int().min(1).max(999).optional().default(100),
+  cursor: z.string().optional(),
+});
+
+type ListChannelsInput = z.infer<typeof listChannelsInputSchema>;
+
+type ListChannelsOutput = {
+  channels: SlimChannel[];
+  count: number;
+  next_cursor?: string;
+};
+
+export const list_channels = defineTool<
+  ListChannelsInput,
+  ListChannelsOutput,
+  SlackContext
+>({
+  name: "list_channels",
+  description: "List channels the token can access.",
+  // Cast required: ZodDefault makes input type optional but output type required.
+  inputSchema: listChannelsInputSchema as unknown as z.ZodType<ListChannelsInput>,
+  handler: async (input, context) => {
+    const resp = await context.client.listChannels({
+      types: input.types,
+      exclude_archived: input.exclude_archived,
+      limit: input.limit,
+      ...(input.cursor !== undefined ? { cursor: input.cursor } : {}),
+    });
+    const channels = resp.channels.map((c) =>
+      mapChannel(c as Record<string, unknown>),
+    );
+    const next = resp.response_metadata?.next_cursor;
+    return {
+      channels,
+      count: channels.length,
+      ...(next !== undefined && next !== "" ? { next_cursor: next } : {}),
+    };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// channel_history
+// ---------------------------------------------------------------------------
+
+const channelHistoryInputSchema = z.object({
+  channel: z.string(),
+  limit: z.number().int().min(1).max(999).optional().default(50),
+  oldest: z.string().optional(),
+  latest: z.string().optional(),
+  inclusive: z.boolean().optional(),
+  cursor: z.string().optional(),
+});
+
+type ChannelHistoryInput = z.infer<typeof channelHistoryInputSchema>;
+
+type ChannelHistoryOutput = {
+  messages: SlimMessage[];
+  count: number;
+  has_more?: boolean;
+  next_cursor?: string;
+};
+
+export const channel_history = defineTool<
+  ChannelHistoryInput,
+  ChannelHistoryOutput,
+  SlackContext
+>({
+  name: "channel_history",
+  description: "Fetch messages from a channel.",
+  // Cast required: ZodDefault makes limit's input type optional but output required.
+  inputSchema: channelHistoryInputSchema as unknown as z.ZodType<ChannelHistoryInput>,
+  handler: async (input, context) => {
+    const resp = await context.client.getHistory({
+      channel: input.channel,
+      limit: input.limit,
+      ...(input.oldest !== undefined ? { oldest: input.oldest } : {}),
+      ...(input.latest !== undefined ? { latest: input.latest } : {}),
+      ...(input.inclusive !== undefined ? { inclusive: input.inclusive } : {}),
+      ...(input.cursor !== undefined ? { cursor: input.cursor } : {}),
+    });
+    const messages = resp.messages.map((m) => mapMessage(m));
+    const next = resp.response_metadata?.next_cursor;
+    return {
+      messages,
+      count: messages.length,
+      ...(resp.has_more !== undefined ? { has_more: resp.has_more } : {}),
+      ...(next !== undefined && next !== "" ? { next_cursor: next } : {}),
+    };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// thread_replies
+// ---------------------------------------------------------------------------
+
+const threadRepliesInputSchema = z.object({
+  channel: z.string(),
+  ts: z.string(),
+  limit: z.number().int().min(1).max(999).optional(),
+  cursor: z.string().optional(),
+});
+
+type ThreadRepliesInput = z.infer<typeof threadRepliesInputSchema>;
+
+type ThreadRepliesOutput = {
+  messages: SlimMessage[];
+  count: number;
+  next_cursor?: string;
+};
+
+export const thread_replies = defineTool<
+  ThreadRepliesInput,
+  ThreadRepliesOutput,
+  SlackContext
+>({
+  name: "thread_replies",
+  description: "Fetch replies in a thread (first message is the parent).",
+  inputSchema: threadRepliesInputSchema,
+  handler: async (input, context) => {
+    const resp = await context.client.getReplies({
+      channel: input.channel,
+      ts: input.ts,
+      ...(input.limit !== undefined ? { limit: input.limit } : {}),
+      ...(input.cursor !== undefined ? { cursor: input.cursor } : {}),
+    });
+    const messages = resp.messages.map((m) => mapMessage(m));
+    const next = resp.response_metadata?.next_cursor;
+    return {
+      messages,
+      count: messages.length,
+      ...(next !== undefined && next !== "" ? { next_cursor: next } : {}),
+    };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// channel_info
+// ---------------------------------------------------------------------------
+
+const channelInfoInputSchema = z.object({
+  channel: z.string(),
+});
+
+type ChannelInfoInput = z.infer<typeof channelInfoInputSchema>;
+
+export const channel_info = defineTool<ChannelInfoInput, SlimChannel, SlackContext>({
+  name: "channel_info",
+  description: "Get metadata for a single channel.",
+  inputSchema: channelInfoInputSchema,
+  handler: async (input, context) => {
+    const resp = await context.client.getChannelInfo({
+      channel: input.channel,
+      include_num_members: true,
+    });
+    return mapChannel(resp.channel as Record<string, unknown>);
+  },
+});
+
+// ---------------------------------------------------------------------------
+// channel_members
+// ---------------------------------------------------------------------------
+
+const channelMembersInputSchema = z.object({
+  channel: z.string(),
+  limit: z.number().int().min(1).max(999).optional(),
+  cursor: z.string().optional(),
+});
+
+type ChannelMembersInput = z.infer<typeof channelMembersInputSchema>;
+
+type ChannelMembersOutput = {
+  members: string[];
+  count: number;
+  next_cursor?: string;
+};
+
+export const channel_members = defineTool<
+  ChannelMembersInput,
+  ChannelMembersOutput,
+  SlackContext
+>({
+  name: "channel_members",
+  description: "List user IDs in a channel.",
+  inputSchema: channelMembersInputSchema,
+  handler: async (input, context) => {
+    const resp = await context.client.getMembers({
+      channel: input.channel,
+      ...(input.limit !== undefined ? { limit: input.limit } : {}),
+      ...(input.cursor !== undefined ? { cursor: input.cursor } : {}),
+    });
+    const members = resp.members.filter(
+      (m): m is string => typeof m === "string",
+    );
+    const next = resp.response_metadata?.next_cursor;
+    return {
+      members,
+      count: members.length,
+      ...(next !== undefined && next !== "" ? { next_cursor: next } : {}),
+    };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// open_dm
+// ---------------------------------------------------------------------------
+
+const openDmInputSchema = z.object({
+  users: z.string(),
+});
+
+type OpenDmInput = z.infer<typeof openDmInputSchema>;
+
+type OpenDmOutput = { channel_id: string };
+
+export const open_dm = defineTool<OpenDmInput, OpenDmOutput, SlackContext>({
+  name: "open_dm",
+  description: "Open (or retrieve) a DM channel with given user IDs.",
+  inputSchema: openDmInputSchema,
+  handler: async (input, context) => {
+    const resp = await context.client.openDm({ users: input.users });
+    return { channel_id: resp.channel.id };
+  },
+});

@@ -3,11 +3,21 @@ import { tools } from "../tools/index.js";
 
 describe("slack-smart tool wiring", () => {
   it("exports the expected number of tools", () => {
-    expect(tools).toHaveLength(1);
+    expect(tools).toHaveLength(7);
   });
 
   it("tool names include whoami", () => {
     expect(tools.map((t) => t.name)).toContain("whoami");
+  });
+
+  it("tool names include all 6 conversations tools", () => {
+    const names = tools.map((t) => t.name);
+    expect(names).toContain("list_channels");
+    expect(names).toContain("channel_history");
+    expect(names).toContain("thread_replies");
+    expect(names).toContain("channel_info");
+    expect(names).toContain("channel_members");
+    expect(names).toContain("open_dm");
   });
 
   it("all names are unique", () => {

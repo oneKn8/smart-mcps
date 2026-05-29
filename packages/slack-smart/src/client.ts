@@ -128,4 +128,155 @@ export class SlackClient {
     // slackCall throws on ok:false, so this point is only reached when ok===true.
     return { ...result, ok: true };
   }
+
+  // ---------------------------------------------------------------------------
+  // Conversations
+  // ---------------------------------------------------------------------------
+
+  async listChannels(args: {
+    types?: string;
+    exclude_archived?: boolean;
+    limit?: number;
+    cursor?: string;
+  }): Promise<{
+    ok: true;
+    channels: unknown[];
+    response_metadata?: { next_cursor?: string };
+  }> {
+    return this.slackCall<
+      SlackEnvelope & {
+        channels: unknown[];
+        response_metadata?: { next_cursor?: string };
+      }
+    >("conversations.list", {
+      ...(args.types !== undefined ? { types: args.types } : {}),
+      ...(args.exclude_archived !== undefined
+        ? { exclude_archived: args.exclude_archived }
+        : {}),
+      ...(args.limit !== undefined ? { limit: args.limit } : {}),
+      ...(args.cursor !== undefined ? { cursor: args.cursor } : {}),
+    }) as Promise<{
+      ok: true;
+      channels: unknown[];
+      response_metadata?: { next_cursor?: string };
+    }>;
+  }
+
+  async getHistory(args: {
+    channel: string;
+    limit?: number;
+    oldest?: string;
+    latest?: string;
+    inclusive?: boolean;
+    cursor?: string;
+  }): Promise<{
+    ok: true;
+    messages: unknown[];
+    has_more?: boolean;
+    response_metadata?: { next_cursor?: string };
+  }> {
+    return this.slackCall<
+      SlackEnvelope & {
+        messages: unknown[];
+        has_more?: boolean;
+        response_metadata?: { next_cursor?: string };
+      }
+    >("conversations.history", {
+      channel: args.channel,
+      ...(args.limit !== undefined ? { limit: args.limit } : {}),
+      ...(args.oldest !== undefined ? { oldest: args.oldest } : {}),
+      ...(args.latest !== undefined ? { latest: args.latest } : {}),
+      ...(args.inclusive !== undefined ? { inclusive: args.inclusive } : {}),
+      ...(args.cursor !== undefined ? { cursor: args.cursor } : {}),
+    }) as Promise<{
+      ok: true;
+      messages: unknown[];
+      has_more?: boolean;
+      response_metadata?: { next_cursor?: string };
+    }>;
+  }
+
+  async getReplies(args: {
+    channel: string;
+    ts: string;
+    limit?: number;
+    cursor?: string;
+  }): Promise<{
+    ok: true;
+    messages: unknown[];
+    response_metadata?: { next_cursor?: string };
+  }> {
+    return this.slackCall<
+      SlackEnvelope & {
+        messages: unknown[];
+        response_metadata?: { next_cursor?: string };
+      }
+    >("conversations.replies", {
+      channel: args.channel,
+      ts: args.ts,
+      ...(args.limit !== undefined ? { limit: args.limit } : {}),
+      ...(args.cursor !== undefined ? { cursor: args.cursor } : {}),
+    }) as Promise<{
+      ok: true;
+      messages: unknown[];
+      response_metadata?: { next_cursor?: string };
+    }>;
+  }
+
+  async getChannelInfo(args: {
+    channel: string;
+    include_num_members?: boolean;
+  }): Promise<{
+    ok: true;
+    channel: unknown;
+  }> {
+    return this.slackCall<SlackEnvelope & { channel: unknown }>(
+      "conversations.info",
+      {
+        channel: args.channel,
+        ...(args.include_num_members !== undefined
+          ? { include_num_members: args.include_num_members }
+          : {}),
+      },
+    ) as Promise<{ ok: true; channel: unknown }>;
+  }
+
+  async getMembers(args: {
+    channel: string;
+    limit?: number;
+    cursor?: string;
+  }): Promise<{
+    ok: true;
+    members: unknown[];
+    response_metadata?: { next_cursor?: string };
+  }> {
+    return this.slackCall<
+      SlackEnvelope & {
+        members: unknown[];
+        response_metadata?: { next_cursor?: string };
+      }
+    >("conversations.members", {
+      channel: args.channel,
+      ...(args.limit !== undefined ? { limit: args.limit } : {}),
+      ...(args.cursor !== undefined ? { cursor: args.cursor } : {}),
+    }) as Promise<{
+      ok: true;
+      members: unknown[];
+      response_metadata?: { next_cursor?: string };
+    }>;
+  }
+
+  async openDm(args: { users?: string; channel?: string }): Promise<{
+    ok: true;
+    channel: { id: string };
+  }> {
+    return this.slackCall<SlackEnvelope & { channel: { id: string } }>(
+      "conversations.open",
+      {
+        ...(args.users !== undefined ? { users: args.users } : {}),
+        ...(args.channel !== undefined ? { channel: args.channel } : {}),
+      },
+      { http: "POST" },
+    ) as Promise<{ ok: true; channel: { id: string } }>;
+  }
 }
