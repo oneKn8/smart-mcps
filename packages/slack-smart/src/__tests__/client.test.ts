@@ -69,14 +69,8 @@ describe("SlackClient — bot token missing", () => {
   it("throws AuthError naming SLACK_BOT_TOKEN when bot token is absent", async () => {
     process.env.SLACK_USER_TOKEN = "xoxp-test";
     const client = new SlackClient();
-    // Stub auth.test so slackCall does not trigger an unhandled request before
-    // the token check runs. (The token check runs first, so this stub is only
-    // a safety net — it should not be reached.)
-    server.use(
-      http.get("https://slack.com/api/auth.test", () =>
-        HttpResponse.json({ ok: true }),
-      ),
-    );
+    // No msw stub — onUnhandledRequest:"error" catches a regression where the
+    // HTTP call fires before the token check, proving the guard runs first.
     try {
       await client.slackCall("auth.test", {}, { token: "bot" });
       throw new Error("should have thrown");
@@ -181,6 +175,32 @@ describe("SlackClient.slackCall — {ok:false} error mapping", () => {
     await expect(
       client.slackCall("conversations.list"),
     ).rejects.toBeInstanceOf(UpstreamError);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// slackCall — POST body undefined-key dropping
+// ---------------------------------------------------------------------------
+
+describe("SlackClient.slackCall — POST undefined-key stripping", () => {
+  it("omits undefined-valued keys from the JSON body but keeps defined ones", async () => {
+    process.env.SLACK_USER_TOKEN = "xoxp-test";
+    let capturedBody: Record<string, unknown> | null = null;
+    server.use(
+      http.post("https://slack.com/api/chat.postMessage", async ({ request }) => {
+        capturedBody = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json({ ok: true });
+      }),
+    );
+    const client = new SlackClient();
+    await client.slackCall(
+      "chat.postMessage",
+      { channel: "C001", text: "hi", thread_ts: undefined },
+      { http: "POST" },
+    );
+    expect(capturedBody).not.toBeNull();
+    expect(Object.keys(capturedBody!)).not.toContain("thread_ts");
+    expect(capturedBody!.channel).toBe("C001");
   });
 });
 

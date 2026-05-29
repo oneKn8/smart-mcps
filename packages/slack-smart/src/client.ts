@@ -30,6 +30,8 @@ export class SlackClient {
   constructor(creds?: SlackCreds) {
     this.creds =
       creds ??
+      // loadCreds generic-variance wart: the inferred type is Record<string,string>
+      // but we only ever fill the keys listed above, so the cast is safe.
       (loadCreds<Record<"SLACK_USER_TOKEN" | "SLACK_BOT_TOKEN", string>>({
         serviceName: "slack-smart",
         required: ["SLACK_USER_TOKEN"],
@@ -55,10 +57,10 @@ export class SlackClient {
   ): Promise<T> {
     const url = `https://slack.com/api/${method}`;
     const token = this.tokenFor(opts.token ?? "user");
-    const http = opts.http ?? "GET";
+    const httpMethod = opts.http ?? "GET";
 
     let body: T;
-    if (http === "GET") {
+    if (httpMethod === "GET") {
       body = await fetchJson<T>(url, { token, searchParams: args });
     } else {
       // Drop undefined keys before sending as JSON body
@@ -115,6 +117,15 @@ export class SlackClient {
     user_id: string;
     bot_id?: string;
   }> {
-    return this.slackCall("auth.test", {}, { token: which, http: "GET" });
+    const result = await this.slackCall<SlackEnvelope & {
+      url: string;
+      team: string;
+      user: string;
+      team_id: string;
+      user_id: string;
+      bot_id?: string;
+    }>("auth.test", {}, { token: which, http: "GET" });
+    // slackCall throws on ok:false, so this point is only reached when ok===true.
+    return { ...result, ok: true };
   }
 }
