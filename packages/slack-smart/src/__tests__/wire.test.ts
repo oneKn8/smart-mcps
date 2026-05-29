@@ -3,7 +3,7 @@ import { tools } from "../tools/index.js";
 
 describe("slack-smart tool wiring", () => {
   it("exports the expected number of tools", () => {
-    expect(tools).toHaveLength(12);
+    expect(tools).toHaveLength(17);
   });
 
   it("tool names include whoami", () => {
@@ -27,6 +27,19 @@ describe("slack-smart tool wiring", () => {
     expect(names).toContain("update_message");
     expect(names).toContain("delete_message");
     expect(names).toContain("schedule_message");
+  });
+
+  it("tool names include all 2 search tools", () => {
+    const names = tools.map((t) => t.name);
+    expect(names).toContain("search_messages");
+    expect(names).toContain("search_files");
+  });
+
+  it("tool names include all 3 reaction tools", () => {
+    const names = tools.map((t) => t.name);
+    expect(names).toContain("add_reaction");
+    expect(names).toContain("remove_reaction");
+    expect(names).toContain("get_reactions");
   });
 
   it("all names are unique", () => {

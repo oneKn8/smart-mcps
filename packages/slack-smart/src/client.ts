@@ -347,4 +347,145 @@ export class SlackClient {
       post_at: number;
     }>;
   }
+
+  // ---------------------------------------------------------------------------
+  // Search (user token, scope search:read)
+  // ---------------------------------------------------------------------------
+
+  async searchMessages(args: {
+    query: string;
+    count?: number;
+    sort?: string;
+    sort_dir?: string;
+    highlight?: boolean;
+    cursor?: string;
+  }): Promise<{
+    ok: true;
+    messages: {
+      matches: unknown[];
+      total: number;
+    };
+    response_metadata?: { next_cursor?: string };
+  }> {
+    return this.slackCall<
+      SlackEnvelope & {
+        messages: { matches: unknown[]; total: number };
+        response_metadata?: { next_cursor?: string };
+      }
+    >(
+      "search.messages",
+      {
+        query: args.query,
+        ...(args.count !== undefined ? { count: args.count } : {}),
+        ...(args.sort !== undefined ? { sort: args.sort } : {}),
+        ...(args.sort_dir !== undefined ? { sort_dir: args.sort_dir } : {}),
+        ...(args.highlight !== undefined ? { highlight: args.highlight } : {}),
+        ...(args.cursor !== undefined ? { cursor: args.cursor } : {}),
+      },
+      { token: "user", http: "GET" },
+    ) as Promise<{
+      ok: true;
+      messages: { matches: unknown[]; total: number };
+      response_metadata?: { next_cursor?: string };
+    }>;
+  }
+
+  async searchFiles(args: {
+    query: string;
+    count?: number;
+    sort?: string;
+    sort_dir?: string;
+    cursor?: string;
+  }): Promise<{
+    ok: true;
+    files: {
+      matches: unknown[];
+      total: number;
+    };
+    response_metadata?: { next_cursor?: string };
+  }> {
+    return this.slackCall<
+      SlackEnvelope & {
+        files: { matches: unknown[]; total: number };
+        response_metadata?: { next_cursor?: string };
+      }
+    >(
+      "search.files",
+      {
+        query: args.query,
+        ...(args.count !== undefined ? { count: args.count } : {}),
+        ...(args.sort !== undefined ? { sort: args.sort } : {}),
+        ...(args.sort_dir !== undefined ? { sort_dir: args.sort_dir } : {}),
+        ...(args.cursor !== undefined ? { cursor: args.cursor } : {}),
+      },
+      { token: "user", http: "GET" },
+    ) as Promise<{
+      ok: true;
+      files: { matches: unknown[]; total: number };
+      response_metadata?: { next_cursor?: string };
+    }>;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Reactions (user token)
+  // ---------------------------------------------------------------------------
+
+  async addReaction(args: {
+    channel: string;
+    timestamp: string;
+    name: string;
+  }): Promise<{ ok: true }> {
+    return this.slackCall<SlackEnvelope>(
+      "reactions.add",
+      { channel: args.channel, timestamp: args.timestamp, name: args.name },
+      { token: "user", http: "POST" },
+    ) as Promise<{ ok: true }>;
+  }
+
+  async removeReaction(args: {
+    channel: string;
+    timestamp: string;
+    name: string;
+  }): Promise<{ ok: true }> {
+    return this.slackCall<SlackEnvelope>(
+      "reactions.remove",
+      { channel: args.channel, timestamp: args.timestamp, name: args.name },
+      { token: "user", http: "POST" },
+    ) as Promise<{ ok: true }>;
+  }
+
+  async getReactions(args: {
+    channel: string;
+    timestamp: string;
+    full?: boolean;
+  }): Promise<{
+    ok: true;
+    type: string;
+    message?: {
+      reactions?: Array<{ name: string; count: number; users: string[] }>;
+    };
+  }> {
+    return this.slackCall<
+      SlackEnvelope & {
+        type: string;
+        message?: {
+          reactions?: Array<{ name: string; count: number; users: string[] }>;
+        };
+      }
+    >(
+      "reactions.get",
+      {
+        channel: args.channel,
+        timestamp: args.timestamp,
+        ...(args.full !== undefined ? { full: args.full } : {}),
+      },
+      { token: "user", http: "GET" },
+    ) as Promise<{
+      ok: true;
+      type: string;
+      message?: {
+        reactions?: Array<{ name: string; count: number; users: string[] }>;
+      };
+    }>;
+  }
 }

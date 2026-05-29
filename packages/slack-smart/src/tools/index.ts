@@ -16,10 +16,14 @@ import {
   delete_message,
   schedule_message,
 } from "./messages.js";
+import { search_messages, search_files } from "./search.js";
+import { add_reaction, remove_reaction, get_reactions } from "./reactions.js";
 
 // identity (1)
 // conversations (6)
 // messages (5)
+// search (2)
+// reactions (3)
 export const tools: ToolDefinition<unknown, unknown, SlackContext>[] = [
   whoami as unknown as ToolDefinition<unknown, unknown, SlackContext>,
   list_channels as unknown as ToolDefinition<unknown, unknown, SlackContext>,
@@ -33,4 +37,9 @@ export const tools: ToolDefinition<unknown, unknown, SlackContext>[] = [
   update_message as unknown as ToolDefinition<unknown, unknown, SlackContext>,
   delete_message as unknown as ToolDefinition<unknown, unknown, SlackContext>,
   schedule_message as unknown as ToolDefinition<unknown, unknown, SlackContext>,
+  search_messages as unknown as ToolDefinition<unknown, unknown, SlackContext>,
+  search_files as unknown as ToolDefinition<unknown, unknown, SlackContext>,
+  add_reaction as unknown as ToolDefinition<unknown, unknown, SlackContext>,
+  remove_reaction as unknown as ToolDefinition<unknown, unknown, SlackContext>,
+  get_reactions as unknown as ToolDefinition<unknown, unknown, SlackContext>,
 ];
