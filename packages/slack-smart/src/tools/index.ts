@@ -9,9 +9,17 @@ import {
   channel_members,
   open_dm,
 } from "./conversations.js";
+import {
+  post_message,
+  reply_in_thread,
+  update_message,
+  delete_message,
+  schedule_message,
+} from "./messages.js";
 
 // identity (1)
 // conversations (6)
+// messages (5)
 export const tools: ToolDefinition<unknown, unknown, SlackContext>[] = [
   whoami as unknown as ToolDefinition<unknown, unknown, SlackContext>,
   list_channels as unknown as ToolDefinition<unknown, unknown, SlackContext>,
@@ -20,4 +28,9 @@ export const tools: ToolDefinition<unknown, unknown, SlackContext>[] = [
   channel_info as unknown as ToolDefinition<unknown, unknown, SlackContext>,
   channel_members as unknown as ToolDefinition<unknown, unknown, SlackContext>,
   open_dm as unknown as ToolDefinition<unknown, unknown, SlackContext>,
+  post_message as unknown as ToolDefinition<unknown, unknown, SlackContext>,
+  reply_in_thread as unknown as ToolDefinition<unknown, unknown, SlackContext>,
+  update_message as unknown as ToolDefinition<unknown, unknown, SlackContext>,
+  delete_message as unknown as ToolDefinition<unknown, unknown, SlackContext>,
+  schedule_message as unknown as ToolDefinition<unknown, unknown, SlackContext>,
 ];

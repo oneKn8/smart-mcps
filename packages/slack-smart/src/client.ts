@@ -279,4 +279,72 @@ export class SlackClient {
       { http: "POST" },
     ) as Promise<{ ok: true; channel: { id: string } }>;
   }
+
+  // ---------------------------------------------------------------------------
+  // Messages (write)
+  // ---------------------------------------------------------------------------
+  //
+  // All four methods accept a `token` parameter ("bot" | "user") so the caller
+  // controls which identity sends the message. Slack's deprecated `as_user`
+  // API param is intentionally NOT sent — token selection alone determines
+  // posting identity on modern Slack apps.
+
+  async postMessage(
+    args: Record<string, string | number | boolean | undefined>,
+    token: "bot" | "user",
+  ): Promise<{ ok: true; channel: string; ts: string; message?: unknown }> {
+    return this.slackCall<
+      SlackEnvelope & { channel: string; ts: string; message?: unknown }
+    >("chat.postMessage", args, { token, http: "POST" }) as Promise<{
+      ok: true;
+      channel: string;
+      ts: string;
+      message?: unknown;
+    }>;
+  }
+
+  async updateMessage(
+    args: Record<string, string | number | boolean | undefined>,
+    token: "bot" | "user",
+  ): Promise<{ ok: true; channel: string; ts: string }> {
+    return this.slackCall<SlackEnvelope & { channel: string; ts: string }>(
+      "chat.update",
+      args,
+      { token, http: "POST" },
+    ) as Promise<{ ok: true; channel: string; ts: string }>;
+  }
+
+  async deleteMessage(
+    args: Record<string, string | number | boolean | undefined>,
+    token: "bot" | "user",
+  ): Promise<{ ok: true; channel: string; ts: string }> {
+    return this.slackCall<SlackEnvelope & { channel: string; ts: string }>(
+      "chat.delete",
+      args,
+      { token, http: "POST" },
+    ) as Promise<{ ok: true; channel: string; ts: string }>;
+  }
+
+  async scheduleMessage(
+    args: Record<string, string | number | boolean | undefined>,
+    token: "bot" | "user",
+  ): Promise<{
+    ok: true;
+    channel: string;
+    scheduled_message_id: string;
+    post_at: number;
+  }> {
+    return this.slackCall<
+      SlackEnvelope & {
+        channel: string;
+        scheduled_message_id: string;
+        post_at: number;
+      }
+    >("chat.scheduleMessage", args, { token, http: "POST" }) as Promise<{
+      ok: true;
+      channel: string;
+      scheduled_message_id: string;
+      post_at: number;
+    }>;
+  }
 }
