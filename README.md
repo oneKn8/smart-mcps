@@ -1,16 +1,31 @@
 # smart-mcps
 
-Personal MCP server toolbelt. Six servers in priority order:
+Personal MCP server toolbelt. Six servers shipped, all built on the shared
+`smart-mcp-core` package (auth, http, errors, confirm, fuzzy, server bootstrap).
 
-1. `vercel-smart` — Vercel ops (MVP shipped, 7 tools, 135 tests — see [packages/vercel-smart/README.md](packages/vercel-smart/README.md))
-2. `runpod-smart` — Runpod GPU compute (MVP shipped, 12 tools, 191 tests — see [packages/runpod-smart/README.md](packages/runpod-smart/README.md))
-3. `email-smart` — Multi-account Gmail: send + inbox read + reversible bulk modify + drafts + bulk-unsubscribe (full shipped, 27 tools, 351 tests — see [packages/email-smart/README.md](packages/email-smart/README.md))
-4. `gsc-smart` — Google Search Console (planned)
-5. `ga-smart` — Google Analytics 4 (planned)
-6. `hetzner-smart` — Hetzner Cloud (planned)
-7. `coolify-smart` — self-hosted Coolify (planned)
+## Shipped
 
-All built on top of the shared `smart-mcp-core` package (auth, http, errors, confirm, fuzzy, server bootstrap).
+| Server | Tools | Scope |
+|--------|-------|-------|
+| `calendar-smart` | 44 | Google Calendar API v3 |
+| `slack-smart` | 40 | Slack messaging, search, channels |
+| `email-smart` | 30 | Multi-account Gmail: send, inbox read, reversible bulk modify, labels, drafts, bulk-unsubscribe |
+| `weather-smart` | 14 | Open-Meteo + NWS: forecasts, alerts, air quality, activity windows |
+| `runpod-smart` | 12 | Runpod GPU compute |
+| `vercel-smart` | 7 | Vercel ops |
+
+Each package's own `README.md` documents its tools and tests.
+
+## In progress
+
+- `drive-smart` — Google Drive (in development, not yet released)
+
+## Planned
+
+- `gsc-smart` — Google Search Console
+- `ga-smart` — Google Analytics 4
+- `hetzner-smart` — Hetzner Cloud
+- `coolify-smart` — self-hosted Coolify
 
 ## Build all
 ```
