@@ -6,6 +6,10 @@
 display_information:
   name: slack-smart
   description: Personal Slack toolbelt
+features:
+  bot_user:
+    display_name: slack-smart
+    always_online: false
 oauth_config:
   scopes:
     user:
