@@ -4,11 +4,13 @@ MCP server for Slack: read channels, DMs and threads; search messages and files;
 
 ## Setup
 
-### 1. Create a Slack app
+### 1. Create a Slack app (fast path: manifest)
 
-Go to [api.slack.com/apps](https://api.slack.com/apps) and create a new app ("From scratch"). Give it any name and select your workspace.
+Go to [api.slack.com/apps](https://api.slack.com/apps) -> **Create New App** -> **From an app manifest** -> pick your workspace -> paste the contents of [`slack-app-manifest.yaml`](./slack-app-manifest.yaml) (all scopes pre-filled) -> **Create**. Then skip to step 3.
 
-### 2. Add OAuth scopes
+To do it by hand instead, use "From scratch" and add the scopes in step 2.
+
+### 2. Add OAuth scopes (only if you did NOT use the manifest)
 
 Under **OAuth & Permissions**, add the following scopes:
 

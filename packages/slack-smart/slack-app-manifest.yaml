@@ -1,0 +1,57 @@
+# slack-smart app manifest.
+# Fast setup: api.slack.com/apps -> Create New App -> From an app manifest ->
+# pick your workspace -> paste this -> Create -> Install to Workspace ->
+# OAuth & Permissions -> copy the User (xoxp) and Bot (xoxb) tokens.
+# Contains scope names only, no secrets.
+display_information:
+  name: slack-smart
+  description: Personal Slack toolbelt
+oauth_config:
+  scopes:
+    user:
+      - search:read
+      - channels:history
+      - groups:history
+      - im:history
+      - mpim:history
+      - channels:read
+      - groups:read
+      - im:read
+      - mpim:read
+      - im:write
+      - mpim:write
+      - groups:write
+      - users:read
+      - users:read.email
+      - users.profile:read
+      - reactions:read
+      - reactions:write
+      - chat:write
+      - files:read
+      - files:write
+      - pins:read
+      - pins:write
+      - dnd:read
+      - dnd:write
+      - usergroups:read
+      - team:read
+      - emoji:read
+    bot:
+      - chat:write
+      - channels:read
+      - channels:history
+      - groups:read
+      - groups:history
+      - im:history
+      - mpim:history
+      - reactions:write
+      - users:read
+      - files:read
+      - files:write
+      - pins:read
+      - pins:write
+      - team:read
+settings:
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false
