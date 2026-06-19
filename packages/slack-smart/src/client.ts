@@ -289,6 +289,59 @@ export class SlackClient {
   }
 
   // ---------------------------------------------------------------------------
+  // Conversations (write)
+  // ---------------------------------------------------------------------------
+
+  async inviteToChannel(args: { channel: string; users: string }): Promise<{
+    ok: true;
+    channel: unknown;
+  }> {
+    return this.slackCall<SlackEnvelope & { channel: unknown }>(
+      "conversations.invite",
+      { channel: args.channel, users: args.users },
+      { token: "user", http: "POST" },
+    ) as Promise<{ ok: true; channel: unknown }>;
+  }
+
+  async setChannelPurpose(args: {
+    channel: string;
+    purpose: string;
+  }): Promise<{ ok: true }> {
+    return this.slackCall<SlackEnvelope>(
+      "conversations.setPurpose",
+      { channel: args.channel, purpose: args.purpose },
+      { token: "user", http: "POST" },
+    ) as Promise<{ ok: true }>;
+  }
+
+  async setChannelTopic(args: {
+    channel: string;
+    topic: string;
+  }): Promise<{ ok: true }> {
+    return this.slackCall<SlackEnvelope>(
+      "conversations.setTopic",
+      { channel: args.channel, topic: args.topic },
+      { token: "user", http: "POST" },
+    ) as Promise<{ ok: true }>;
+  }
+
+  async createConversation(args: {
+    name: string;
+    is_private?: boolean;
+    team_id?: string;
+  }): Promise<{ ok: true; channel: unknown }> {
+    return this.slackCall<SlackEnvelope & { channel: unknown }>(
+      "conversations.create",
+      {
+        name: args.name,
+        ...(args.is_private !== undefined ? { is_private: args.is_private } : {}),
+        ...(args.team_id !== undefined ? { team_id: args.team_id } : {}),
+      },
+      { token: "user", http: "POST" },
+    ) as Promise<{ ok: true; channel: unknown }>;
+  }
+
+  // ---------------------------------------------------------------------------
   // Messages (write)
   // ---------------------------------------------------------------------------
   //
@@ -841,5 +894,38 @@ export class SlackClient {
       {},
       { token: "user", http: "GET" },
     ) as Promise<{ ok: true; emoji: Record<string, string> }>;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Canvases (user token, scopes canvases:read / canvases:write)
+  // ---------------------------------------------------------------------------
+
+  async createCanvas(args: {
+    title?: string;
+    markdown?: string;
+    channel_id?: string;
+  }): Promise<{ ok: true; canvas_id: string }> {
+    return this.slackCall<SlackEnvelope & { canvas_id: string }>(
+      "canvases.create",
+      {
+        ...(args.title !== undefined ? { title: args.title } : {}),
+        ...(args.markdown !== undefined
+          ? { document_content: { type: "markdown", markdown: args.markdown } }
+          : {}),
+        ...(args.channel_id !== undefined ? { channel_id: args.channel_id } : {}),
+      },
+      { token: "user", http: "POST" },
+    ) as Promise<{ ok: true; canvas_id: string }>;
+  }
+
+  async editCanvas(args: {
+    canvas_id: string;
+    changes: unknown[];
+  }): Promise<{ ok: true }> {
+    return this.slackCall<SlackEnvelope>(
+      "canvases.edit",
+      { canvas_id: args.canvas_id, changes: args.changes },
+      { token: "user", http: "POST" },
+    ) as Promise<{ ok: true }>;
   }
 }

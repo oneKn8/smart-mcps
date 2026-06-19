@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { z } from "zod";
+import { ConfirmRequiredError } from "smart-mcp-core";
 import {
   list_channels,
   channel_history,
@@ -7,6 +8,10 @@ import {
   channel_info,
   channel_members,
   open_dm,
+  invite_to_channel,
+  set_channel_purpose,
+  set_channel_topic,
+  create_channel,
 } from "../conversations.js";
 
 // ---------------------------------------------------------------------------
@@ -20,6 +25,10 @@ type FakeClient = {
   getChannelInfo: ReturnType<typeof vi.fn>;
   getMembers: ReturnType<typeof vi.fn>;
   openDm: ReturnType<typeof vi.fn>;
+  inviteToChannel: ReturnType<typeof vi.fn>;
+  setChannelPurpose: ReturnType<typeof vi.fn>;
+  setChannelTopic: ReturnType<typeof vi.fn>;
+  createConversation: ReturnType<typeof vi.fn>;
 };
 
 function makeClient(): FakeClient {
@@ -30,6 +39,10 @@ function makeClient(): FakeClient {
     getChannelInfo: vi.fn(),
     getMembers: vi.fn(),
     openDm: vi.fn(),
+    inviteToChannel: vi.fn(),
+    setChannelPurpose: vi.fn(),
+    setChannelTopic: vi.fn(),
+    createConversation: vi.fn(),
   };
 }
 
@@ -399,5 +412,165 @@ describe("open_dm — handler", () => {
     >[0];
     const result = (await open_dm.handler(parsed, ctx(client))) as Record<string, unknown>;
     expect(Object.keys(result)).toEqual(["channel_id"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// invite_to_channel
+// ---------------------------------------------------------------------------
+
+describe("invite_to_channel — confirm gate + handler", () => {
+  let client: FakeClient;
+
+  beforeEach(() => {
+    client = makeClient();
+  });
+
+  it("throws ConfirmRequiredError without confirm and does NOT call inviteToChannel", async () => {
+    const parsed = invite_to_channel.inputSchema.parse({
+      channel: "C001",
+      users: "U001,U002",
+    }) as Parameters<typeof invite_to_channel.handler>[0];
+    await expect(invite_to_channel.handler(parsed, ctx(client))).rejects.toThrow(
+      ConfirmRequiredError,
+    );
+    expect(client.inviteToChannel).not.toHaveBeenCalled();
+  });
+
+  it("invites and returns slim channel when confirm:true", async () => {
+    client.inviteToChannel.mockResolvedValue({ ok: true, channel: publicChannelRaw });
+    const parsed = invite_to_channel.inputSchema.parse({
+      channel: "C001",
+      users: "U001,U002",
+      confirm: true,
+    }) as Parameters<typeof invite_to_channel.handler>[0];
+    const result = (await invite_to_channel.handler(parsed, ctx(client))) as Record<string, unknown>;
+    expect(client.inviteToChannel).toHaveBeenCalledWith({
+      channel: "C001",
+      users: "U001,U002",
+    });
+    expect(result.id).toBe("C001");
+    expect(result).not.toHaveProperty("confirm");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// set_channel_purpose
+// ---------------------------------------------------------------------------
+
+describe("set_channel_purpose — confirm gate + handler", () => {
+  let client: FakeClient;
+
+  beforeEach(() => {
+    client = makeClient();
+  });
+
+  it("throws ConfirmRequiredError without confirm", async () => {
+    const parsed = set_channel_purpose.inputSchema.parse({
+      channel: "C001",
+      purpose: "hi",
+    }) as Parameters<typeof set_channel_purpose.handler>[0];
+    await expect(set_channel_purpose.handler(parsed, ctx(client))).rejects.toThrow(
+      ConfirmRequiredError,
+    );
+    expect(client.setChannelPurpose).not.toHaveBeenCalled();
+  });
+
+  it("sets purpose and echoes it when confirm:true", async () => {
+    client.setChannelPurpose.mockResolvedValue({ ok: true });
+    const parsed = set_channel_purpose.inputSchema.parse({
+      channel: "C001",
+      purpose: "Team brief",
+      confirm: true,
+    }) as Parameters<typeof set_channel_purpose.handler>[0];
+    const result = (await set_channel_purpose.handler(parsed, ctx(client))) as {
+      ok: boolean;
+      purpose: string;
+    };
+    expect(client.setChannelPurpose).toHaveBeenCalledWith({
+      channel: "C001",
+      purpose: "Team brief",
+    });
+    expect(result.ok).toBe(true);
+    expect(result.purpose).toBe("Team brief");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// set_channel_topic
+// ---------------------------------------------------------------------------
+
+describe("set_channel_topic — confirm gate + handler", () => {
+  let client: FakeClient;
+
+  beforeEach(() => {
+    client = makeClient();
+  });
+
+  it("throws ConfirmRequiredError without confirm", async () => {
+    const parsed = set_channel_topic.inputSchema.parse({
+      channel: "C001",
+      topic: "hi",
+    }) as Parameters<typeof set_channel_topic.handler>[0];
+    await expect(set_channel_topic.handler(parsed, ctx(client))).rejects.toThrow(
+      ConfirmRequiredError,
+    );
+    expect(client.setChannelTopic).not.toHaveBeenCalled();
+  });
+
+  it("sets topic and echoes it when confirm:true", async () => {
+    client.setChannelTopic.mockResolvedValue({ ok: true });
+    const parsed = set_channel_topic.inputSchema.parse({
+      channel: "C001",
+      topic: "Daily standup",
+      confirm: true,
+    }) as Parameters<typeof set_channel_topic.handler>[0];
+    const result = (await set_channel_topic.handler(parsed, ctx(client))) as {
+      ok: boolean;
+      topic: string;
+    };
+    expect(result.ok).toBe(true);
+    expect(result.topic).toBe("Daily standup");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// create_channel
+// ---------------------------------------------------------------------------
+
+describe("create_channel — confirm gate + handler", () => {
+  let client: FakeClient;
+
+  beforeEach(() => {
+    client = makeClient();
+  });
+
+  it("throws ConfirmRequiredError without confirm", async () => {
+    const parsed = create_channel.inputSchema.parse({
+      name: "new-channel",
+    }) as Parameters<typeof create_channel.handler>[0];
+    await expect(create_channel.handler(parsed, ctx(client))).rejects.toThrow(
+      ConfirmRequiredError,
+    );
+    expect(client.createConversation).not.toHaveBeenCalled();
+  });
+
+  it("creates and returns slim channel when confirm:true", async () => {
+    client.createConversation.mockResolvedValue({
+      ok: true,
+      channel: { ...publicChannelRaw, id: "C777", name: "new-channel" },
+    });
+    const parsed = create_channel.inputSchema.parse({
+      name: "new-channel",
+      is_private: true,
+      confirm: true,
+    }) as Parameters<typeof create_channel.handler>[0];
+    const result = (await create_channel.handler(parsed, ctx(client))) as Record<string, unknown>;
+    expect(client.createConversation).toHaveBeenCalledWith({
+      name: "new-channel",
+      is_private: true,
+    });
+    expect(result.id).toBe("C777");
+    expect(result.name).toBe("new-channel");
   });
 });

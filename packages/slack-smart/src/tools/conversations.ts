@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { defineTool } from "smart-mcp-core";
+import { defineTool, guardDestructive } from "smart-mcp-core";
 import type { SlackContext } from "../context.js";
 import { mapChannel, type SlimChannel } from "../channel-mapper.js";
 import { mapMessage, type SlimMessage } from "../message-mapper.js";
@@ -232,5 +232,144 @@ export const open_dm = defineTool<OpenDmInput, OpenDmOutput, SlackContext>({
   handler: async (input, context) => {
     const resp = await context.client.openDm({ users: input.users });
     return { channel_id: resp.channel.id };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// invite_to_channel
+// ---------------------------------------------------------------------------
+
+// Cast required: ZodDefault on confirm widens the schema input type.
+const inviteToChannelInputSchema = z.object({
+  channel: z.string().min(1),
+  users: z.string().min(1),
+  confirm: z.boolean().optional().default(false),
+});
+
+type InviteToChannelInput = z.infer<typeof inviteToChannelInputSchema>;
+
+export const invite_to_channel = defineTool<
+  InviteToChannelInput,
+  SlimChannel,
+  SlackContext
+>({
+  name: "invite_to_channel",
+  description:
+    "Invite users (comma-separated IDs) to a channel (user token, scopes channels:write.invites/groups:write.invites).",
+  inputSchema: inviteToChannelInputSchema as unknown as z.ZodType<InviteToChannelInput>,
+  handler: async (input, context) => {
+    guardDestructive({
+      confirm: input.confirm,
+      preview: `Invite ${input.users} to ${input.channel}`,
+    });
+    const resp = await context.client.inviteToChannel({
+      channel: input.channel,
+      users: input.users,
+    });
+    return mapChannel(resp.channel as Record<string, unknown>);
+  },
+});
+
+// ---------------------------------------------------------------------------
+// set_channel_purpose
+// ---------------------------------------------------------------------------
+
+const setChannelPurposeInputSchema = z.object({
+  channel: z.string().min(1),
+  purpose: z.string(),
+  confirm: z.boolean().optional().default(false),
+});
+
+type SetChannelPurposeInput = z.infer<typeof setChannelPurposeInputSchema>;
+
+type SetChannelPurposeOutput = { ok: true; purpose: string };
+
+export const set_channel_purpose = defineTool<
+  SetChannelPurposeInput,
+  SetChannelPurposeOutput,
+  SlackContext
+>({
+  name: "set_channel_purpose",
+  description:
+    "Set a channel's purpose/description (user token, scope channels:write/groups:write).",
+  inputSchema: setChannelPurposeInputSchema as unknown as z.ZodType<SetChannelPurposeInput>,
+  handler: async (input, context) => {
+    guardDestructive({
+      confirm: input.confirm,
+      preview: `Set purpose of ${input.channel}`,
+    });
+    await context.client.setChannelPurpose({
+      channel: input.channel,
+      purpose: input.purpose,
+    });
+    return { ok: true, purpose: input.purpose };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// set_channel_topic
+// ---------------------------------------------------------------------------
+
+const setChannelTopicInputSchema = z.object({
+  channel: z.string().min(1),
+  topic: z.string(),
+  confirm: z.boolean().optional().default(false),
+});
+
+type SetChannelTopicInput = z.infer<typeof setChannelTopicInputSchema>;
+
+type SetChannelTopicOutput = { ok: true; topic: string };
+
+export const set_channel_topic = defineTool<
+  SetChannelTopicInput,
+  SetChannelTopicOutput,
+  SlackContext
+>({
+  name: "set_channel_topic",
+  description: "Set a channel's topic (user token, scope channels:write/groups:write).",
+  inputSchema: setChannelTopicInputSchema as unknown as z.ZodType<SetChannelTopicInput>,
+  handler: async (input, context) => {
+    guardDestructive({
+      confirm: input.confirm,
+      preview: `Set topic of ${input.channel}`,
+    });
+    await context.client.setChannelTopic({
+      channel: input.channel,
+      topic: input.topic,
+    });
+    return { ok: true, topic: input.topic };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// create_channel
+// ---------------------------------------------------------------------------
+
+const createChannelInputSchema = z.object({
+  name: z.string().min(1),
+  is_private: z.boolean().optional().default(false),
+  confirm: z.boolean().optional().default(false),
+});
+
+type CreateChannelInput = z.infer<typeof createChannelInputSchema>;
+
+export const create_channel = defineTool<
+  CreateChannelInput,
+  SlimChannel,
+  SlackContext
+>({
+  name: "create_channel",
+  description: "Create a public or private channel (user token, scope channels:write/groups:write).",
+  inputSchema: createChannelInputSchema as unknown as z.ZodType<CreateChannelInput>,
+  handler: async (input, context) => {
+    guardDestructive({
+      confirm: input.confirm,
+      preview: `Create ${input.is_private ? "private" : "public"} channel #${input.name}`,
+    });
+    const resp = await context.client.createConversation({
+      name: input.name,
+      is_private: input.is_private,
+    });
+    return mapChannel(resp.channel as Record<string, unknown>);
   },
 });

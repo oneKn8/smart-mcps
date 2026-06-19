@@ -7,11 +7,14 @@ const EXPECTED_TOOL_NAMES = [
   "channel_history",
   "channel_info",
   "channel_members",
+  "create_canvas",
+  "create_channel",
   "delete_message",
   "dnd_status",
   "end_snooze",
   "file_info",
   "get_reactions",
+  "invite_to_channel",
   "list_channels",
   "list_emoji",
   "list_files",
@@ -29,6 +32,8 @@ const EXPECTED_TOOL_NAMES = [
   "schedule_message",
   "search_files",
   "search_messages",
+  "set_channel_purpose",
+  "set_channel_topic",
   "set_snooze",
   "smart_send",
   "team_info",
@@ -36,6 +41,7 @@ const EXPECTED_TOOL_NAMES = [
   "thread_replies",
   "unpin_message",
   "unread_digest",
+  "update_canvas",
   "update_message",
   "upload_file",
   "user_info",
@@ -45,12 +51,26 @@ const EXPECTED_TOOL_NAMES = [
 ];
 
 describe("slack-smart tool wiring", () => {
-  it("exports the exact set of 40 tool names (sorted)", () => {
+  it("exports the exact set of 46 tool names (sorted)", () => {
     expect(tools.map((t) => t.name).sort()).toEqual(EXPECTED_TOOL_NAMES);
   });
 
   it("exports the expected number of tools", () => {
-    expect(tools).toHaveLength(40);
+    expect(tools).toHaveLength(46);
+  });
+
+  it("tool names include the 4 channel-management write tools", () => {
+    const names = tools.map((t) => t.name);
+    expect(names).toContain("invite_to_channel");
+    expect(names).toContain("set_channel_purpose");
+    expect(names).toContain("set_channel_topic");
+    expect(names).toContain("create_channel");
+  });
+
+  it("tool names include the 2 canvas tools", () => {
+    const names = tools.map((t) => t.name);
+    expect(names).toContain("create_canvas");
+    expect(names).toContain("update_canvas");
   });
 
   it("tool names include whoami", () => {

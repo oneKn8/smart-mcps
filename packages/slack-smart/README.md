@@ -1,6 +1,6 @@
 # slack-smart
 
-MCP server for Slack: read channels, DMs and threads; search messages and files; post, react, pin and manage Do Not Disturb — all with confirm-gated writes and smart composite shortcuts for daily catch-up. Part of the [smart-mcps](../../README.md) monorepo. Built on `smart-mcp-core`.
+MCP server for Slack: read channels, DMs and threads; search messages and files; post, react, pin; manage channels (invite, purpose, topic, create); create and edit canvases; and manage Do Not Disturb — all with confirm-gated writes and smart composite shortcuts for daily catch-up. Part of the [smart-mcps](../../README.md) monorepo. Built on `smart-mcp-core`.
 
 ## Setup
 
@@ -16,25 +16,19 @@ Under **OAuth & Permissions**, add the following scopes:
 
 **User token scopes (xoxp) — required:**
 
-`search:read`, `channels:history`, `groups:history`, `im:history`, `mpim:history`, `channels:read`, `groups:read`, `im:read`, `mpim:read`, `im:write`, `mpim:write`, `groups:write`, `users:read`, `users:read.email`, `users.profile:read`, `reactions:read`, `reactions:write`, `chat:write`, `files:read`, `files:write`, `pins:read`, `pins:write`, `dnd:read`, `dnd:write`, `usergroups:read`, `team:read`, `emoji:read`
+`search:read`, `channels:history`, `groups:history`, `im:history`, `mpim:history`, `channels:read`, `groups:read`, `im:read`, `mpim:read`, `im:write`, `mpim:write`, `channels:write`, `groups:write`, `channels:write.invites`, `groups:write.invites`, `users:read`, `users:read.email`, `users.profile:read`, `reactions:read`, `reactions:write`, `chat:write`, `files:read`, `files:write`, `pins:read`, `pins:write`, `dnd:read`, `dnd:write`, `usergroups:read`, `team:read`, `emoji:read`, `canvases:read`, `canvases:write`
 
-**Bot token scopes (xoxb) — optional, enables post-as-bot:**
-
-`chat:write`, `channels:read`, `channels:history`, `groups:read`, `groups:history`, `im:history`, `mpim:history`, `reactions:write`, `users:read`, `files:read`, `files:write`, `pins:read`, `pins:write`, `team:read`
+Posting as a bot (`send_as: "bot"`) is an optional add-on and is **not** in the manifest. To enable it, add `SLACK_BOT_TOKEN` plus the bot's `chat:write` scope manually; otherwise every tool runs as you on the user token.
 
 ### 3. Install to workspace
 
-Click **Install to Workspace** and authorize. Copy both tokens:
-
-- **User OAuth Token** (`xoxp-...`) — required for all reads and search
-- **Bot User OAuth Token** (`xoxb-...`) — optional, required only if you want to post as the bot app
+Click **Install to Workspace** and authorize. Copy the **User OAuth Token** (`xoxp-...`) — it powers every tool.
 
 ### 4. Add tokens to the shared env file
 
 ```bash
 # ~/.config/smart-mcps/.env  (chmod 600)
-SLACK_USER_TOKEN=xoxp-...   # required
-SLACK_BOT_TOKEN=xoxb-...    # optional — enables post-as-bot
+SLACK_USER_TOKEN=xoxp-...   # required — every tool runs as you
 ```
 
 `SLACK_USER_TOKEN` is required. The server exits at startup if it is missing. `search.*` tools always use the user token (Slack does not allow bot tokens for search).
@@ -51,7 +45,7 @@ npm run build
 
 The installer auto-discovers `packages/*/dist/server.js` and registers `slack-smart` in Claude Code (`~/.claude.json`), Cursor (`~/.cursor/mcp.json`), and prints a Codex snippet. After registration, restart your MCP client. Tools appear under the `slack-smart` namespace.
 
-## Tools (40)
+## Tools (46)
 
 Write tools are confirm-gated: they throw a `ConfirmRequiredError` with a human-readable preview unless `confirm: true` is passed. This prevents accidental writes.
 
@@ -61,7 +55,7 @@ Write tools are confirm-gated: they throw a `ConfirmRequiredError` with a human-
 |---|---|
 | `whoami` | Return the authenticated user's id, name, and team info. |
 
-### Conversations (6, read-only)
+### Conversations (10)
 
 | Name | Description |
 |---|---|
@@ -71,6 +65,10 @@ Write tools are confirm-gated: they throw a `ConfirmRequiredError` with a human-
 | `channel_info` | Get metadata for a single channel by ID. |
 | `channel_members` | List members of a channel. |
 | `open_dm` | Open a DM or group DM and return the conversation ID. |
+| `invite_to_channel` | Invite users (comma-separated IDs) to a channel (write — confirm-gated). |
+| `set_channel_purpose` | Set a channel's purpose/description (write — confirm-gated). |
+| `set_channel_topic` | Set a channel's topic (write — confirm-gated). |
+| `create_channel` | Create a public or private channel (write — confirm-gated). |
 
 ### Messages (5, write — confirm-gated)
 
@@ -150,9 +148,16 @@ Write tools are confirm-gated: they throw a `ConfirmRequiredError` with a human-
 | `thread_catchup` | Fetch all replies in a thread, ordered for easy reading. |
 | `smart_send` | Resolve a channel or user by name and post a message with a confirm preview. |
 
+### Canvases (2, write — confirm-gated)
+
+| Name | Description |
+|---|---|
+| `create_canvas` | Create a standalone canvas with optional markdown content. |
+| `update_canvas` | Edit a canvas: insert, replace, or delete sections by operation. |
+
 ## Safety
 
-Write tools (`post_message`, `reply_in_thread`, `update_message`, `delete_message`, `schedule_message`, `add_reaction`, `remove_reaction`, `upload_file`, `pin_message`, `unpin_message`, `set_snooze`, `end_snooze`, `smart_send`) all call `guardDestructive` before touching the API. Without `confirm: true` they return a preview of the action and throw `ConfirmRequiredError`. Pass `confirm: true` to execute.
+Write tools (`post_message`, `reply_in_thread`, `update_message`, `delete_message`, `schedule_message`, `add_reaction`, `remove_reaction`, `upload_file`, `pin_message`, `unpin_message`, `set_snooze`, `end_snooze`, `smart_send`, `invite_to_channel`, `set_channel_purpose`, `set_channel_topic`, `create_channel`, `create_canvas`, `update_canvas`) all call `guardDestructive` before touching the API. Without `confirm: true` they return a preview of the action and throw `ConfirmRequiredError`. Pass `confirm: true` to execute.
 
 Read tools default to the user token (`xoxp`). `post_message`, `reply_in_thread`, `update_message`, `delete_message`, and `schedule_message` accept a `send_as` field: `"bot"` (default) uses `SLACK_BOT_TOKEN`; `"user"` uses `SLACK_USER_TOKEN`.
 
