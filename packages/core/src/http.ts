@@ -1,6 +1,7 @@
 import {
   AuthError,
   NotFoundError,
+  PermissionError,
   RateLimitError,
   UpstreamError,
   ValidationError,
@@ -70,12 +71,13 @@ export async function fetchJson<T = unknown>(url: string, opts: FetchJsonOpts = 
       throw errOut;
     } catch (err) {
       if (err instanceof AuthError ||
+          err instanceof PermissionError ||
           err instanceof NotFoundError ||
           err instanceof ValidationError ||
           err instanceof RateLimitError ||
           err instanceof UpstreamError) {
         if (attempt === retries) throw err;
-        if (err instanceof AuthError || err instanceof NotFoundError || err instanceof ValidationError) {
+        if (err instanceof AuthError || err instanceof PermissionError || err instanceof NotFoundError || err instanceof ValidationError) {
           throw err; // non-retriable
         }
         lastErr = err;
@@ -123,8 +125,19 @@ async function mapErrorResponse(response: Response, url: string, method: string)
     case 400:
       return new ValidationError(message, { detail });
     case 401:
-    case 403:
       return new AuthError(message, { detail });
+    case 403:
+      // A 403 is ambiguous: token-lacks-scope vs caller-lacks-permission on the
+      // resource (e.g. trashing a file you don't own). Only the former is fixed
+      // by re-consent, so split them — see isResourcePermissionDenied.
+      return isResourcePermissionDenied(detail)
+        ? new PermissionError(message, {
+            detail,
+            recovery:
+              "You don't have permission on this resource — most likely you don't own it. " +
+              "Items shared with you (that you don't own) can't be deleted or modified via the API; remove them from your Drive instead.",
+          })
+        : new AuthError(message, { detail });
     case 404:
       return new NotFoundError(message, { detail });
     case 429: {
@@ -138,6 +151,19 @@ async function mapErrorResponse(response: Response, url: string, method: string)
     default:
       return new UpstreamError(message, { detail });
   }
+}
+
+/**
+ * Distinguishes a resource-ownership 403 from a scope-insufficient 403. Only the
+ * ownership case carries these Drive markers; scope errors (e.g. Gmail's
+ * "Insufficient Permission") do not, so they correctly fall through to AuthError.
+ */
+function isResourcePermissionDenied(detail: unknown): boolean {
+  const text = JSON.stringify(detail ?? "").toLowerCase();
+  return (
+    text.includes("insufficientfilepermissions") ||
+    text.includes("does not have sufficient permission")
+  );
 }
 
 async function safeReadDetail(response: Response): Promise<unknown> {

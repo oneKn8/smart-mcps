@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach } from "vitest";
 import { makeServer, http, HttpResponse } from "./test-helpers.js";
 import { fetchJson } from "../http.js";
-import { AuthError, NotFoundError, RateLimitError, UpstreamError, ValidationError } from "../errors.js";
+import { AuthError, NotFoundError, PermissionError, RateLimitError, UpstreamError, ValidationError } from "../errors.js";
 
 const server = makeServer();
 beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
@@ -42,13 +42,33 @@ describe("fetchJson — error mapping", () => {
     await expect(fetchJson("https://api.test/auth")).rejects.toBeInstanceOf(AuthError);
   });
 
-  it("throws AuthError on 403", async () => {
+  it("throws AuthError on a generic 403 (scope-insufficient case)", async () => {
     server.use(
       http.get("https://api.test/forbidden", () =>
         HttpResponse.json({ error: "forbidden" }, { status: 403 }),
       ),
     );
     await expect(fetchJson("https://api.test/forbidden")).rejects.toBeInstanceOf(AuthError);
+  });
+
+  it("throws PermissionError (not AuthError) on a 403 caused by resource ownership", async () => {
+    server.use(
+      http.delete("https://api.test/file", () =>
+        HttpResponse.json(
+          {
+            error: {
+              code: 403,
+              message: "The user does not have sufficient permissions for file X.",
+              errors: [{ reason: "insufficientFilePermissions" }],
+            },
+          },
+          { status: 403 },
+        ),
+      ),
+    );
+    const promise = fetchJson("https://api.test/file", { method: "DELETE", retries: 0 });
+    await expect(promise).rejects.toBeInstanceOf(PermissionError);
+    await expect(promise).rejects.not.toBeInstanceOf(AuthError);
   });
 
   it("throws NotFoundError on 404", async () => {

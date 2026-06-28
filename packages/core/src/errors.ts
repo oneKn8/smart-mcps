@@ -1,5 +1,6 @@
 export type ErrorCode =
   | "AUTH"
+  | "PERMISSION"
   | "RATE_LIMIT"
   | "NOT_FOUND"
   | "VALIDATION"
@@ -34,6 +35,19 @@ export class AuthError extends SmartMcpError {
   constructor(message: string, opts: SmartMcpErrorOptions = {}) {
     super("AUTH", message, opts);
     this.name = "AuthError";
+  }
+}
+
+/**
+ * The token is valid and adequately scoped, but the caller lacks permission on
+ * the specific resource (e.g. trying to trash a Drive file owned by someone
+ * else). Distinct from AuthError so clients don't mislabel it as a scope/
+ * re-consent problem — re-authing never fixes an ownership 403.
+ */
+export class PermissionError extends SmartMcpError {
+  constructor(message: string, opts: SmartMcpErrorOptions = {}) {
+    super("PERMISSION", message, opts);
+    this.name = "PermissionError";
   }
 }
 
