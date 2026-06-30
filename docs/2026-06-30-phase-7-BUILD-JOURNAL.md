@@ -30,8 +30,30 @@ Branch: `phase-7-google-trio-flow` (off `main`). No push until user approves.
 - 13 commits on `phase-7-google-trio-flow` (research -> design -> scaffold -> 4 feat -> renderer refactor -> 4 fix). NOT pushed (awaiting Santo).
 - Registered in ~/.claude.json (tasks/docs/apps-script/flow). Effective on next Claude Code restart.
 
-## KNOWN MINOR (logged, not blocking)
-- docs-smart `parseInline` ignores backslash escapes, so `mdInline`'s backslash-escaping of INLINE markers (`* _ \``) is inert when rendered. Block-level injection (lists/headings/tables, and flow's leading-marker + backtick-strip fixes) IS prevented; residual is cosmetic mid-line emphasis only. Proper fix = make parseInline honor `\\` (new scope, low severity).
+## LIVE-VERIFIED 2026-06-30 ~10:46 CDT (client layer)
+- All 3 tokens minted for your-account (.tasks/.docs/.script.json) via the auth CLIs.
+- Read-only live smoke through the REAL client code passed: tasks.listTaskLists -> "My Tasks";
+  docs.getDocument(fake) -> 404 (auth+scope OK); appsScript.listProcesses -> OK (0). No data created.
+- DEEP live E2E (create-verify-DELETE, self-cleaning, no debris):
+  - docs flagship `renderMarkdownToNewDoc` with the CRITICAL 2-consecutive-table case rendered
+    against LIVE Google Docs: headings/bold/bullets present, exactly 2 tables, both grids' cells
+    correct ([[a,b,c],[d,e,f]] and [[x,y],[1,2]]). Doc deleted (204). Table-collision fix PROVEN live.
+  - flow orchestrator `daily_brief_doc` composed live Calendar + Tasks -> rendered Doc (233 chars),
+    deleted (204). Cross-app orchestration thesis PROVEN live.
+  - (apps-script WRITE lifecycle intentionally NOT live-tested: a created script project may not be
+    deletable via drive.file, and I won't leave un-cleanable Drive debris. Read path + auth proven.)
+  - Harness note: call tool handlers via `tool.inputSchema.parse(input)` first — the MCP server applies
+    zod defaults; calling handler() directly skips them (calendar_id default would be undefined).
+- Honesty boundary now: CLIENT/API layer live-verified. MCP *tools* load after a Claude Code restart
+  (servers registered, this session's tool list was fixed at startup). run_function still needs the
+  one-time GCP-project relink. Consent screen recommended -> Production (removes 7-day token expiry).
+
+## KNOWN MINOR
+- RESOLVED 2026-06-30: docs-smart `parseInline` now honors CommonMark backslash escapes
+  (commit 3512152, +15 tests -> docs 157). `mdInline` escaping is now effective end-to-end.
+  flow inbox-digest test updated to assert paragraph STRUCTURALLY (no createParagraphBullets)
+  instead of the old inert-backslash string (commit c237f11). No known-minors remain.
+  Final monorepo total: 2457 tests.
 
 ## HANDOFF — Santo's manual steps to go live (the ONE thing I could not do)
 
