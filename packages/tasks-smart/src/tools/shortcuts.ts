@@ -19,22 +19,62 @@ export type BucketedTask = {
 
 /**
  * Resolve the set of task-list ids to scan. When `taskListId` is given we use
- * just that one; otherwise we enumerate every list the user owns.
+ * just that one; otherwise we enumerate every list the user owns, following
+ * `nextPageToken` so accounts with more lists than fit on one page are not
+ * silently truncated.
  */
 async function resolveListIds(
   ctx: TasksContext,
   taskListId: string | undefined,
 ): Promise<string[]> {
   if (taskListId !== undefined) return [taskListId];
-  const { items } = await ctx.client.listTaskLists();
   const ids: string[] = [];
-  for (const item of items) {
-    if (item && typeof item === "object" && !Array.isArray(item)) {
-      const id = (item as { id?: unknown }).id;
-      if (typeof id === "string" && id.length > 0) ids.push(id);
+  let pageToken: string | undefined;
+  do {
+    const result = await ctx.client.listTaskLists(
+      pageToken !== undefined ? { pageToken } : {},
+    );
+    for (const item of result.items) {
+      if (item && typeof item === "object" && !Array.isArray(item)) {
+        const id = (item as { id?: unknown }).id;
+        if (typeof id === "string" && id.length > 0) ids.push(id);
+      }
     }
-  }
+    pageToken = result.nextPageToken;
+  } while (pageToken !== undefined);
   return ids;
+}
+
+/** Trim hints + filters for a single-list scan, shared by both shortcuts. */
+type ListScanQuery = {
+  tasklist: string;
+  showCompleted: boolean;
+  dueMin?: string;
+  dueMax?: string;
+};
+
+/**
+ * Fetch EVERY task in a list. Google's tasks endpoint caps a page at 20 by
+ * default, so a single call silently drops the tail of a longer list; we set a
+ * larger page size and follow `nextPageToken` until it is absent. Returns the
+ * raw items concatenated across pages (membership filtering happens upstream).
+ */
+async function listAllTasks(
+  ctx: TasksContext,
+  query: ListScanQuery,
+): Promise<unknown[]> {
+  const items: unknown[] = [];
+  let pageToken: string | undefined;
+  do {
+    const result = await ctx.client.listTasks({
+      ...query,
+      maxResults: 100,
+      ...(pageToken !== undefined ? { pageToken } : {}),
+    });
+    items.push(...result.items);
+    pageToken = result.nextPageToken;
+  } while (pageToken !== undefined);
+  return items;
 }
 
 // =============================================================================
@@ -68,17 +108,24 @@ export const todayTasksTool = defineTool<
     // truth (a task in a non-UTC zone would off-by-one if we trusted them).
     const today = localDateKey();
     const tomorrow = addDaysToDateKey(today, 1);
+    // Widen the lower trim by one day. `dueMin` only trims the payload; if
+    // Google treats it as EXCLUSIVE, a value tangent to today's edge would drop
+    // every task-due-today before the membership test runs. A looser lower edge
+    // is free because the exact `task.due === today` compare below is the real
+    // source of truth.
+    const dueMin = dateKeyToUtcMidnight(addDaysToDateKey(today, -1));
+    const dueMax = dateKeyToUtcMidnight(tomorrow);
     const listIds = await resolveListIds(ctx, input.task_list_id);
 
     const tasks: BucketedTask[] = [];
     for (const listId of listIds) {
-      const result = await ctx.client.listTasks({
+      const items = await listAllTasks(ctx, {
         tasklist: listId,
         showCompleted: false,
-        dueMin: dateKeyToUtcMidnight(today),
-        dueMax: dateKeyToUtcMidnight(tomorrow),
+        dueMin,
+        dueMax,
       });
-      for (const item of result.items) {
+      for (const item of items) {
         const task = mapTask(item);
         if (
           task.due === today &&
@@ -126,12 +173,12 @@ export const overdueTasksTool = defineTool<
 
     const tasks: BucketedTask[] = [];
     for (const listId of listIds) {
-      const result = await ctx.client.listTasks({
+      const items = await listAllTasks(ctx, {
         tasklist: listId,
         showCompleted: false,
         dueMax: dateKeyToUtcMidnight(today),
       });
-      for (const item of result.items) {
+      for (const item of items) {
         const task = mapTask(item);
         if (
           task.due !== null &&

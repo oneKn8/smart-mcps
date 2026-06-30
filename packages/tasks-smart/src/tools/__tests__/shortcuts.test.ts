@@ -71,12 +71,49 @@ describe("todayTasksTool — local-date bucketing", () => {
   it("passes a today-window dueMin/dueMax trim hint and showCompleted=false", async () => {
     const listTasks = vi.fn().mockResolvedValue({ items: [] });
     await todayTasksTool.handler({ task_list_id: "l1" }, ctxWith({ listTasks }));
+    // dueMin is widened by one day (Jun 30, not Jul 1): it is only a payload
+    // trim hint, so a looser lower edge avoids dropping tasks-due-today if
+    // Google treats dueMin as exclusive. maxResults batches pages of 100.
     expect(listTasks).toHaveBeenCalledWith({
       tasklist: "l1",
       showCompleted: false,
-      dueMin: "2026-07-01T00:00:00.000Z",
+      dueMin: "2026-06-30T00:00:00.000Z",
       dueMax: "2026-07-02T00:00:00.000Z",
+      maxResults: 100,
     });
+  });
+
+  it("includes a task due exactly today (dueMin lower edge is not tangent)", async () => {
+    // The membership test is the exact date-string compare; the widened dueMin
+    // must never cause a task due exactly today to be trimmed away.
+    const listTasks = vi.fn().mockResolvedValue({ items: [dueJul01] });
+    const out = await todayTasksTool.handler(
+      { task_list_id: "l1" },
+      ctxWith({ listTasks }),
+    );
+    expect(out.tasks.map((e) => e.task.id)).toEqual(["t_jul01"]);
+  });
+
+  it("follows nextPageToken to fetch ALL pages, not just the first 20", async () => {
+    const page1 = Array.from({ length: 20 }, (_, i) => ({
+      ...dueJul01,
+      id: `t_p1_${i}`,
+    }));
+    const page2 = Array.from({ length: 5 }, (_, i) => ({
+      ...dueJul01,
+      id: `t_p2_${i}`,
+    }));
+    const listTasks = vi
+      .fn()
+      .mockResolvedValueOnce({ items: page1, nextPageToken: "PAGE2" })
+      .mockResolvedValueOnce({ items: page2 });
+    const out = await todayTasksTool.handler(
+      { task_list_id: "l1" },
+      ctxWith({ listTasks }),
+    );
+    expect(listTasks).toHaveBeenCalledTimes(2);
+    expect(listTasks.mock.calls[1]?.[0]).toMatchObject({ pageToken: "PAGE2" });
+    expect(out.tasks).toHaveLength(25);
   });
 
   it("scans every list when no task_list_id is given, tagging each task", async () => {
@@ -111,7 +148,7 @@ describe("overdueTasksTool — local-date bucketing", () => {
     expect(out.tasks.map((e) => e.task.id)).toEqual(["t_jun30"]);
   });
 
-  it("passes a dueMax=today trim hint and showCompleted=false", async () => {
+  it("passes a dueMax=today trim hint, showCompleted=false, maxResults=100", async () => {
     const listTasks = vi.fn().mockResolvedValue({ items: [] });
     await overdueTasksTool.handler(
       { task_list_id: "l1" },
@@ -121,7 +158,53 @@ describe("overdueTasksTool — local-date bucketing", () => {
       tasklist: "l1",
       showCompleted: false,
       dueMax: "2026-07-01T00:00:00.000Z",
+      maxResults: 100,
     });
+  });
+
+  it("returns ALL 25 tasks of a 2-page overdue list (no silent 20-cap)", async () => {
+    // Google's default page size is 20; an overdue list of 25 must surface all
+    // 25 by following nextPageToken, not silently drop the tail.
+    const page1 = Array.from({ length: 20 }, (_, i) => ({
+      ...dueJun30,
+      id: `o1_${i}`,
+    }));
+    const page2 = Array.from({ length: 5 }, (_, i) => ({
+      ...dueJun30,
+      id: `o2_${i}`,
+    }));
+    const listTasks = vi
+      .fn()
+      .mockResolvedValueOnce({ items: page1, nextPageToken: "PAGE2" })
+      .mockResolvedValueOnce({ items: page2 });
+    const out = await overdueTasksTool.handler(
+      { task_list_id: "l1" },
+      ctxWith({ listTasks }),
+    );
+    expect(listTasks).toHaveBeenCalledTimes(2);
+    expect(listTasks.mock.calls[1]?.[0]).toMatchObject({ pageToken: "PAGE2" });
+    expect(out.tasks).toHaveLength(25);
+    expect(out.tasks.every((e) => e.task.due === "2026-06-30")).toBe(true);
+  });
+
+  it("paginates the all-lists scan so >1 page of lists is not truncated", async () => {
+    // resolveListIds must follow nextPageToken too, or accounts with more lists
+    // than one page would have their later lists silently skipped.
+    const listTaskLists = vi
+      .fn()
+      .mockResolvedValueOnce({ items: [{ id: "l1" }], nextPageToken: "L2" })
+      .mockResolvedValueOnce({ items: [{ id: "l2" }] });
+    const listTasks = vi
+      .fn()
+      .mockResolvedValueOnce({ items: [dueJun30] })
+      .mockResolvedValueOnce({ items: [{ ...dueJun30, id: "o_l2" }] });
+    const out = await overdueTasksTool.handler(
+      {},
+      ctxWith({ listTaskLists, listTasks }),
+    );
+    expect(listTaskLists).toHaveBeenCalledTimes(2);
+    expect(listTaskLists.mock.calls[1]?.[0]).toMatchObject({ pageToken: "L2" });
+    expect(out.tasks.map((e) => e.task_list_id).sort()).toEqual(["l1", "l2"]);
   });
 });
 
@@ -155,6 +238,19 @@ describe("quickAddTool", () => {
     await expect(
       quickAddTool.handler(
         { task_list_id: "l1", text: "  due:2026-07-04" },
+        ctxWith({ insertTask }),
+      ),
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(insertTask).not.toHaveBeenCalled();
+  });
+
+  it("rejects a well-formed but impossible due date locally (no API call)", async () => {
+    // `due:2026-02-30` matches the YYYY-MM-DD shape but is not a real date.
+    // It must be rejected before reaching the API, not 400'd opaquely.
+    const insertTask = vi.fn();
+    await expect(
+      quickAddTool.handler(
+        { task_list_id: "l1", text: "Pay rent due:2026-02-30" },
         ctxWith({ insertTask }),
       ),
     ).rejects.toBeInstanceOf(ValidationError);

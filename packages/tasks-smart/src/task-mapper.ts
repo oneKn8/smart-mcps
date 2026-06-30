@@ -1,4 +1,6 @@
+import { ValidationError } from "smart-mcp-core";
 import { nullableString } from "./null-helpers.js";
+import { isValidDateKey } from "./date-buckets.js";
 
 /**
  * Slim task shape. Strips upstream `Task` noise (`kind`, `etag`, `selfLink`,
@@ -60,11 +62,22 @@ export function dueDateOnly(value: unknown): string | null {
  * to the UTC-midnight RFC 3339 timestamp Google stores; any other string is
  * forwarded verbatim (the API discards the time portion anyway). The caller
  * sends a date, never a time-of-day.
+ *
+ * A date-shaped input is also validated as a REAL calendar date: a value such
+ * as `2026-13-45` matches the shape but is impossible, and forwarding it would
+ * earn an opaque API 400. We reject it locally with a clear message instead.
  */
 export function toDueTimestamp(dateOrTimestamp: string): string {
-  return /^\d{4}-\d{2}-\d{2}$/.test(dateOrTimestamp)
-    ? `${dateOrTimestamp}T00:00:00.000Z`
-    : dateOrTimestamp;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(dateOrTimestamp)) {
+    if (!isValidDateKey(dateOrTimestamp)) {
+      throw new ValidationError(
+        `Invalid due date "${dateOrTimestamp}": not a real calendar date ` +
+          `(use YYYY-MM-DD with month 1-12 and a day that exists in that month).`,
+      );
+    }
+    return `${dateOrTimestamp}T00:00:00.000Z`;
+  }
+  return dateOrTimestamp;
 }
 
 function pickStatus(raw: Record<string, unknown>): SlimTask["status"] {

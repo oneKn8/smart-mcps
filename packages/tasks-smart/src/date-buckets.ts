@@ -52,3 +52,27 @@ export function addDaysToDateKey(dateKey: string, days: number): string {
 export function dateKeyToUtcMidnight(dateKey: string): string {
   return `${dateKey}T00:00:00.000Z`;
 }
+
+/**
+ * True only when `value` is a well-formed AND real `YYYY-MM-DD` calendar date:
+ * correct shape, month 1-12, and a day that actually exists in that month.
+ * `2026-13-45`, `2026-02-30`, and `2026-02-29` (non-leap) are all rejected.
+ *
+ * Implemented by round-tripping through UTC date math: a real date survives the
+ * `Date.UTC` normalization unchanged, while an out-of-range month/day overflows
+ * into a neighbouring month and fails the equality check.
+ */
+export function isValidDateKey(value: string): boolean {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!m) return false;
+  const year = Number(m[1]);
+  const month = Number(m[2]);
+  const day = Number(m[3]);
+  if (month < 1 || month > 12 || day < 1 || day > 31) return false;
+  const d = new Date(Date.UTC(year, month - 1, day));
+  return (
+    d.getUTCFullYear() === year &&
+    d.getUTCMonth() === month - 1 &&
+    d.getUTCDate() === day
+  );
+}

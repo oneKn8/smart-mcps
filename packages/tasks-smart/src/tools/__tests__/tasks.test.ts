@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { ConfirmRequiredError } from "smart-mcp-core";
+import { ConfirmRequiredError, ValidationError } from "smart-mcp-core";
 import {
   listTasksTool,
   getTaskTool,
@@ -119,6 +119,17 @@ describe("createTaskTool", () => {
       body: { title: "Just a title" },
     });
   });
+
+  it("rejects a well-formed but impossible due date before any API call", async () => {
+    const insertTask = vi.fn();
+    await expect(
+      createTaskTool.handler(
+        { task_list_id: "l1", title: "Buy milk", due: "2026-13-45" },
+        ctxWith({ insertTask }),
+      ),
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(insertTask).not.toHaveBeenCalled();
+  });
 });
 
 describe("updateTaskTool", () => {
@@ -133,6 +144,17 @@ describe("updateTaskTool", () => {
       task: "t1",
       body: { title: "New", due: "2026-07-04T00:00:00.000Z" },
     });
+  });
+
+  it("rejects a well-formed but impossible due date before any API call", async () => {
+    const patchTask = vi.fn();
+    await expect(
+      updateTaskTool.handler(
+        { task_list_id: "l1", task_id: "t1", due: "2026-02-30" },
+        ctxWith({ patchTask }),
+      ),
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(patchTask).not.toHaveBeenCalled();
   });
 });
 

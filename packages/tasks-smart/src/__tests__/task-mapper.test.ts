@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { ValidationError } from "smart-mcp-core";
 import {
   mapTask,
   dueDateOnly,
@@ -117,5 +118,22 @@ describe("toDueTimestamp", () => {
     expect(toDueTimestamp("2026-06-30T09:00:00.000Z")).toBe(
       "2026-06-30T09:00:00.000Z",
     );
+  });
+  it("accepts a real leap day", () => {
+    expect(toDueTimestamp("2024-02-29")).toBe("2024-02-29T00:00:00.000Z");
+  });
+  it("rejects a well-formed but impossible calendar date", () => {
+    // Right shape, wrong reality: bad month, bad day, or a non-existent
+    // day-of-month must throw locally rather than 400 opaquely at the API.
+    for (const bad of [
+      "2026-13-45",
+      "2026-00-10",
+      "2026-02-30",
+      "2026-04-31",
+      "2026-01-32",
+      "2026-02-29",
+    ]) {
+      expect(() => toDueTimestamp(bad)).toThrow(ValidationError);
+    }
   });
 });

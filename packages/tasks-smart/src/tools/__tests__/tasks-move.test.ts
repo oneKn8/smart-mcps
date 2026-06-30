@@ -57,7 +57,14 @@ describe("moveTaskTool — happy paths", () => {
 });
 
 describe("moveTaskTool — documented-impossible moves are rejected", () => {
-  it("rejects moving a recurring task across lists, without calling move", async () => {
+  // SYNTHETIC SHAPE — NOT the live API. The public Google `Task` schema does
+  // NOT expose `recurrence` / `recurringTaskId`, so a real recurring task does
+  // not carry this field and the pre-check below would NOT fire against it (see
+  // the honest "best-effort pre-check is bypassed" test). This test injects an
+  // off-schema `recurrence` array purely to exercise the rejection BRANCH; it
+  // does not imply the pre-check catches real recurring tasks. The API's own
+  // 400 is the real backstop for those.
+  it("rejects a cross-list move when the (synthetic) recurrence field is visible", async () => {
     const getTask = vi
       .fn()
       .mockResolvedValue({ id: "t1", recurrence: ["RRULE:FREQ=DAILY"] });
@@ -69,6 +76,26 @@ describe("moveTaskTool — documented-impossible moves are rejected", () => {
       ),
     ).rejects.toBeInstanceOf(ValidationError);
     expect(moveTask).not.toHaveBeenCalled();
+  });
+
+  it("best-effort pre-check is bypassed when recurrence is invisible (API 400 is the backstop)", async () => {
+    // The realistic production case: a recurring task whose recurrence is NOT
+    // exposed by the public schema. The local pre-check cannot see it, so the
+    // move IS attempted and the API 400 (not this code) is what rejects it.
+    // This documents the real coverage so the suite implies no false confidence.
+    const getTask = vi
+      .fn()
+      .mockResolvedValue({ id: "t1", title: "daily standup" });
+    const moveTask = vi.fn().mockResolvedValue({ id: "t1" });
+    await moveTaskTool.handler(
+      { task_list_id: "l1", task_id: "t1", destination_task_list_id: "l2" },
+      ctxWith({ getTask, moveTask }),
+    );
+    expect(moveTask).toHaveBeenCalledWith({
+      tasklist: "l1",
+      task: "t1",
+      destinationTasklist: "l2",
+    });
   });
 
   it("rejects nesting an assigned task as a subtask", async () => {
