@@ -15,7 +15,7 @@ Branch: `phase-7-google-trio-flow` (off `main`). No push until user approves.
 - [x] Implement tasks-smart (16 tools, 92 tests) — verified green + date-bucket inspected, committed
 - [x] Implement docs-smart (18 tools, 125 tests) — verified green + 3-phase renderer inspected, committed
 - [x] Implement apps-script-smart (17 tools, 86 tests) — verified green + run_function gating/error-parse inspected, committed
-- [~] Implement flow-smart (TDD, ~6 tools) — after the three wrappers (dispatched)
+- [x] Implement flow-smart (6 tools, 50 tests) — verified green + error-prop/watcher inspected, committed
 - [ ] Adversarial cross-verify each package + lead inspects critical real code
 - [ ] Full monorepo `npm test` + `typecheck` + every `smoke` green
 - [ ] Register via install-clients.sh + clean atomic commit history + memory + handoff
@@ -45,3 +45,8 @@ production terms. `scripts.run` is static-verified only.
   f before t). All other packages keep `tsc -p`.
 - `EmailClient` constructor is `(home?: string)` (multi-account), unlike the four
   `(account, opts)` Google clients. flow-smart's buildContext handles both shapes.
+- docs-smart renderer extracted to `src/render.ts` + `./render` subpath export
+  (`renderMarkdownToNewDoc`) so flow-smart reuses it; docs-smart still 125 green.
+- flow-smart implementer STALLED mid-stream (API error) after building helpers
+  (extract.ts/flow-error.ts/time.ts) but before writing the 6 tools. Resumed the
+  same agent from transcript to finish. docs-smart extraction confirmed green.

@@ -21,6 +21,12 @@ export interface FlowContext {
   appsScript: AppsScriptClient;
   calendar: CalendarClient;
   email: EmailClient;
+  /**
+   * The resolved bound account. The four Google clients are constructed
+   * against it; `EmailClient` is multi-account and resolves the account
+   * per-call, so the email flow tools pass this value explicitly.
+   */
+  account: string;
 }
 
 const DEFAULT_IDENTITY = "your-account";
@@ -51,5 +57,6 @@ export function buildContext(home?: string): FlowContext {
     appsScript: new AppsScriptClient(account, googleOpts),
     calendar: new CalendarClient(account, googleOpts),
     email: home === undefined ? new EmailClient() : new EmailClient(home),
+    account,
   };
 }

@@ -1,0 +1,180 @@
+// Pure date/time-zone math for the flow doc tools. No API, HTTP, or storage —
+// just glue that turns calendar-date keys + an IANA tz into the RFC 3339
+// window bounds the CalendarClient expects, and back. Built on
+// `Intl.DateTimeFormat.formatToParts` (Node 22 ships full ICU), so every IANA
+// zone resolves without a third-party tz library.
+//
+// This mirrors the proven approach in calendar-smart's `time-zone.ts`; it is
+// re-derived here (not imported) because calendar-smart only exposes its
+// CLIENT over the `./client` subpath, not its internal helpers.
+
+const DATE_KEY_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+function pad(n: number, width = 2): string {
+  return String(n).padStart(width, "0");
+}
+
+type WallParts = {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
+  second: number;
+};
+
+/** Resolve the wall-clock components of `instant` as observed in `tz`. */
+function partsInTz(instant: Date, tz: string): WallParts {
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    hourCycle: "h23",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+  const lookup: Record<string, string> = {};
+  for (const p of fmt.formatToParts(instant)) {
+    if (p.type !== "literal") lookup[p.type] = p.value;
+  }
+  return {
+    year: Number(lookup.year),
+    month: Number(lookup.month),
+    day: Number(lookup.day),
+    hour: Number(lookup.hour),
+    minute: Number(lookup.minute),
+    second: Number(lookup.second),
+  };
+}
+
+/**
+ * The UTC `Date` corresponding to wall-clock `Y-M-D H:M:S` in `tz`, DST-correct
+ * by inverting the observed offset on a candidate instant (one iteration is
+ * exact for every modern IANA zone — offsets are quarter-hour granular).
+ */
+function zonedToUtc(
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+  second: number,
+  tz: string,
+): Date {
+  const naiveUtcMs = Date.UTC(year, month - 1, day, hour, minute, second);
+  const observed = partsInTz(new Date(naiveUtcMs), tz);
+  const observedUtcMs = Date.UTC(
+    observed.year,
+    observed.month - 1,
+    observed.day,
+    observed.hour,
+    observed.minute,
+    observed.second,
+  );
+  return new Date(naiveUtcMs - (observedUtcMs - naiveUtcMs));
+}
+
+/** Format a `Date` as RFC 3339 with the tz's offset suffix at that instant. */
+function formatIso(date: Date, tz: string): string {
+  const p = partsInTz(date, tz);
+  const observedUtcMs = Date.UTC(
+    p.year,
+    p.month - 1,
+    p.day,
+    p.hour,
+    p.minute,
+    p.second,
+  );
+  const offsetMinutes = Math.round((observedUtcMs - date.getTime()) / 60_000);
+  const sign = offsetMinutes >= 0 ? "+" : "-";
+  const abs = Math.abs(offsetMinutes);
+  return (
+    `${pad(p.year, 4)}-${pad(p.month)}-${pad(p.day)}` +
+    `T${pad(p.hour)}:${pad(p.minute)}:${pad(p.second)}` +
+    `${sign}${pad(Math.floor(abs / 60))}:${pad(abs % 60)}`
+  );
+}
+
+function parseDateKey(dateKey: string): {
+  year: number;
+  month: number;
+  day: number;
+} {
+  const m = DATE_KEY_RE.exec(dateKey);
+  if (!m) throw new Error(`time: expected YYYY-MM-DD, got "${dateKey}"`);
+  return { year: Number(m[1]), month: Number(m[2]), day: Number(m[3]) };
+}
+
+/** "Today" (or the day of `ref`) in `tz` as a `YYYY-MM-DD` key. */
+export function dateKeyInTz(tz: string, ref: Date = new Date()): string {
+  const p = partsInTz(ref, tz);
+  return `${pad(p.year, 4)}-${pad(p.month)}-${pad(p.day)}`;
+}
+
+/** Add `days` (may be negative) to a date key via UTC calendar arithmetic. */
+export function addDays(dateKey: string, days: number): string {
+  const { year, month, day } = parseDateKey(dateKey);
+  const d = new Date(Date.UTC(year, month - 1, day + days));
+  return `${pad(d.getUTCFullYear(), 4)}-${pad(d.getUTCMonth() + 1)}-${pad(
+    d.getUTCDate(),
+  )}`;
+}
+
+/**
+ * Monday-based week containing `dateKey`. `start` is that Monday, `endInclusive`
+ * the Sunday, `endExclusive` the following Monday (the exclusive upper bound a
+ * calendar `timeMax` wants).
+ */
+export function mondayWeek(dateKey: string): {
+  start: string;
+  endInclusive: string;
+  endExclusive: string;
+} {
+  const { year, month, day } = parseDateKey(dateKey);
+  const anchor = new Date(Date.UTC(year, month - 1, day));
+  // JS Sunday=0..Saturday=6; shift to Monday=0..Sunday=6.
+  const dow = (anchor.getUTCDay() + 6) % 7;
+  const start = addDays(dateKey, -dow);
+  return {
+    start,
+    endInclusive: addDays(start, 6),
+    endExclusive: addDays(start, 7),
+  };
+}
+
+/** RFC 3339 instant of local midnight (00:00 in `tz`) on `dateKey`. */
+export function tzMidnightIso(dateKey: string, tz: string): string {
+  const { year, month, day } = parseDateKey(dateKey);
+  return formatIso(zonedToUtc(year, month, day, 0, 0, 0, tz), tz);
+}
+
+/** RFC 3339 instant of local wall-clock `hour:minute` in `tz` on `dateKey`. */
+export function tzWallClockIso(
+  dateKey: string,
+  hour: number,
+  minute: number,
+  tz: string,
+): string {
+  const { year, month, day } = parseDateKey(dateKey);
+  return formatIso(zonedToUtc(year, month, day, hour, minute, 0, tz), tz);
+}
+
+/** Add `minutes` to an RFC 3339 instant, re-formatted in `tz`. */
+export function addMinutesIso(iso: string, minutes: number, tz: string): string {
+  const base = new Date(iso);
+  return formatIso(new Date(base.getTime() + minutes * 60_000), tz);
+}
+
+/** Parse `"HH:MM"` into `{ hour, minute }`; throws on a malformed value. */
+export function parseClock(hhmm: string): { hour: number; minute: number } {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(hhmm.trim());
+  if (!m) throw new Error(`time: expected HH:MM, got "${hhmm}"`);
+  const hour = Number(m[1]);
+  const minute = Number(m[2]);
+  if (hour > 23 || minute > 59) {
+    throw new Error(`time: "${hhmm}" is not a valid 24h clock time`);
+  }
+  return { hour, minute };
+}
