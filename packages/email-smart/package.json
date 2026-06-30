@@ -5,6 +5,10 @@
   "description": "Smart MCP for Gmail send + inbox read + reversible bulk modify, multi-account, wraps ~/.santo-agent OAuth token jar.",
   "type": "module",
   "main": "dist/server.js",
+  "exports": {
+    ".": { "types": "./dist/server.d.ts", "import": "./dist/server.js" },
+    "./client": { "types": "./dist/client.d.ts", "import": "./dist/client.js" }
+  },
   "bin": { "email-smart": "dist/server.js" },
   "files": ["dist"],
   "scripts": {

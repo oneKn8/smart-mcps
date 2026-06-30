@@ -1,8 +1,8 @@
 {
-  "name": "calendar-smart",
+  "name": "tasks-smart",
   "version": "0.1.0",
   "private": true,
-  "description": "Smart MCP for Google Calendar (read + write), single-account, wraps ~/.santo-agent OAuth token jar.",
+  "description": "Smart MCP for Google Tasks (read + write), single-account, wraps ~/.santo-agent OAuth token jar.",
   "type": "module",
   "main": "dist/server.js",
   "exports": {
@@ -10,12 +10,12 @@
     "./client": { "types": "./dist/client.d.ts", "import": "./dist/client.js" }
   },
   "bin": {
-    "calendar-smart": "dist/server.js",
-    "calendar-smart-auth": "dist/bin/calendar-smart-auth.js"
+    "tasks-smart": "dist/server.js",
+    "tasks-smart-auth": "dist/bin/tasks-smart-auth.js"
   },
   "files": ["dist"],
   "scripts": {
-    "build": "tsc -p tsconfig.json && chmod +x dist/server.js dist/bin/calendar-smart-auth.js",
+    "build": "tsc -p tsconfig.json && chmod +x dist/server.js dist/bin/tasks-smart-auth.js",
     "test": "vitest run --passWithNoTests",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
