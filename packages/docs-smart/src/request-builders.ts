@@ -416,6 +416,47 @@ export function tableStartIndices(doc: unknown): number[] {
   return out;
 }
 
+/**
+ * Content `[start, end)` span of every body table cell that exposes one. A
+ * cell's final newline lives at `[end - 1, end)` and (like the body's) cannot
+ * be deleted. `start` is the cell's first content element start; `end` is its
+ * last content element end. Cells lacking a numeric content `endIndex` are
+ * omitted so guards built on this stay conservative (no false positives on
+ * partial/odd documents.get payloads).
+ *
+ * Scope: top-level body tables only. Header/footer/footnote segments live in
+ * separate `document.headers/footers/footnotes` maps (NOT in `body.content`),
+ * so their final-newline protection still relies on the upstream API 400 — a
+ * loud, non-corrupting failure.
+ */
+export function tableCellContentRanges(
+  doc: unknown,
+): Array<{ start: number; end: number }> {
+  const out: Array<{ start: number; end: number }> = [];
+  for (const el of bodyContent(doc)) {
+    const rows = el.table?.tableRows ?? [];
+    for (const tr of rows) {
+      for (const cell of tr.tableCells ?? []) {
+        const content = cell.content ?? [];
+        const first = content[0];
+        const last = content[content.length - 1];
+        const start =
+          first && typeof first.startIndex === "number"
+            ? first.startIndex
+            : typeof cell.startIndex === "number"
+              ? cell.startIndex + 1
+              : undefined;
+        const end =
+          last && typeof last.endIndex === "number" ? last.endIndex : undefined;
+        if (start !== undefined && end !== undefined && end > start) {
+          out.push({ start, end });
+        }
+      }
+    }
+  }
+  return out;
+}
+
 export function assertValidInsertIndex(index: number): void {
   if (!Number.isInteger(index) || index < BODY_START_INDEX) {
     throw new ValidationError(
@@ -440,9 +481,14 @@ export function assertNotTableStartIndex(doc: unknown, index: number): void {
 }
 
 /**
- * Guard a delete range against the two failure modes: an out-of-range/empty
- * range, and deleting the body's final newline (which Google forbids for a
+ * Guard a delete range against the failure modes Google forbids: an
+ * out-of-range/empty range, deleting the body's final newline, and deleting a
+ * table cell's final newline (the API 400s on a segment's last newline for a
  * Body/Header/Footer/Footnote/TableCell).
+ *
+ * Coverage: body + top-level table cells (both reachable from `body.content`).
+ * Header/footer/footnote segments live in separate document maps, so their
+ * final-newline protection still relies on the upstream 400 — loud, not silent.
  */
 export function assertDeletableRange(
   doc: unknown,
@@ -467,6 +513,22 @@ export function assertDeletableRange(
       `Cannot delete the document's final newline (range endIndex ${endIndex} ` +
         `reaches body end ${end}); the last deletable index is ${end - 1}.`,
     );
+  }
+  // A delete that ORIGINATES within a table cell and reaches that cell's end
+  // would delete the cell's final newline. (A range that merely starts before
+  // the cell is a cross-structure delete the API rejects separately.)
+  for (const cell of tableCellContentRanges(doc)) {
+    if (
+      startIndex >= cell.start &&
+      startIndex < cell.end &&
+      endIndex >= cell.end
+    ) {
+      throw new ValidationError(
+        `Cannot delete a table cell's final newline (range endIndex ${endIndex} ` +
+          `reaches cell end ${cell.end}); the last deletable index in that cell ` +
+          `is ${cell.end - 1}.`,
+      );
+    }
   }
 }
 

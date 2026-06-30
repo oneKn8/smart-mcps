@@ -314,6 +314,82 @@ describe("structural guards", () => {
   });
 });
 
+// ===========================================================================
+// FINDING 4 (LOW): assertDeletableRange must also protect the final newline of
+// a TABLE CELL, not only the body's. A cell's last paragraph newline cannot be
+// deleted (the API 400s). The cell's content range is available in the body.
+// ===========================================================================
+
+// A doc with a table cell whose content paragraph spans [6,12): the cell's
+// final newline lives at [11,12). The body end (31) is well past it, so the
+// body-end guard does NOT fire for ranges that end at the cell's newline.
+const DOC_WITH_CELL_NEWLINE = {
+  body: {
+    content: [
+      { startIndex: 0, endIndex: 1, sectionBreak: {} },
+      {
+        startIndex: 1,
+        endIndex: 4,
+        paragraph: { elements: [{ textRun: { content: "Hi\n" } }] },
+      },
+      {
+        startIndex: 4,
+        endIndex: 30,
+        table: {
+          tableRows: [
+            {
+              tableCells: [
+                {
+                  startIndex: 5,
+                  content: [
+                    {
+                      startIndex: 6,
+                      endIndex: 12,
+                      paragraph: { elements: [{ textRun: { content: "abc\n" } }] },
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      },
+      {
+        startIndex: 30,
+        endIndex: 31,
+        paragraph: { elements: [{ textRun: { content: "\n" } }] },
+      },
+    ],
+  },
+};
+
+describe("assertDeletableRange — table cell final newline (Finding 4)", () => {
+  it("rejects deleting a table cell's final newline", () => {
+    // cell content is [6,12); the final newline is [11,12). endIndex 12 deletes it.
+    expect(() => assertDeletableRange(DOC_WITH_CELL_NEWLINE, 6, 12)).toThrow(
+      ValidationError,
+    );
+    // Deleting only part of the cell text but reaching its newline still throws.
+    expect(() => assertDeletableRange(DOC_WITH_CELL_NEWLINE, 7, 12)).toThrow(
+      ValidationError,
+    );
+  });
+
+  it("allows deleting cell text that stops before the cell's final newline", () => {
+    expect(() => assertDeletableRange(DOC_WITH_CELL_NEWLINE, 6, 11)).not.toThrow();
+  });
+
+  it("still allows ordinary body deletes that never touch a cell newline", () => {
+    expect(() => assertDeletableRange(DOC_WITH_CELL_NEWLINE, 1, 3)).not.toThrow();
+  });
+
+  it("is conservative when cell content lacks an endIndex (no false positives)", () => {
+    // DOC_WITH_TABLE's cells carry only startIndex; the cell guard must skip
+    // them rather than block a legitimate in-table delete.
+    expect(() => assertDeletableRange(DOC_WITH_TABLE, 8, 12)).not.toThrow();
+  });
+});
+
 describe("tableCellSlots", () => {
   it("returns row-major cell insertion indexes from a real table", () => {
     const { rows, columns, slots } = tableCellSlots(DOC_WITH_TABLE, 0);

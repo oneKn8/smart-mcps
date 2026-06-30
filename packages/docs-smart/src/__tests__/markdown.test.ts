@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  assertDistinctTableInsertIndices,
   buildMarkdownPlan,
   parseInline,
   parseMarkdown,
@@ -7,6 +8,7 @@ import {
   type Block,
 } from "../markdown.js";
 import { BODY_START_INDEX } from "../request-builders.js";
+import { ValidationError } from "smart-mcp-core";
 import { readDocumentText } from "../doc-mapper.js";
 
 // ===========================================================================
@@ -306,6 +308,140 @@ describe("buildMarkdownPlan — tables", () => {
     expect(tablesWriteBackwards(tables).map((t) => t.insertIndex)).toEqual([
       30, 12, 5,
     ]);
+  });
+});
+
+// ===========================================================================
+// FINDING 1 (CRITICAL): two adjacent tables MUST NOT collide on insertIndex.
+// Without a separating paragraph, a table block emits no flow text, so the
+// cursor does not advance; two tables separated only by a blank line would be
+// recorded at the SAME insertIndex. Phase B would then insert both at one point
+// and Phase C's positional table<->descriptor match would mis-place cells.
+// ===========================================================================
+
+describe("buildMarkdownPlan — adjacent tables (collision regression)", () => {
+  // The exact reproduction from the review finding: two tables, blank line
+  // between, no surrounding flow text.
+  const TWO_TABLES = [
+    "| a | b | c |",
+    "| - | - | - |",
+    "| d | e | f |",
+    "",
+    "| x |",
+    "| - |",
+    "| y |",
+  ].join("\n");
+
+  it("records TWO table descriptors", () => {
+    const plan = buildMarkdownPlan(parseMarkdown(TWO_TABLES));
+    expect(plan.tables).toHaveLength(2);
+  });
+
+  it("(a) gives each table a strictly-ascending DISTINCT insertIndex", () => {
+    const plan = buildMarkdownPlan(parseMarkdown(TWO_TABLES));
+    const idxs = plan.tables.map((t) => t.insertIndex);
+    expect(new Set(idxs).size).toBe(idxs.length); // distinct
+    expect(idxs[1]).toBeGreaterThan(idxs[0] as number); // ascending
+    // First table anchors at the body start; a single separating paragraph
+    // ("\n") advances the cursor by one before the second table is recorded.
+    expect(idxs).toEqual([BODY_START_INDEX, BODY_START_INDEX + 1]);
+  });
+
+  it("inserts a separating empty paragraph into the flow between the tables", () => {
+    const plan = buildMarkdownPlan(parseMarkdown(TWO_TABLES));
+    expect(plan.flowText).toBe("\n");
+  });
+
+  it("(b) Phase B insert order (tablesWriteBackwards) is strictly DESCENDING and at distinct indices", () => {
+    const plan = buildMarkdownPlan(parseMarkdown(TWO_TABLES));
+    const order = tablesWriteBackwards(plan.tables).map((t) => t.insertIndex);
+    expect(order).toEqual([BODY_START_INDEX + 1, BODY_START_INDEX]);
+    // strictly descending => no two equal
+    for (let i = 1; i < order.length; i += 1) {
+      expect(order[i] as number).toBeLessThan(order[i - 1] as number);
+    }
+  });
+
+  it("scales to THREE adjacent tables with distinct ascending anchors [1,2,3]", () => {
+    const THREE = [
+      "| a |",
+      "| - |",
+      "| 1 |",
+      "",
+      "| b |",
+      "| - |",
+      "| 2 |",
+      "",
+      "| c |",
+      "| - |",
+      "| 3 |",
+    ].join("\n");
+    const plan = buildMarkdownPlan(parseMarkdown(THREE));
+    expect(plan.tables.map((t) => t.insertIndex)).toEqual([
+      BODY_START_INDEX,
+      BODY_START_INDEX + 1,
+      BODY_START_INDEX + 2,
+    ]);
+    expect(plan.flowText).toBe("\n\n"); // one separator per adjacency
+    // Each descriptor keeps its OWN source cells (no cross-contamination).
+    expect(plan.tables[0]?.cells).toEqual([["a"], ["1"]]);
+    expect(plan.tables[1]?.cells).toEqual([["b"], ["2"]]);
+    expect(plan.tables[2]?.cells).toEqual([["c"], ["3"]]);
+  });
+
+  it("a table separated from the next by REAL text keeps distinct anchors without an extra separator", () => {
+    const md = [
+      "| a |",
+      "| - |",
+      "| 1 |",
+      "",
+      "Some prose between the tables.",
+      "",
+      "| b |",
+      "| - |",
+      "| 2 |",
+    ].join("\n");
+    const plan = buildMarkdownPlan(parseMarkdown(md));
+    const idxs = plan.tables.map((t) => t.insertIndex);
+    expect(new Set(idxs).size).toBe(2);
+    expect(plan.flowText).toBe("Some prose between the tables.\n");
+  });
+
+  it("a lone table is unaffected (no spurious separator)", () => {
+    const plan = buildMarkdownPlan(parseMarkdown("| A | B |\n| - | - |\n| 1 | 2 |"));
+    expect(plan.flowText).toBe("");
+    expect(plan.tables).toHaveLength(1);
+    expect(plan.tables[0]?.insertIndex).toBe(BODY_START_INDEX);
+  });
+});
+
+describe("assertDistinctTableInsertIndices — loud defensive guard", () => {
+  it("passes a distinct ascending set", () => {
+    expect(() =>
+      assertDistinctTableInsertIndices([
+        { insertIndex: 1 },
+        { insertIndex: 2 },
+        { insertIndex: 9 },
+      ]),
+    ).not.toThrow();
+  });
+
+  it("throws on a duplicated insertIndex (the corruption invariant)", () => {
+    expect(() =>
+      assertDistinctTableInsertIndices([
+        { insertIndex: 5 },
+        { insertIndex: 5 },
+      ]),
+    ).toThrow(ValidationError);
+  });
+
+  it("tablesWriteBackwards throws LOUD on colliding indices instead of silently corrupting", () => {
+    expect(() =>
+      tablesWriteBackwards([
+        { insertIndex: 7, rows: 1, columns: 1, cells: [["a"]] },
+        { insertIndex: 7, rows: 1, columns: 1, cells: [["b"]] },
+      ]),
+    ).toThrow(ValidationError);
   });
 });
 

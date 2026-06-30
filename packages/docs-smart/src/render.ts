@@ -1,6 +1,7 @@
 import type { DocsClient } from "./client.js";
 import { docUrl } from "./tools/documents.js";
 import {
+  assertDistinctTableInsertIndices,
   buildMarkdownPlan,
   parseMarkdown,
   tablesWriteBackwards,
@@ -45,6 +46,10 @@ export function buildAllTableFillRequests(
   doc: unknown,
   tablesAsc: TableDescriptor[],
 ): DocsRequest[] {
+  // Loud guard: the positional `tablesAsc[k]` -> k-th physical table match only
+  // holds when every descriptor has a distinct anchor. A colliding plan throws
+  // here instead of silently dropping or cross-contaminating cells.
+  assertDistinctTableInsertIndices(tablesAsc);
   const fills: { index: number; text: string }[] = [];
   tablesAsc.forEach((table, ordinal) => {
     const { slots } = tableCellSlots(doc, ordinal);
@@ -100,8 +105,14 @@ export async function renderMarkdownToNewDoc(
         }),
       ),
     });
+    // Count tables actually INSERTED (Phase B), independent of whether any cell
+    // carried text. An all-empty-cell table still inserts a grid, so reporting
+    // 0 here under-reports the work done.
+    tablesFilled = plan.tables.length;
 
-    // Phase C: read real cell indexes, then fill write-backwards.
+    // Phase C: read real cell indexes, then fill write-backwards. A table whose
+    // cells are all empty produces zero fills; we skip the empty batch but the
+    // grid is already inserted and counted above.
     const doc = await client.getDocument({ documentId });
     const tablesAsc = [...plan.tables].sort(
       (a, b) => a.insertIndex - b.insertIndex,
@@ -109,7 +120,6 @@ export async function renderMarkdownToNewDoc(
     const fillRequests = buildAllTableFillRequests(doc, tablesAsc);
     if (fillRequests.length > 0) {
       await client.batchUpdate({ documentId, requests: fillRequests });
-      tablesFilled = plan.tables.length;
     }
   }
 

@@ -1,3 +1,4 @@
+import { ValidationError } from "smart-mcp-core";
 import {
   BODY_START_INDEX,
   ORDERED_BULLET_PRESET,
@@ -263,6 +264,12 @@ export function buildMarkdownPlan(blocks: Block[]): MarkdownPlan {
   let flow = "";
   const styleRequests: DocsRequest[] = [];
   const tables: TableDescriptor[] = [];
+  // The flow index of the most recently recorded table. A table contributes no
+  // flow text, so if the very next block is ALSO a table the cursor will not
+  // have advanced and the two tables would collide on one insertIndex (see the
+  // table branch below). Seed with a sentinel that can never equal a real
+  // BODY_START_INDEX-based cursor.
+  let lastTableInsertIndex = Number.NEGATIVE_INFINITY;
 
   const emit = (s: string): void => {
     flow += s;
@@ -343,6 +350,17 @@ export function buildMarkdownPlan(blocks: Block[]): MarkdownPlan {
     }
 
     if (block.type === "table") {
+      // CRITICAL anti-corruption step. If the previous block was also a table
+      // the cursor has not advanced since we recorded its insertIndex (a table
+      // emits no flow text), so this table would be recorded at the SAME
+      // insertIndex. Phase B would then insert both grids at one point and
+      // Phase C's positional table<->descriptor match would mis-place or drop
+      // cells. Emit a separating empty paragraph so this table gets a strictly
+      // greater, DISTINCT anchor. Google Docs also REQUIRES an empty paragraph
+      // between two adjacent tables, so this is also more correct output.
+      if (cursor === lastTableInsertIndex) {
+        emit("\n");
+      }
       const rows = block.rows.length;
       const columns = block.rows.reduce((m, r) => Math.max(m, r.length), 0);
       // Normalize each row to `columns` cells.
@@ -354,7 +372,9 @@ export function buildMarkdownPlan(blocks: Block[]): MarkdownPlan {
       // Table is inserted later at the current flow boundary (a paragraph
       // start). It contributes no flow text, so surrounding blocks keep their
       // correct order once the table is spliced in at `insertIndex`.
-      tables.push({ insertIndex: cursor, rows, columns, cells });
+      const insertIndex = cursor;
+      tables.push({ insertIndex, rows, columns, cells });
+      lastTableInsertIndex = insertIndex;
       continue;
     }
   }
@@ -371,13 +391,41 @@ export function buildMarkdownPlan(blocks: Block[]): MarkdownPlan {
 }
 
 /**
+ * Defensive corruption guard: every table descriptor MUST carry a distinct
+ * `insertIndex`. Two tables sharing an anchor is the flagship's worst silent
+ * failure mode (Phase B inserts both grids at one point; Phase C's positional
+ * table<->descriptor match drops or cross-contaminates cells). `buildMarkdownPlan`
+ * guarantees distinctness by separating adjacent tables, but any future
+ * regression must fail LOUD here instead of corrupting the rendered document.
+ * Order-agnostic (callers may pass source order OR ascending) — distinctness is
+ * the invariant, not sortedness.
+ */
+export function assertDistinctTableInsertIndices(
+  tables: ReadonlyArray<{ insertIndex: number }>,
+): void {
+  const seen = new Set<number>();
+  for (const table of tables) {
+    if (seen.has(table.insertIndex)) {
+      throw new ValidationError(
+        `Two tables share insertIndex ${table.insertIndex}; each table needs a ` +
+          `distinct flow anchor or table inserts/fills will mis-place cells. ` +
+          `Adjacent tables must be separated by an empty paragraph.`,
+      );
+    }
+    seen.add(table.insertIndex);
+  }
+}
+
+/**
  * Order empty-table inserts "write backwards": highest flow index first, so
  * each insert leaves the lower recorded indexes valid. Returns descriptors,
  * not requests, so the tool can build `insertTableRequest`s with the descriptor
- * geometry.
+ * geometry. Asserts distinct anchors first so a colliding plan throws here
+ * rather than silently corrupting the document downstream.
  */
 export function tablesWriteBackwards(
   tables: TableDescriptor[],
 ): TableDescriptor[] {
+  assertDistinctTableInsertIndices(tables);
   return [...tables].sort((a, b) => b.insertIndex - a.insertIndex);
 }

@@ -15,6 +15,18 @@ const batchUpdateInputSchema = z.object({
 type BatchUpdateInput = z.infer<typeof batchUpdateInputSchema>;
 type BatchUpdateOutput = { document_id: string; replies: unknown[] };
 
+/**
+ * Raw escape hatch: forwards `requests[]` to `documents.batchUpdate` verbatim.
+ *
+ * CAVEAT — guard bypass. Unlike the typed tools (`insert_text`, `delete_range`,
+ * ...) this path does NOT run the structural guards `assertNotTableStartIndex`
+ * (no inserting at a table's start index) or `assertDeletableRange` (no deleting
+ * a segment's final newline), nor does it manage index-shifting for you. A
+ * malformed batch surfaces as a loud upstream 400, not silent corruption, but
+ * the caller owns index-safety: insert-all-then-style, or write backwards.
+ * The tool description stays terse by budget; this caveat is documented here and
+ * in the package README instead.
+ */
 export const batchUpdateTool = defineTool<
   BatchUpdateInput,
   BatchUpdateOutput,

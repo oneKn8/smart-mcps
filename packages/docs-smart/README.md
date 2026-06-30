@@ -23,7 +23,7 @@ Personal Google Docs MCP — read + create + edit documents on a single account.
 | `insert_image` | `insertInlineImage` | public URI + optional size |
 | `insert_page_break` | `insertPageBreak` | |
 | `create_doc_from_markdown` | parser → batched requests | **flagship** — headings, bold/italic, nested bullets, tables |
-| `batch_update` | raw `documents.batchUpdate` | escape hatch: forwards `requests[]` verbatim |
+| `batch_update` | raw `documents.batchUpdate` | escape hatch: forwards `requests[]` verbatim (**bypasses guards** — see below) |
 
 ### Index-shifting (the one thing to get right)
 
@@ -39,8 +39,21 @@ path here uses one of the two safe strategies:
   table-insert + cell-fill phases).
 
 Two hard rules are enforced with clear errors: never insert at a table's start
-index, never delete a segment's final newline. Every `update*Style` request
-carries a `fields` mask built from exactly the attributes the caller set.
+index, never delete a segment's final newline (the body's, and any top-level
+table cell's). Every `update*Style` request carries a `fields` mask built from
+exactly the attributes the caller set.
+
+`create_doc_from_markdown` also separates two **adjacent** tables (tables with
+only a blank line between them) by inserting an empty paragraph, so each table
+gets a strictly-distinct, ascending flow anchor. Without it both tables would be
+recorded at the same `insertIndex` and the table-insert/cell-fill phases would
+mis-place or drop cells. Google Docs requires that separating paragraph anyway.
+
+> **`batch_update` bypasses the guards.** The raw escape hatch forwards your
+> `requests[]` verbatim: it does **not** run `assertNotTableStartIndex` /
+> `assertDeletableRange`, and does **not** manage index-shifting. You own
+> index-safety (insert-all-then-style, or write backwards). A bad batch is a
+> loud upstream 400, not silent corruption — but it is on you to avoid.
 
 > Note: the Docs API rate ceiling is 60 writes/min/user; `fetchJson`'s built-in 429 backoff covers it. The tools coalesce edits into single `batchUpdate` calls to stay under it.
 
