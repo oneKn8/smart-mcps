@@ -49,6 +49,76 @@ describe("parseInline", () => {
 });
 
 // ===========================================================================
+// Inline parser — CommonMark backslash escapes (injection hardening)
+//
+// A backslash before an ASCII PUNCTUATION char renders that char literally and
+// suppresses any formatting it would trigger, consuming the backslash. A
+// backslash before a non-punctuation char (or at end-of-string) stays literal.
+// This is what makes flow-smart's `mdInline` escaping effective at render time.
+// ===========================================================================
+
+describe("parseInline — backslash escapes (CommonMark)", () => {
+  it("escaped asterisks render literally and suppress italic", () => {
+    expect(parseInline("\\*not italic\\*")).toEqual([
+      { text: "*not italic*" },
+    ]);
+  });
+
+  it("escaped backticks render literally and suppress code", () => {
+    expect(parseInline("\\`not code\\`")).toEqual([{ text: "`not code`" }]);
+  });
+
+  it("escaped underscores render literally and suppress italic", () => {
+    expect(parseInline("\\_x\\_")).toEqual([{ text: "_x_" }]);
+  });
+
+  it("escaped hash renders literally", () => {
+    expect(parseInline("\\# x")).toEqual([{ text: "# x" }]);
+  });
+
+  it("escaped pipe renders literally", () => {
+    expect(parseInline("a \\| b")).toEqual([{ text: "a | b" }]);
+  });
+
+  it("escaped bracket renders literally", () => {
+    expect(parseInline("\\[link]")).toEqual([{ text: "[link]" }]);
+  });
+
+  it("escaped dash renders literally", () => {
+    expect(parseInline("\\- item")).toEqual([{ text: "- item" }]);
+  });
+
+  it("a double backslash collapses to one literal backslash", () => {
+    expect(parseInline("\\\\")).toEqual([{ text: "\\" }]);
+  });
+
+  it("backslash before a letter is preserved (e.g. a Windows path)", () => {
+    expect(parseInline("C:\\Users")).toEqual([{ text: "C:\\Users" }]);
+  });
+
+  it("backslash before a digit is preserved", () => {
+    expect(parseInline("100\\200")).toEqual([{ text: "100\\200" }]);
+  });
+
+  it("a trailing backslash is preserved", () => {
+    expect(parseInline("end\\")).toEqual([{ text: "end\\" }]);
+  });
+
+  it("mixed line: escaped markers stay literal, real markers still format", () => {
+    expect(parseInline("\\*not\\* but **yes**")).toEqual([
+      { text: "*not* but " },
+      { text: "yes", bold: true },
+    ]);
+  });
+
+  it("an escaped marker cannot close an emphasis run", () => {
+    expect(parseInline("*a \\* b*")).toEqual([
+      { text: "a * b", italic: true },
+    ]);
+  });
+});
+
+// ===========================================================================
 // Block parser
 // ===========================================================================
 
@@ -93,6 +163,20 @@ describe("parseMarkdown — blocks", () => {
         { level: 0, spans: [{ text: "second" }] },
       ],
     });
+  });
+
+  it("a leading escaped list marker renders as a literal paragraph, not a list", () => {
+    const blocks = parseMarkdown("\\- item");
+    expect(blocks).toEqual([
+      { type: "paragraph", spans: [{ text: "- item" }] },
+    ]);
+  });
+
+  it("a leading escaped heading marker renders as a literal paragraph, not a heading", () => {
+    const blocks = parseMarkdown("\\# Title");
+    expect(blocks).toEqual([
+      { type: "paragraph", spans: [{ text: "# Title" }] },
+    ]);
   });
 
   it("pipe table with header + rows", () => {

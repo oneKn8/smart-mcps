@@ -61,9 +61,63 @@ export type Block =
 // ===========================================================================
 
 /**
+ * The 32 ASCII punctuation characters (CommonMark's "ASCII punctuation" class):
+ * `!"#$%&'()*+,-./:;<=>?@[\]^_` plus `` ` `` `{|}~`. A backslash escape is only
+ * honored before one of these; every inline marker this parser recognizes
+ * (`* _ ` `` ` `` ` # |`) is a member, so escaping suppresses formatting.
+ */
+const ASCII_PUNCT_RE = /[\x21-\x2F\x3A-\x40\x5B-\x60\x7B-\x7E]/;
+
+/**
+ * CommonMark backslash rule: `pos` (the start of a candidate delimiter) counts
+ * as escaped iff an ODD number of backslashes immediately precede it. (`\*` is
+ * escaped; `\\*` is an escaped backslash followed by a live `*`.)
+ */
+function isBackslashEscaped(line: string, pos: number): boolean {
+  let backslashes = 0;
+  let j = pos - 1;
+  while (j >= 0 && line[j] === "\\") {
+    backslashes += 1;
+    j -= 1;
+  }
+  return backslashes % 2 === 1;
+}
+
+/**
+ * Resolve backslash escapes inside an already-delimited run's text: a backslash
+ * before ASCII punctuation is dropped and the punctuation kept literally; a
+ * backslash before anything else (or at end) stays literal. Keeps the run a
+ * single span (this parser does not recurse into nested markers).
+ */
+function unescapeInline(text: string): string {
+  let out = "";
+  let k = 0;
+  while (k < text.length) {
+    const ch = text[k] as string;
+    const next = text[k + 1];
+    if (ch === "\\" && next !== undefined && ASCII_PUNCT_RE.test(next)) {
+      out += next;
+      k += 2;
+    } else {
+      out += ch;
+      k += 1;
+    }
+  }
+  return out;
+}
+
+/**
  * Split a line into styled spans. Greedy left-to-right scan for the four inline
  * markers; unmatched markers fall through as literal text. Bold is matched
  * before italic so `**x**` is not mis-read as italic-empty-italic.
+ *
+ * Backslash escapes are CommonMark-correct: `\` before an ASCII punctuation
+ * char emits that char as plain text (consuming the backslash) and prevents it
+ * from acting as a formatting delimiter — an opener is consumed here in the
+ * scan, and a closer is skipped by `findClose`. `\` before a non-punctuation
+ * char or at end-of-string stays a literal backslash. This is the hardening
+ * that makes a caller's escaping (e.g. flow-smart's `mdInline`) actually inert
+ * the markers it neutralizes.
  */
 export function parseInline(line: string): InlineSpan[] {
   const spans: InlineSpan[] = [];
@@ -75,20 +129,41 @@ export function parseInline(line: string): InlineSpan[] {
       buf = "";
     }
   };
+  // Next occurrence of `marker` at or after `from` that is NOT backslash-escaped.
+  const findClose = (marker: string, from: number): number => {
+    let pos = line.indexOf(marker, from);
+    while (pos !== -1 && isBackslashEscaped(line, pos)) {
+      pos = line.indexOf(marker, pos + 1);
+    }
+    return pos;
+  };
   const takeDelimited = (
     marker: string,
     style: Omit<InlineSpan, "text">,
   ): boolean => {
-    const close = line.indexOf(marker, i + marker.length);
+    const close = findClose(marker, i + marker.length);
     if (close === -1) return false;
     const inner = line.slice(i + marker.length, close);
     if (inner.length === 0) return false;
     flush();
-    spans.push({ text: inner, ...style });
+    spans.push({ text: unescapeInline(inner), ...style });
     i = close + marker.length;
     return true;
   };
   while (i < line.length) {
+    // Backslash escape FIRST: consume an escaped marker before it can be read
+    // as an opener, so `\*` is literal text, not the start of an italic run.
+    if (line[i] === "\\") {
+      const next = line[i + 1];
+      if (next !== undefined && ASCII_PUNCT_RE.test(next)) {
+        buf += next;
+        i += 2;
+      } else {
+        buf += "\\";
+        i += 1;
+      }
+      continue;
+    }
     const two = line.slice(i, i + 2);
     if ((two === "**" || two === "__") && takeDelimited(two, { bold: true })) {
       continue;
