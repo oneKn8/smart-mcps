@@ -12,7 +12,7 @@ Branch: `phase-7-google-trio-flow` (off `main`). No push until user approves.
 - [x] Design spec written + committed
 - [x] Branch created, research + design committed (2 commits)
 - [x] Scaffold 4 packages + `./client` exports on calendar/email + install/build/typecheck green
-- [~] Implement tasks-smart (TDD, ~16 tools) — parallel (dispatched)
+- [x] Implement tasks-smart (16 tools, 92 tests) — verified green + date-bucket inspected, committed
 - [~] Implement docs-smart (TDD, ~18 tools) — parallel (dispatched)
 - [~] Implement apps-script-smart (TDD, ~17 tools) — parallel (dispatched)
 - [ ] Implement flow-smart (TDD, ~6 tools) — after the three wrappers
