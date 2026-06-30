@@ -367,6 +367,41 @@ describe("AppsScriptClient.runFunction — success path", () => {
   });
 });
 
+describe("AppsScriptClient.runFunction — incomplete/odd operation (no false success)", () => {
+  async function expectIncomplete(body: unknown): Promise<void> {
+    server.use(
+      http.post(`${API}/scripts/dep_1:run`, () =>
+        HttpResponse.json(body as Record<string, unknown>, { status: 200 }),
+      ),
+    );
+    try {
+      await client().runFunction({
+        id: "dep_1",
+        functionName: "f",
+        parameters: [],
+        devMode: false,
+      });
+      throw new Error("expected UpstreamError");
+    } catch (err) {
+      expect(err).toBeInstanceOf(UpstreamError);
+      // The raw operation body is carried in .detail for debugging.
+      expect((err as UpstreamError).detail).toEqual(body);
+    }
+  }
+
+  it("an empty operation `{}` (no done, no response) is NOT success", async () => {
+    await expectIncomplete({});
+  });
+
+  it("`{done:true}` with NO response object is NOT success", async () => {
+    await expectIncomplete({ done: true });
+  });
+
+  it("an in-progress operation (no `done` field) is NOT success", async () => {
+    await expectIncomplete({ metadata: { progress: 50 } });
+  });
+});
+
 describe("AppsScriptClient.runFunction — HTTP 200 LIES (script-side error)", () => {
   it("inspects body.error BEFORE body.response and throws UpstreamError with the script stack", async () => {
     server.use(

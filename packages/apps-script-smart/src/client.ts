@@ -594,17 +594,27 @@ export class AppsScriptClient {
       );
     }
 
+    // Require POSITIVE success confirmation: `done === true` AND a present
+    // `response` object. proto3 omits the default-false `done`, so an
+    // incomplete/odd operation (`{}`, `{done:true}`-no-response, an in-progress
+    // op) must NOT be mislabeled success — throw and carry the raw body.
     const operation = (op ?? {}) as {
       done?: unknown;
-      response?: { result?: unknown };
+      response?: unknown;
     };
-    if (operation.done === false) {
+    const response = operation.response;
+    if (
+      operation.done !== true ||
+      typeof response !== "object" ||
+      response === null
+    ) {
       throw new UpstreamError(
-        "scripts.run returned an incomplete operation (done=false); the execution did not finish.",
+        "scripts.run returned an incomplete or malformed operation " +
+          "(expected done=true with a response); the execution did not finish.",
         { detail: op },
       );
     }
-    return { done: true, result: operation.response?.result };
+    return { done: true, result: (response as { result?: unknown }).result };
   }
 }
 

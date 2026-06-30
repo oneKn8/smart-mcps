@@ -148,9 +148,13 @@ export const pushFileTool = defineTool<
       source: input.source,
     };
 
+    // Match on BOTH name AND type. Apps Script allows a `.gs` (SERVER_JS) and a
+    // `.html` (HTML) file sharing one base name; matching by name alone would
+    // overwrite the sibling of a different type and emit a duplicate (name,type)
+    // pair into the full-overwrite update_content.
     let replaced = false;
     const files: FileWritePayload[] = existing.map((f) => {
-      if (f.name === input.name) {
+      if (f.name === input.name && f.type === input.type) {
         replaced = true;
         return incoming;
       }

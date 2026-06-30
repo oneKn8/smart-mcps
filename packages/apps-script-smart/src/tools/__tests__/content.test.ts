@@ -173,6 +173,57 @@ describe("pushFileTool — preserves the manifest and other files", () => {
     expect(out.replaced).toBe(true);
   });
 
+  it("pushing Index/HTML does NOT clobber a sibling Index/SERVER_JS (match on name AND type)", async () => {
+    // A project where a base name is shared across two file types — Apps Script
+    // allows `Index.gs` (SERVER_JS) and `Index.html` (HTML) side by side.
+    const dualNameContent = {
+      scriptId: "s1",
+      files: [
+        { name: "Index", type: "SERVER_JS", source: "function doGet(){}" },
+        { name: "Index", type: "HTML", source: "<p>old</p>" },
+        { name: "appsscript", type: "JSON", source: "{}" },
+      ],
+    };
+    let sentFiles: { name: string; type: string; source: string }[] | undefined;
+    const client = makeClient({
+      getContent: vi.fn().mockResolvedValue(dualNameContent),
+      updateContent: vi
+        .fn()
+        .mockImplementation(
+          (_id: string, files: { name: string; type: string; source: string }[]) => {
+            sentFiles = files;
+            return Promise.resolve({ scriptId: "s1", files });
+          },
+        ),
+    });
+    const input = pushFileTool.inputSchema.parse({
+      script_id: "s1",
+      name: "Index",
+      type: "HTML",
+      source: "<p>fresh</p>",
+    }) as Parameters<typeof pushFileTool.handler>[0];
+
+    const out = await pushFileTool.handler(input, ctxOf(client));
+    const files = sentFiles ?? [];
+
+    // The SERVER_JS Index survives byte-for-byte (NOT overwritten by the HTML).
+    expect(files).toContainEqual({
+      name: "Index",
+      type: "SERVER_JS",
+      source: "function doGet(){}",
+    });
+    // Exactly one HTML Index, carrying the new source — no duplicate (name,type).
+    const htmlIndexes = files.filter(
+      (f) => f.name === "Index" && f.type === "HTML",
+    );
+    expect(htmlIndexes).toEqual([
+      { name: "Index", type: "HTML", source: "<p>fresh</p>" },
+    ]);
+    // Manifest untouched; total file count unchanged (replace, not add).
+    expect(files).toHaveLength(3);
+    expect(out.replaced).toBe(true);
+  });
+
   it("adding a NEW file appends it while preserving every existing file + manifest", async () => {
     let sentFiles: { name: string }[] | undefined;
     const client = makeClient({

@@ -64,6 +64,10 @@ describe("runFunctionTool — gating (confirm required)", () => {
   });
 
   it("preview labels the target as scriptId when only script_id is given", async () => {
+    // Guard against a vacuous pass: if the confirm gate ever regresses the
+    // handler returns normally, the catch never runs, and this test would pass
+    // with zero assertions. expect.assertions(1) forces it to fail loud.
+    expect.assertions(1);
     const client = makeClient();
     try {
       await runFunctionTool.handler(

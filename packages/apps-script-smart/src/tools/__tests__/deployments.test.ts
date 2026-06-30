@@ -74,20 +74,99 @@ describe("getDeploymentTool", () => {
   });
 });
 
-describe("updateDeploymentTool", () => {
-  it("passes the new config to updateDeployment", async () => {
+describe("updateDeploymentTool — confirm-gated, preserves the pin", () => {
+  // A live deployment PINNED to version 7 with a custom manifest name.
+  const pinnedRaw = {
+    deploymentId: "dep_1",
+    deploymentConfig: { versionNumber: 7, manifestFileName: "custommanifest" },
+  };
+
+  function parseInput(
+    raw: Record<string, unknown>,
+  ): Parameters<typeof updateDeploymentTool.handler>[0] {
+    return updateDeploymentTool.inputSchema.parse(raw) as Parameters<
+      typeof updateDeploymentTool.handler
+    >[0];
+  }
+
+  it("throws ConfirmRequiredError without confirm and does NOT mutate", async () => {
+    const getDeployment = vi.fn().mockResolvedValue(pinnedRaw);
+    const updateDeployment = vi.fn();
+    await expect(
+      updateDeploymentTool.handler(
+        parseInput({
+          script_id: "s1",
+          deployment_id: "dep_1",
+          description: "x",
+        }),
+        ctxOf({ getDeployment, updateDeployment }),
+      ),
+    ).rejects.toBeInstanceOf(ConfirmRequiredError);
+    expect(updateDeployment).not.toHaveBeenCalled();
+  });
+
+  it("preview states the resulting (preserved) versionNumber", async () => {
+    const getDeployment = vi.fn().mockResolvedValue(pinnedRaw);
+    try {
+      await updateDeploymentTool.handler(
+        parseInput({
+          script_id: "s1",
+          deployment_id: "dep_1",
+          description: "x",
+        }),
+        ctxOf({ getDeployment, updateDeployment: vi.fn() }),
+      );
+      throw new Error("expected ConfirmRequiredError");
+    } catch (err) {
+      expect(err).toBeInstanceOf(ConfirmRequiredError);
+      const e = err as ConfirmRequiredError;
+      expect(e.preview).toContain("dep_1");
+      // The user sees the consequence: it stays on version 7, not HEAD.
+      expect(e.preview).toContain("7");
+    }
+  });
+
+  it("description-only update preserves the existing versionNumber + manifestFileName in the PUT body", async () => {
+    const getDeployment = vi.fn().mockResolvedValue(pinnedRaw);
     const updateDeployment = vi
       .fn()
       .mockResolvedValue({ deploymentId: "dep_1", deploymentConfig: {} });
-    const input = updateDeploymentTool.inputSchema.parse({
-      script_id: "s1",
-      deployment_id: "dep_1",
-      version_number: 4,
-    }) as Parameters<typeof updateDeploymentTool.handler>[0];
-    await updateDeploymentTool.handler(input, ctxOf({ updateDeployment }));
+    await updateDeploymentTool.handler(
+      parseInput({
+        script_id: "s1",
+        deployment_id: "dep_1",
+        description: "x",
+        confirm: true,
+      }),
+      ctxOf({ getDeployment, updateDeployment }),
+    );
+    // Read-modify-write: the current deployment is read before writing.
+    expect(getDeployment).toHaveBeenCalledWith("s1", "dep_1");
+    // The pin survives: no silent fall to HEAD, no clobbered manifest name.
     expect(updateDeployment).toHaveBeenCalledWith("s1", "dep_1", {
-      versionNumber: 4,
-      manifestFileName: "appsscript",
+      versionNumber: 7,
+      manifestFileName: "custommanifest",
+      description: "x",
+    });
+  });
+
+  it("an explicit version_number overrides the preserved pin", async () => {
+    const getDeployment = vi.fn().mockResolvedValue(pinnedRaw);
+    const updateDeployment = vi
+      .fn()
+      .mockResolvedValue({ deploymentId: "dep_1", deploymentConfig: {} });
+    await updateDeploymentTool.handler(
+      parseInput({
+        script_id: "s1",
+        deployment_id: "dep_1",
+        version_number: 9,
+        confirm: true,
+      }),
+      ctxOf({ getDeployment, updateDeployment }),
+    );
+    expect(updateDeployment).toHaveBeenCalledWith("s1", "dep_1", {
+      versionNumber: 9,
+      manifestFileName: "custommanifest",
     });
   });
 });

@@ -132,9 +132,12 @@ export const getDeploymentTool = defineTool<
 const updateDeploymentInputSchema = z.object({
   script_id: z.string().min(1),
   deployment_id: z.string().min(1),
+  /** New version to pin; omit to KEEP the deployment's current version. */
   version_number: z.number().int().optional(),
-  manifest_file_name: z.string().optional().default("appsscript"),
+  /** New manifest filename; omit to KEEP the deployment's current one. */
+  manifest_file_name: z.string().optional(),
   description: z.string().optional(),
+  confirm: z.boolean().optional().default(false),
 });
 
 type UpdateDeploymentInput = z.input<typeof updateDeploymentInputSchema>;
@@ -148,15 +151,56 @@ export const updateDeploymentTool = defineTool<
 >({
   name: "update_deployment",
   description: "Update a deployment's config",
-  // Cast required because `manifest_file_name` has `.optional().default(...)`.
+  // Cast required because `confirm` has `.optional().default(...)`.
   inputSchema:
     updateDeploymentInputSchema as unknown as z.ZodType<UpdateDeploymentInput>,
   handler: async (input, ctx) => {
     const parsed = input as UpdateDeploymentParsed;
+
+    // Read-modify-write: a PUT replaces the whole DeploymentConfig, so omitting
+    // versionNumber would silently repoint a pinned production web-app/API
+    // Executable to live HEAD, and omitting manifestFileName would clobber a
+    // custom manifest name. Read the current deployment and PRESERVE both
+    // unless the caller explicitly overrides them.
+    const currentRaw = await ctx.client.getDeployment(
+      parsed.script_id,
+      parsed.deployment_id,
+    );
+    const current = mapDeployment(currentRaw);
+
+    const effectiveVersion =
+      parsed.version_number !== undefined
+        ? parsed.version_number
+        : (current.version_number ?? undefined);
+    const effectiveManifest =
+      parsed.manifest_file_name !== undefined
+        ? parsed.manifest_file_name
+        : (current.manifest_file_name ?? undefined);
+
+    // The preview must state the EFFECTIVE resulting version so the user sees
+    // the consequence (the preserved pin or the explicit override) before
+    // confirming — this mutates a live entry point like delete_deployment.
+    const versionLabel =
+      effectiveVersion !== undefined
+        ? `version ${effectiveVersion}`
+        : "HEAD (live, latest saved code)";
+    const preview =
+      `Update deployment ${parsed.deployment_id} in project ${parsed.script_id}. ` +
+      `Resulting versionNumber: ${versionLabel}. ` +
+      "This repoints a live web app / API Executable entry point.";
+    guardDestructive({ confirm: parsed.confirm, preview });
+
+    const config: DeploymentConfigInput = {};
+    if (effectiveVersion !== undefined) config.versionNumber = effectiveVersion;
+    if (effectiveManifest !== undefined) {
+      config.manifestFileName = effectiveManifest;
+    }
+    if (parsed.description !== undefined) config.description = parsed.description;
+
     const raw = await ctx.client.updateDeployment(
       parsed.script_id,
       parsed.deployment_id,
-      buildConfig(parsed),
+      config,
     );
     return { deployment: mapDeployment(raw) };
   },
