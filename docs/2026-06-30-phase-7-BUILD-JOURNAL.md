@@ -14,7 +14,7 @@ Branch: `phase-7-google-trio-flow` (off `main`). No push until user approves.
 - [x] Scaffold 4 packages + `./client` exports on calendar/email + install/build/typecheck green
 - [x] Implement tasks-smart (16 tools, 92 tests) — verified green + date-bucket inspected, committed
 - [~] Implement docs-smart (TDD, ~18 tools) — parallel (dispatched)
-- [~] Implement apps-script-smart (TDD, ~17 tools) — parallel (dispatched)
+- [x] Implement apps-script-smart (17 tools, 86 tests) — verified green + run_function gating/error-parse inspected, committed
 - [ ] Implement flow-smart (TDD, ~6 tools) — after the three wrappers
 - [ ] Adversarial cross-verify each package + lead inspects critical real code
 - [ ] Full monorepo `npm test` + `typecheck` + every `smoke` green
