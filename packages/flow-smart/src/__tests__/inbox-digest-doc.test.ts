@@ -91,13 +91,25 @@ describe("inbox_digest_doc", () => {
     await run(inboxDigestDocTool, { count: 3 }, ctx);
 
     const md = renderedMarkdown(ctx);
-    // Snippets are escaped, so none render as a list item or blockquote line.
-    expect(md).toContain("\\- bullet");
-    expect(md).toContain("1\\. ordered");
-    expect(md).toContain("\\> quote");
-    expect(md).not.toMatch(/^- bullet$/m);
-    expect(md).not.toMatch(/^1\. ordered$/m);
-    expect(md).not.toMatch(/^> quote$/m);
+    // mdInline escapes the leading marker, so the block parser classifies each
+    // snippet as a PARAGRAPH (the `\` is the first char, not a list/quote
+    // marker). docs-smart then resolves the CommonMark backslash escape, so the
+    // rendered paragraph text reads literally — no surviving backslash.
+    expect(md).toContain("- bullet");
+    expect(md).toContain("1. ordered");
+    expect(md).toContain("> quote");
+    // The real guarantee that it stayed a paragraph (not a list) is structural:
+    // a list line would emit a createParagraphBullets request. Assert none did.
+    const allRequests = (
+      ctx.docs as unknown as {
+        batchUpdate: { mock: { calls: Array<[{ requests?: unknown[] }]> } };
+      }
+    ).batchUpdate.mock.calls.flatMap((c) => c[0]?.requests ?? []);
+    expect(
+      allRequests.some(
+        (r) => (r as { createParagraphBullets?: unknown }).createParagraphBullets,
+      ),
+    ).toBe(false);
   });
 
   it("neutralizes a backtick in the query so the inline-code span is not broken", async () => {
