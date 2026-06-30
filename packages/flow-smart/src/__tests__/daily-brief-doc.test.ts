@@ -38,6 +38,7 @@ describe("daily_brief_doc", () => {
       tasklist: "L1",
       showCompleted: false,
       dueMax: "2026-07-02T00:00:00.000Z",
+      maxResults: 100,
     });
     expect(out).toMatchObject({
       document_id: "doc1",
@@ -55,6 +56,51 @@ describe("daily_brief_doc", () => {
     expect(md).toContain("Overdue (1)");
     expect(md).toContain("Old one");
     expect(md).not.toContain("Future");
+  });
+
+  it("follows nextPageToken so tasks past the first page are not lost", async () => {
+    const listEvents = vi.fn().mockResolvedValue({ items: [] });
+    const listTaskLists = vi.fn().mockResolvedValue({ items: [{ id: "L1" }] });
+    const listTasks = vi
+      .fn()
+      .mockResolvedValueOnce({
+        items: [
+          { id: "p1", title: "Page one due", status: "needsAction", due: "2026-07-01" },
+        ],
+        nextPageToken: "tok2",
+      })
+      .mockResolvedValueOnce({
+        items: [
+          { id: "p2", title: "Page two overdue", status: "needsAction", due: "2026-06-20" },
+        ],
+      });
+    const ctx = makeCtx({
+      calendar: { listEvents },
+      tasks: { listTaskLists, listTasks },
+    });
+
+    const out = await run(dailyBriefDocTool, { date: "2026-07-01" }, ctx);
+
+    expect(listTasks).toHaveBeenCalledTimes(2);
+    expect(listTasks).toHaveBeenNthCalledWith(1, {
+      tasklist: "L1",
+      showCompleted: false,
+      dueMax: "2026-07-02T00:00:00.000Z",
+      maxResults: 100,
+    });
+    expect(listTasks).toHaveBeenNthCalledWith(2, {
+      tasklist: "L1",
+      showCompleted: false,
+      dueMax: "2026-07-02T00:00:00.000Z",
+      maxResults: 100,
+      pageToken: "tok2",
+    });
+    expect(out.due_today_count).toBe(1);
+    expect(out.overdue_count).toBe(1);
+
+    const md = renderedMarkdown(ctx);
+    expect(md).toContain("Page one due");
+    expect(md).toContain("Page two overdue");
   });
 
   it("propagates partial progress when the task fetch fails", async () => {

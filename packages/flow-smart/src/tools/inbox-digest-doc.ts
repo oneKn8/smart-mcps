@@ -9,6 +9,7 @@ import {
   mdInline,
   messageFrom,
   messageSubject,
+  oneLine,
 } from "../extract.js";
 
 // =============================================================================
@@ -98,7 +99,16 @@ export const inboxDigestDocTool = defineTool<
     const docTitle = parsed.title ?? `Inbox Digest — ${threadIds.length} unread`;
     const lines: string[] = [];
     lines.push(`# ${mdInline(docTitle)}`, "");
-    lines.push(`${digest.length} unread thread(s) matching \`${parsed.query}\`.`, "");
+    // The query is echoed inside a Markdown code span. Collapse whitespace and
+    // strip backticks: the docs renderer honors no backslash escapes, so a
+    // backtick in the query would close the span early and a newline would
+    // split the line. Every other marker is literal inside a code span, so the
+    // backtick is the only character that can break it.
+    const queryLabel = oneLine(parsed.query).replace(/`/g, "");
+    lines.push(
+      `${digest.length} unread thread(s) matching \`${queryLabel}\`.`,
+      "",
+    );
     if (digest.length === 0) {
       lines.push("Inbox is clear — nothing unread.", "");
     }

@@ -165,10 +165,17 @@ export function oneLine(value: string): string {
 /**
  * Make arbitrary text safe to drop INSIDE a Markdown line: collapse to one
  * line, then neutralize the inline emphasis/pipe markers the renderer parses
- * so a stray `*` or `|` in a subject can't restyle the document.
+ * so a stray `*` or `|` in a subject can't restyle the document. A value can
+ * also START a Doc line (a snippet pushed as its own paragraph), so we also
+ * escape a LEADING list (`-`/`+`), ordered (`N.`/`N)`) or blockquote (`>`)
+ * marker — otherwise an email beginning `- ` would open a bullet/quote block.
+ * `*` and `#` are already escaped inline, so `* item` / `# h` are covered.
  */
 export function mdInline(value: string): string {
-  return oneLine(value).replace(/[*_`|#]/g, (c) => `\\${c}`);
+  const inline = oneLine(value).replace(/[*_`|#]/g, (c) => `\\${c}`);
+  return inline
+    .replace(/^([-+>])/, "\\$1")
+    .replace(/^(\d+)([.)])/, "$1\\$2");
 }
 
 /** Truncate to `max` chars with an ellipsis, after one-lining. */

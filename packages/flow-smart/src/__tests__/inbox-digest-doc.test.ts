@@ -58,6 +58,64 @@ describe("inbox_digest_doc", () => {
     expect(md).toContain("Welcome");
   });
 
+  it("neutralizes leading list/quote markers in a snippet so it stays a paragraph", async () => {
+    const listMessages = vi.fn().mockResolvedValue({
+      messages: [
+        { id: "m1", threadId: "t1" },
+        { id: "m2", threadId: "t2" },
+        { id: "m3", threadId: "t3" },
+      ],
+      resultSizeEstimate: 3,
+    });
+    const mkThread = (id: string, snippet: string) => ({
+      id,
+      snippet,
+      messages: [
+        {
+          payload: {
+            headers: [
+              { name: "Subject", value: "Sub" },
+              { name: "From", value: "a@b.com" },
+            ],
+          },
+        },
+      ],
+    });
+    const getThread = vi
+      .fn()
+      .mockResolvedValueOnce(mkThread("t1", "- bullet"))
+      .mockResolvedValueOnce(mkThread("t2", "1. ordered"))
+      .mockResolvedValueOnce(mkThread("t3", "> quote"));
+    const ctx = makeCtx({ email: { listMessages, getThread } });
+
+    await run(inboxDigestDocTool, { count: 3 }, ctx);
+
+    const md = renderedMarkdown(ctx);
+    // Snippets are escaped, so none render as a list item or blockquote line.
+    expect(md).toContain("\\- bullet");
+    expect(md).toContain("1\\. ordered");
+    expect(md).toContain("\\> quote");
+    expect(md).not.toMatch(/^- bullet$/m);
+    expect(md).not.toMatch(/^1\. ordered$/m);
+    expect(md).not.toMatch(/^> quote$/m);
+  });
+
+  it("neutralizes a backtick in the query so the inline-code span is not broken", async () => {
+    const listMessages = vi
+      .fn()
+      .mockResolvedValue({ messages: [], resultSizeEstimate: 0 });
+    const getThread = vi.fn();
+    const ctx = makeCtx({ email: { listMessages, getThread } });
+
+    await run(inboxDigestDocTool, { query: "subject:`weird`" }, ctx);
+
+    const md = renderedMarkdown(ctx);
+    // The query renders intact and no stray backtick leaks out to break the
+    // surrounding code span (the renderer consumes a balanced pair).
+    expect(md).toContain("subject:weird");
+    expect(md).not.toContain("`");
+  });
+
   it("reports partial progress when a thread read fails", async () => {
     const listMessages = vi.fn().mockResolvedValue({
       messages: [{ id: "m1", threadId: "t1" }],

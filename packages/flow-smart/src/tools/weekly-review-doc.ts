@@ -4,7 +4,7 @@ import { renderMarkdownToNewDoc } from "docs-smart/render";
 import type { FlowContext } from "../context.js";
 import { FlowProgress } from "../flow-error.js";
 import { clamp, eventTimeLabel, mdInline, readEvent, readTask } from "../extract.js";
-import { resolveTaskListIds } from "../gather.js";
+import { listAllTasks, resolveTaskListIds } from "../gather.js";
 import { dateKeyInTz, mondayWeek, tzMidnightIso } from "../time.js";
 
 // =============================================================================
@@ -64,7 +64,13 @@ export const weeklyReviewDocTool = defineTool<
     );
     const weekOf = parsed.week_of ?? dateKeyInTz(tz);
     const week = mondayWeek(weekOf);
+    // Half-open completion window [weekStart, weekEndExclusive) in real time.
+    // The upper bound matters when reviewing a PAST week: without it, anything
+    // completed at/after that week's start (including later weeks) over-counts.
     const weekStartInstant = new Date(tzMidnightIso(week.start, tz)).getTime();
+    const weekEndInstant = new Date(
+      tzMidnightIso(week.endExclusive, tz),
+    ).getTime();
 
     // Step: gather tasks (open + completed-this-week) across the chosen lists.
     const taskData = await progress.run("gather_tasks", async () => {
@@ -72,7 +78,7 @@ export const weeklyReviewDocTool = defineTool<
       const open: { list: string; title: string; due: string | null }[] = [];
       const completed: { list: string; title: string; on: string | null }[] = [];
       for (const listId of listIds) {
-        const { items } = await ctx.tasks.listTasks({
+        const items = await listAllTasks(ctx.tasks, {
           tasklist: listId,
           showCompleted: true,
           showHidden: true,
@@ -82,11 +88,11 @@ export const weeklyReviewDocTool = defineTool<
           if (t.deleted) continue;
           if (t.status === "needsAction") {
             open.push({ list: listId, title: t.title, due: t.due });
-          } else if (
-            t.completed !== null &&
-            new Date(t.completed).getTime() >= weekStartInstant
-          ) {
-            completed.push({ list: listId, title: t.title, on: t.completed });
+          } else if (t.completed !== null) {
+            const at = new Date(t.completed).getTime();
+            if (at >= weekStartInstant && at < weekEndInstant) {
+              completed.push({ list: listId, title: t.title, on: t.completed });
+            }
           }
         }
       }

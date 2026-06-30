@@ -49,10 +49,45 @@ function partsInTz(instant: Date, tz: string): WallParts {
   };
 }
 
+/** Signed offset (localWallClock − instant) in ms observed in `tz` at `ms`. */
+function offsetMsAt(ms: number, tz: string): number {
+  const p = partsInTz(new Date(ms), tz);
+  const asUtc = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second);
+  return asUtc - ms;
+}
+
+/** Whether the wall clock observed in `tz` at `ms` equals the given fields. */
+function wallEquals(
+  ms: number,
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+  second: number,
+  tz: string,
+): boolean {
+  const p = partsInTz(new Date(ms), tz);
+  return (
+    p.year === year &&
+    p.month === month &&
+    p.day === day &&
+    p.hour === hour &&
+    p.minute === minute &&
+    p.second === second
+  );
+}
+
 /**
- * The UTC `Date` corresponding to wall-clock `Y-M-D H:M:S` in `tz`, DST-correct
- * by inverting the observed offset on a candidate instant (one iteration is
- * exact for every modern IANA zone — offsets are quarter-hour granular).
+ * The UTC `Date` whose wall clock in `tz` equals `Y-M-D H:M:S`. We invert the
+ * zone offset on a candidate instant; a SINGLE inversion is wrong when a DST
+ * transition lies between the naive instant and the candidate — for zones that
+ * shift at local midnight (e.g. America/Santiago 2026-04-05, Asia/Beirut
+ * 2026-03-29) it lands on the adjacent calendar DAY. So we re-derive the offset
+ * at the first candidate and re-solve. When neither candidate reproduces the
+ * requested wall clock the time falls in a spring-forward gap (it never
+ * occurs); we then map it forward to the first valid instant using the smaller
+ * (pre-transition) offset, deterministically preserving the calendar date.
  */
 function zonedToUtc(
   year: number,
@@ -63,17 +98,22 @@ function zonedToUtc(
   second: number,
   tz: string,
 ): Date {
-  const naiveUtcMs = Date.UTC(year, month - 1, day, hour, minute, second);
-  const observed = partsInTz(new Date(naiveUtcMs), tz);
-  const observedUtcMs = Date.UTC(
-    observed.year,
-    observed.month - 1,
-    observed.day,
-    observed.hour,
-    observed.minute,
-    observed.second,
-  );
-  return new Date(naiveUtcMs - (observedUtcMs - naiveUtcMs));
+  const targetMs = Date.UTC(year, month - 1, day, hour, minute, second);
+  const offsetA = offsetMsAt(targetMs, tz);
+  const candAMs = targetMs - offsetA;
+  const offsetB = offsetMsAt(candAMs, tz);
+  // No transition between the two instants: the single inversion is exact.
+  if (offsetB === offsetA) return new Date(candAMs);
+  // Second pass: re-solve with the offset observed at the first candidate.
+  const candBMs = targetMs - offsetB;
+  if (wallEquals(candBMs, year, month, day, hour, minute, second, tz)) {
+    return new Date(candBMs);
+  }
+  if (wallEquals(candAMs, year, month, day, hour, minute, second, tz)) {
+    return new Date(candAMs);
+  }
+  // Spring-forward gap: requested wall time does not exist. Map it forward.
+  return new Date(targetMs - Math.min(offsetA, offsetB));
 }
 
 /** Format a `Date` as RFC 3339 with the tz's offset suffix at that instant. */

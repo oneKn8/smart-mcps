@@ -106,6 +106,16 @@ describe("markdown helpers", () => {
     expect(mdInline("**bold** | # x")).toBe("\\*\\*bold\\*\\* \\| \\# x");
   });
 
+  it("mdInline neutralizes a leading list/ordered/blockquote marker", () => {
+    expect(mdInline("- bullet")).toBe("\\- bullet");
+    expect(mdInline("+ plus")).toBe("\\+ plus");
+    expect(mdInline("1. ordered")).toBe("1\\. ordered");
+    expect(mdInline("2) paren")).toBe("2\\) paren");
+    expect(mdInline("> quote")).toBe("\\> quote");
+    // A marker mid-string is harmless and left alone.
+    expect(mdInline("see - here")).toBe("see - here");
+  });
+
   it("clamp truncates with an ellipsis", () => {
     expect(clamp("hello world", 100)).toBe("hello world");
     expect(clamp("hello world", 6)).toBe("hello…");

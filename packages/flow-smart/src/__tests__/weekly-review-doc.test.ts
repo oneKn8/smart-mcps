@@ -49,6 +49,7 @@ describe("weekly_review_doc", () => {
       tasklist: "L1",
       showCompleted: true,
       showHidden: true,
+      maxResults: 100,
     });
 
     // Only the in-week completion counts; last week's is excluded.
@@ -68,6 +69,82 @@ describe("weekly_review_doc", () => {
     expect(md).toContain("Completed This Week (1)");
     expect(md).toContain("Standup");
     expect(md).not.toContain("Done Last Week");
+  });
+
+  it("follows nextPageToken so tasks past the first page reach the doc", async () => {
+    const listTaskLists = vi.fn().mockResolvedValue({ items: [{ id: "L1" }] });
+    const listTasks = vi
+      .fn()
+      .mockResolvedValueOnce({
+        items: [
+          { id: "o1", title: "Open page one", status: "needsAction", due: "2026-07-02" },
+        ],
+        nextPageToken: "tok2",
+      })
+      .mockResolvedValueOnce({
+        items: [
+          { id: "o2", title: "Open page two", status: "needsAction", due: "2026-07-03" },
+        ],
+      });
+    const listEvents = vi.fn().mockResolvedValue({ items: [] });
+    const ctx = makeCtx({
+      tasks: { listTaskLists, listTasks },
+      calendar: { listEvents },
+    });
+
+    const out = await run(weeklyReviewDocTool, { week_of: "2026-07-01" }, ctx);
+
+    expect(listTasks).toHaveBeenCalledTimes(2);
+    expect(listTasks).toHaveBeenNthCalledWith(2, {
+      tasklist: "L1",
+      showCompleted: true,
+      showHidden: true,
+      maxResults: 100,
+      pageToken: "tok2",
+    });
+    expect(out.open_task_count).toBe(2);
+
+    const md = renderedMarkdown(ctx);
+    expect(md).toContain("Open page one");
+    expect(md).toContain("Open page two");
+  });
+
+  it("bounds Completed This Week to the target week when reviewing a past week", async () => {
+    const listTaskLists = vi.fn().mockResolvedValue({ items: [{ id: "L1" }] });
+    const listTasks = vi.fn().mockResolvedValue({
+      items: [
+        {
+          id: "in",
+          title: "Done in week",
+          status: "completed",
+          completed: "2026-06-03T12:00:00.000Z",
+        },
+        {
+          id: "after",
+          title: "Done after week",
+          status: "completed",
+          completed: "2026-06-30T12:00:00.000Z",
+        },
+      ],
+    });
+    const listEvents = vi.fn().mockResolvedValue({ items: [] });
+    const ctx = makeCtx({
+      tasks: { listTaskLists, listTasks },
+      calendar: { listEvents },
+    });
+
+    // Week of 2026-06-01 (Mon) -> 2026-06-01 .. 2026-06-07, endExclusive 06-08.
+    const out = await run(weeklyReviewDocTool, { week_of: "2026-06-01" }, ctx);
+
+    expect(out).toMatchObject({
+      week_start: "2026-06-01",
+      week_end: "2026-06-07",
+      completed_task_count: 1,
+    });
+
+    const md = renderedMarkdown(ctx);
+    expect(md).toContain("Done in week");
+    expect(md).not.toContain("Done after week");
   });
 
   it("propagates partial progress if the calendar fetch fails", async () => {

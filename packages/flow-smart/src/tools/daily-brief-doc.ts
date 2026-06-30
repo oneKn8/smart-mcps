@@ -4,7 +4,7 @@ import { renderMarkdownToNewDoc } from "docs-smart/render";
 import type { FlowContext } from "../context.js";
 import { FlowProgress } from "../flow-error.js";
 import { clamp, eventTimeLabel, mdInline, readEvent, readTask } from "../extract.js";
-import { resolveTaskListIds } from "../gather.js";
+import { listAllTasks, resolveTaskListIds } from "../gather.js";
 import { addDays, dateKeyInTz, tzMidnightIso } from "../time.js";
 
 // =============================================================================
@@ -80,7 +80,7 @@ export const dailyBriefDocTool = defineTool<
       const dueToday: string[] = [];
       const overdue: { title: string; due: string }[] = [];
       for (const listId of listIds) {
-        const { items } = await ctx.tasks.listTasks({
+        const items = await listAllTasks(ctx.tasks, {
           tasklist: listId,
           showCompleted: false,
           dueMax: `${nextDay}T00:00:00.000Z`,

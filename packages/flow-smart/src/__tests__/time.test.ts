@@ -44,6 +44,18 @@ describe("time helpers", () => {
     expect(tzMidnightIso("2026-07-01", "UTC")).toBe("2026-07-01T00:00:00+00:00");
   });
 
+  it("tzMidnightIso lands on the correct calendar day across a midnight DST shift", () => {
+    // America/Santiago falls back AT local midnight on 2026-04-05; a single-pass
+    // offset inversion slips the instant onto 2026-04-04.
+    const santiago = tzMidnightIso("2026-04-05", "America/Santiago");
+    expect(dateKeyInTz("America/Santiago", new Date(santiago))).toBe("2026-04-05");
+
+    // Asia/Beirut springs forward at local midnight on 2026-03-29, so 00:00
+    // never exists (a gap); the instant must still read as 2026-03-29 locally.
+    const beirut = tzMidnightIso("2026-03-29", "Asia/Beirut");
+    expect(dateKeyInTz("Asia/Beirut", new Date(beirut))).toBe("2026-03-29");
+  });
+
   it("tzWallClockIso builds a timed local instant", () => {
     expect(tzWallClockIso("2026-07-01", 14, 0, "America/Chicago")).toBe(
       "2026-07-01T14:00:00-05:00",
