@@ -33,7 +33,9 @@ const postMessageInputSchema = z.object({
   // "user" posts as the authenticated user (uses SLACK_USER_TOKEN).
   // Slack's deprecated `as_user` param is NOT forwarded — token selection alone
   // controls posting identity on modern Slack apps.
-  send_as: z.enum(["bot", "user"]).optional().default("bot"),
+  // Default "user": the bot app is often not installed in the target workspace,
+  // so posting as the authenticated user is the safe default.
+  send_as: z.enum(["bot", "user"]).optional().default("user"),
   confirm: z.boolean().optional().default(false),
 });
 
@@ -120,7 +122,7 @@ const replyInThreadInputSchema = z.object({
   thread_ts: z.string().min(1),
   text: z.string().min(1),
   reply_broadcast: z.boolean().optional(),
-  send_as: z.enum(["bot", "user"]).optional().default("bot"),
+  send_as: z.enum(["bot", "user"]).optional().default("user"),
   confirm: z.boolean().optional().default(false),
 });
 
@@ -166,7 +168,7 @@ const updateMessageInputSchema = z.object({
   ts: z.string().min(1),
   text: z.string().optional(),
   blocks_json: z.string().optional(),
-  send_as: z.enum(["bot", "user"]).optional().default("bot"),
+  send_as: z.enum(["bot", "user"]).optional().default("user"),
   confirm: z.boolean().optional().default(false),
 });
 
@@ -235,7 +237,7 @@ export const update_message = defineTool<
 const deleteMessageInputSchema = z.object({
   channel: z.string().min(1),
   ts: z.string().min(1),
-  send_as: z.enum(["bot", "user"]).optional().default("bot"),
+  send_as: z.enum(["bot", "user"]).optional().default("user"),
   confirm: z.boolean().optional().default(false),
 });
 
@@ -275,7 +277,7 @@ const scheduleMessageInputSchema = z.object({
   post_at: z.number().int(),
   text: z.string().min(1),
   thread_ts: z.string().optional(),
-  send_as: z.enum(["bot", "user"]).optional().default("bot"),
+  send_as: z.enum(["bot", "user"]).optional().default("user"),
   confirm: z.boolean().optional().default(false),
 });
 

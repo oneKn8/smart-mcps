@@ -12,6 +12,7 @@ type FakeClient = {
   getUploadUrl: ReturnType<typeof vi.fn>;
   uploadBytes: ReturnType<typeof vi.fn>;
   completeUpload: ReturnType<typeof vi.fn>;
+  fetchRemoteFile: ReturnType<typeof vi.fn>;
 };
 
 function makeClient(): FakeClient {
@@ -21,6 +22,7 @@ function makeClient(): FakeClient {
     getUploadUrl: vi.fn(),
     uploadBytes: vi.fn(),
     completeUpload: vi.fn(),
+    fetchRemoteFile: vi.fn(),
   };
 }
 
@@ -352,8 +354,192 @@ describe("upload_file — happy path with content_base64", () => {
 });
 
 // ---------------------------------------------------------------------------
+// upload_file — content_url source (SSRF-guarded fetch is tested in safe-fetch)
+// ---------------------------------------------------------------------------
+
+describe("upload_file — content_url validation", () => {
+  let client: FakeClient;
+
+  beforeEach(() => {
+    client = makeClient();
+  });
+
+  it("throws ValidationError when content_url is given without filename", async () => {
+    const input = parse(upload_file, {
+      content_url: "http://files.test/a.png",
+      confirm: true,
+    });
+    await expect(upload_file.handler(input, ctx(client))).rejects.toThrow(
+      ValidationError,
+    );
+    expect(client.fetchRemoteFile).not.toHaveBeenCalled();
+    expect(client.getUploadUrl).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { file_path: "/tmp/x.png", content_url: "http://files.test/a.png" },
+    { content_base64: "aGVsbG8=", content_url: "http://files.test/a.png" },
+    {
+      file_path: "/tmp/x.png",
+      content_base64: "aGVsbG8=",
+      content_url: "http://files.test/a.png",
+    },
+  ])(
+    "throws ValidationError when content_url is combined with another source (%o)",
+    async (extra) => {
+      const input = parse(upload_file, {
+        ...extra,
+        filename: "a.png",
+        confirm: true,
+      });
+      await expect(upload_file.handler(input, ctx(client))).rejects.toThrow(
+        ValidationError,
+      );
+      expect(client.fetchRemoteFile).not.toHaveBeenCalled();
+    },
+  );
+});
+
+describe("upload_file — content_url confirm gate", () => {
+  let client: FakeClient;
+
+  beforeEach(() => {
+    client = makeClient();
+  });
+
+  it("throws ConfirmRequiredError without confirm and does NOT fetch the URL", async () => {
+    const input = parse(upload_file, {
+      content_url: "http://files.test/a.png",
+      filename: "a.png",
+    });
+    await expect(upload_file.handler(input, ctx(client))).rejects.toThrow(
+      ConfirmRequiredError,
+    );
+    expect(client.fetchRemoteFile).not.toHaveBeenCalled();
+    expect(client.getUploadUrl).not.toHaveBeenCalled();
+  });
+
+  it("preview shows filename and 'from URL' (size unknown before fetch)", async () => {
+    const input = parse(upload_file, {
+      content_url: "http://files.test/a.png",
+      filename: "a.png",
+      channel_id: "C010",
+    });
+    let preview = "";
+    try {
+      await upload_file.handler(input, ctx(client));
+    } catch (err) {
+      if (err instanceof ConfirmRequiredError) preview = err.preview;
+    }
+    expect(preview).toContain("a.png");
+    expect(preview).toContain("from URL");
+    expect(preview).toContain("C010");
+  });
+});
+
+describe("upload_file — content_url happy path", () => {
+  let client: FakeClient;
+
+  beforeEach(() => {
+    client = makeClient();
+    client.fetchRemoteFile.mockResolvedValue({
+      bytes: new Uint8Array([10, 20, 30, 40]),
+    });
+    client.getUploadUrl.mockResolvedValue({
+      ok: true,
+      upload_url: "https://files.slack.com/upload/v1/URL",
+      file_id: "F777",
+    });
+    client.uploadBytes.mockResolvedValue(undefined);
+    client.completeUpload.mockResolvedValue({
+      ok: true,
+      files: [{ id: "F777", name: "remote.png" }],
+    });
+  });
+
+  it("fetches the URL after confirm, then uploads the fetched bytes with the given filename", async () => {
+    const input = parse(upload_file, {
+      content_url: "http://files.test/remote.png",
+      filename: "remote.png",
+      channel_id: "C010",
+      confirm: true,
+    });
+    const result = (await upload_file.handler(input, ctx(client))) as {
+      ok: boolean;
+      file_id: string;
+    };
+
+    expect(client.fetchRemoteFile).toHaveBeenCalledTimes(1);
+    expect(client.fetchRemoteFile).toHaveBeenCalledWith(
+      "http://files.test/remote.png",
+    );
+
+    const [urlArgs] = client.getUploadUrl.mock.calls[0] as [
+      { filename: string; length: number },
+    ];
+    expect(urlArgs.filename).toBe("remote.png");
+    expect(urlArgs.length).toBe(4); // fetched 4 bytes
+
+    const [uploadUrl, bytes, fname] = client.uploadBytes.mock.calls[0] as [
+      string,
+      Uint8Array,
+      string,
+    ];
+    expect(uploadUrl).toBe("https://files.slack.com/upload/v1/URL");
+    expect(Array.from(bytes)).toEqual([10, 20, 30, 40]);
+    expect(fname).toBe("remote.png");
+
+    expect(result.ok).toBe(true);
+    expect(result.file_id).toBe("F777");
+  });
+
+  it("propagates a fetch rejection (SSRF-blocked URL) and does NOT upload", async () => {
+    client.fetchRemoteFile.mockRejectedValueOnce(
+      new ValidationError(
+        "content_url points at a blocked address (127.0.0.1)",
+      ),
+    );
+    const input = parse(upload_file, {
+      content_url: "http://127.0.0.1/x.png",
+      filename: "x.png",
+      confirm: true,
+    });
+    await expect(upload_file.handler(input, ctx(client))).rejects.toThrow(
+      ValidationError,
+    );
+    expect(client.getUploadUrl).not.toHaveBeenCalled();
+    expect(client.uploadBytes).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // upload_file — file_path branch (vi.mock for node:fs)
 // ---------------------------------------------------------------------------
+
+describe("upload_file — file_path read error", () => {
+  it("throws a clear ValidationError pointing at content_url/content_base64 when the path is unreadable", async () => {
+    const { readFileSync } = await import("node:fs");
+    vi.mocked(readFileSync).mockImplementationOnce(() => {
+      throw Object.assign(new Error("ENOENT: no such file or directory"), {
+        code: "ENOENT",
+      });
+    });
+    const client = makeClient();
+    const input = parse(upload_file, {
+      file_path: "/not/on/this/host.png",
+      confirm: true,
+    });
+    let msg = "";
+    try {
+      await upload_file.handler(input, ctx(client));
+    } catch (err) {
+      if (err instanceof ValidationError) msg = err.message;
+    }
+    expect(msg).toContain("content_url");
+    expect(msg).toContain("content_base64");
+    expect(client.getUploadUrl).not.toHaveBeenCalled();
+  });
+});
 
 describe("upload_file — file_path branch", () => {
   it("reads bytes from file_path and derives filename from basename", async () => {

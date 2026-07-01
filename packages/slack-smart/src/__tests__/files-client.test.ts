@@ -10,7 +10,7 @@ import {
 import { setupServer } from "msw/node";
 import { http, HttpResponse } from "msw";
 import { SlackClient } from "../client.js";
-import { UpstreamError } from "smart-mcp-core";
+import { UpstreamError, ValidationError } from "smart-mcp-core";
 
 const USER_TOKEN = "xoxp-test-user-token";
 
@@ -253,5 +253,31 @@ describe("SlackClient.uploadBytes", () => {
         "fail.bin",
       ),
     ).rejects.toThrow(UpstreamError);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// fetchRemoteFile — delegates to the SSRF-hardened fetcher (safe-fetch)
+// ---------------------------------------------------------------------------
+
+describe("SlackClient.fetchRemoteFile", () => {
+  it("fetches bytes from a public IP-literal URL (no DNS, real safe-fetch path)", async () => {
+    server.use(
+      http.get("http://93.184.216.34/logo.png", () =>
+        HttpResponse.arrayBuffer(new Uint8Array([5, 6, 7]).buffer),
+      ),
+    );
+    const client = new SlackClient();
+    const { bytes } = await client.fetchRemoteFile(
+      "http://93.184.216.34/logo.png",
+    );
+    expect(Array.from(bytes)).toEqual([5, 6, 7]);
+  });
+
+  it("rejects a loopback URL before any request is made", async () => {
+    const client = new SlackClient();
+    await expect(
+      client.fetchRemoteFile("http://127.0.0.1/x"),
+    ).rejects.toThrow(ValidationError);
   });
 });

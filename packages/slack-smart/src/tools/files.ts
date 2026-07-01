@@ -127,8 +127,12 @@ export const file_info = defineTool<FileInfoInput, SlimFile, SlackContext>({
 // ---------------------------------------------------------------------------
 
 const uploadFileInputSchema = z.object({
+  // Exactly one source. file_path reads from the SERVER's filesystem, so a path
+  // generated on another machine (a different agent/host) will not exist here;
+  // content_url (http(s)) or content_base64 are the caller-portable sources.
   file_path: z.string().optional(),
   content_base64: z.string().optional(),
+  content_url: z.string().optional(),
   filename: z.string().optional(),
   title: z.string().optional(),
   channel_id: z.string().optional(),
@@ -148,51 +152,80 @@ type UploadFileOutput = {
 
 export const upload_file = defineTool<UploadFileInput, UploadFileOutput, SlackContext>({
   name: "upload_file",
-  description: "Upload a file to Slack via the 3-step external upload flow.",
+  description: "Upload a file from a path, base64, or URL to Slack.",
   // Cast required: ZodDefault on confirm widens schema input type.
   inputSchema: uploadFileInputSchema as unknown as z.ZodType<UploadFileInput>,
   handler: async (input, context) => {
     const hasPath = input.file_path !== undefined;
     const hasBase64 = input.content_base64 !== undefined;
+    const hasUrl = input.content_url !== undefined;
+    const sourceCount = [hasPath, hasBase64, hasUrl].filter(Boolean).length;
 
-    if (!hasPath && !hasBase64) {
+    if (sourceCount === 0) {
       throw new ValidationError(
-        "upload_file requires exactly one of file_path or content_base64",
+        "upload_file requires exactly one of file_path, content_base64, or content_url",
       );
     }
-    if (hasPath && hasBase64) {
+    if (sourceCount > 1) {
       throw new ValidationError(
-        "upload_file requires exactly one of file_path or content_base64, not both",
+        "upload_file requires exactly one of file_path, content_base64, or content_url, not several",
       );
     }
-    if (hasBase64 && input.filename === undefined) {
+    if ((hasBase64 || hasUrl) && input.filename === undefined) {
       throw new ValidationError(
-        "filename is required when using content_base64",
+        "filename is required when using content_base64 or content_url",
       );
     }
 
-    let bytes: Uint8Array;
+    // Read local sources up front so the confirm preview can show a byte count.
+    // content_url is fetched only AFTER confirm, so an unconfirmed call never
+    // triggers a server-side (SSRF-exposed) request.
+    let bytes: Uint8Array | undefined;
     let filename: string;
+    let sizeLabel: string;
 
     if (hasPath) {
-      // file_path branch — may throw if file not found; let it propagate
-      const fileBytes = readFileSync(input.file_path as string);
+      let fileBytes: Buffer;
+      try {
+        fileBytes = readFileSync(input.file_path as string);
+      } catch (err) {
+        throw new ValidationError(
+          `upload_file could not read file_path "${input.file_path}": ` +
+            `${err instanceof Error ? err.message : String(err)}. The server reads ` +
+            `this path on its own filesystem, so a path produced on another machine ` +
+            `may not exist here — use content_url (http/https) or content_base64 instead.`,
+        );
+      }
       bytes = new Uint8Array(fileBytes);
       filename = input.filename ?? basename(input.file_path as string);
-    } else {
+      sizeLabel = `${bytes.length} bytes`;
+    } else if (hasBase64) {
       bytes = new Uint8Array(
         Buffer.from(input.content_base64 as string, "base64"),
       );
       // filename required guard already validated above
       filename = input.filename as string;
+      sizeLabel = `${bytes.length} bytes`;
+    } else {
+      // content_url — bytes fetched post-confirm; size not yet known.
+      filename = input.filename as string;
+      sizeLabel = "from URL";
     }
-
-    const length = bytes.length;
 
     guardDestructive({
       confirm: input.confirm,
-      preview: `Upload "${filename}" (${length} bytes) to ${input.channel_id ?? "(no channel)"}`,
+      preview: `Upload "${filename}" (${sizeLabel}) to ${input.channel_id ?? "(no channel)"}`,
     });
+
+    if (bytes === undefined) {
+      // content_url path: fetch now that the action is confirmed.
+      const fetched = await context.client.fetchRemoteFile(
+        input.content_url as string,
+      );
+      bytes = fetched.bytes;
+    }
+
+    const length = bytes.length;
 
     // Step 1: get upload URL
     const { upload_url, file_id } = await context.client.getUploadUrl({

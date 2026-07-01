@@ -336,8 +336,10 @@ const smartSendInputSchema = z.object({
   channel_query: z.string().min(1).optional(),
   user_query: z.string().min(1).optional(),
   text: z.string().min(1),
-  // z.optional().default() — filled when absent
-  send_as: z.enum(["bot", "user"]).optional().default("bot"),
+  // z.optional().default() — filled when absent.
+  // Default "user": the bot app is often not installed in the target workspace,
+  // so posting as the authenticated user is the safe default.
+  send_as: z.enum(["bot", "user"]).optional().default("user"),
   confirm: z.boolean().optional().default(false),
 });
 

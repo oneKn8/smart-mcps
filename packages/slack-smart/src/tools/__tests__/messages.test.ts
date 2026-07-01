@@ -43,12 +43,12 @@ function parse<T>(tool: { inputSchema: { parse: (v: unknown) => T } }, raw: unkn
 // ---------------------------------------------------------------------------
 
 describe("post_message — schema defaults", () => {
-  it("defaults send_as to bot and confirm to false", () => {
+  it("defaults send_as to user and confirm to false", () => {
     const parsed = parse(post_message, { channel: "C001", text: "hi" }) as {
       send_as: string;
       confirm: boolean;
     };
-    expect(parsed.send_as).toBe("bot");
+    expect(parsed.send_as).toBe("user");
     expect(parsed.confirm).toBe(false);
   });
 });
@@ -105,7 +105,7 @@ describe("post_message — confirm gate", () => {
     expect(client.postMessage).not.toHaveBeenCalled();
   });
 
-  it("calls postMessage with correct args and token when confirm:true", async () => {
+  it("calls postMessage with correct args and defaults to the user token when confirm:true", async () => {
     client.postMessage.mockResolvedValue({
       ok: true,
       channel: "C001",
@@ -126,7 +126,8 @@ describe("post_message — confirm gate", () => {
     const [args, token] = client.postMessage.mock.calls[0] as [Record<string, unknown>, string];
     expect(args.channel).toBe("C001");
     expect(args.text).toBe("hello");
-    expect(token).toBe("bot");
+    // Default send_as is "user" (bot app is often absent in target workspaces).
+    expect(token).toBe("user");
     expect(result.ok).toBe(true);
     expect(result.channel).toBe("C001");
     expect(result.ts).toBe("1234567890.000001");
@@ -150,8 +151,30 @@ describe("post_message — confirm gate", () => {
     expect(token).toBe("user");
   });
 
-  it("preview contains channel and bot identity label", async () => {
-    const input = parse(post_message, { channel: "C001", text: "preview test" });
+  it("uses bot token when send_as is explicitly bot", async () => {
+    client.postMessage.mockResolvedValue({
+      ok: true,
+      channel: "C001",
+      ts: "1234567890.000009",
+      message: {},
+    });
+    const input = parse(post_message, {
+      channel: "C001",
+      text: "as bot",
+      send_as: "bot",
+      confirm: true,
+    });
+    await post_message.handler(input, ctx(client));
+    const [, token] = client.postMessage.mock.calls[0] as [unknown, string];
+    expect(token).toBe("bot");
+  });
+
+  it("preview shows the bot identity label when send_as is bot", async () => {
+    const input = parse(post_message, {
+      channel: "C001",
+      text: "preview test",
+      send_as: "bot",
+    });
     let preview = "";
     try {
       await post_message.handler(input, ctx(client));
@@ -236,7 +259,8 @@ describe("reply_in_thread — confirm gate", () => {
     const [args, token] = client.postMessage.mock.calls[0] as [Record<string, unknown>, string];
     expect(args.thread_ts).toBe("1234567890.000001");
     expect(args.text).toBe("reply here");
-    expect(token).toBe("bot");
+    // Default send_as is "user".
+    expect(token).toBe("user");
   });
 
   it("preview contains thread_ts and channel", async () => {
@@ -311,7 +335,8 @@ describe("update_message — confirm gate", () => {
     expect(args.channel).toBe("C001");
     expect(args.ts).toBe("1234567890.000001");
     expect(args.text).toBe("updated text");
-    expect(token).toBe("bot");
+    // Default send_as is "user".
+    expect(token).toBe("user");
     expect(result.ok).toBe(true);
   });
 
@@ -373,7 +398,8 @@ describe("delete_message — confirm gate", () => {
     const [args, token] = client.deleteMessage.mock.calls[0] as [Record<string, unknown>, string];
     expect(args.channel).toBe("C001");
     expect(args.ts).toBe("1234567890.000001");
-    expect(token).toBe("bot");
+    // Default send_as is "user".
+    expect(token).toBe("user");
     expect(result.ok).toBe(true);
     expect(result.ts).toBe("1234567890.000001");
   });
@@ -408,8 +434,8 @@ describe("delete_message — confirm gate", () => {
     }
     expect(preview).toContain("1234567890.000001");
     expect(preview).toContain("C001");
-    // default send_as = bot
-    expect(preview).toContain("the bot app");
+    // default send_as = user
+    expect(preview).toContain("you");
   });
 });
 
@@ -459,7 +485,8 @@ describe("schedule_message — confirm gate", () => {
     expect(args.channel).toBe("C001");
     expect(args.post_at).toBe(1893456000);
     expect(args.text).toBe("future message");
-    expect(token).toBe("bot");
+    // Default send_as is "user".
+    expect(token).toBe("user");
     expect(result.scheduled_message_id).toBe("Q001");
     expect(result.post_at).toBe(1893456000);
   });
@@ -481,12 +508,12 @@ describe("schedule_message — confirm gate", () => {
     expect(preview).toContain("future message");
   });
 
-  it("defaults send_as to bot", () => {
+  it("defaults send_as to user", () => {
     const parsed = parse(schedule_message, {
       channel: "C001",
       post_at: 1893456000,
       text: "x",
     }) as { send_as: string };
-    expect(parsed.send_as).toBe("bot");
+    expect(parsed.send_as).toBe("user");
   });
 });

@@ -6,6 +6,8 @@ import {
   RateLimitError,
   UpstreamError,
 } from "smart-mcp-core";
+import { fetchRemoteFile } from "./safe-fetch.js";
+import type { FetchRemoteFileOptions } from "./safe-fetch.js";
 
 export type SlackCreds = {
   SLACK_USER_TOKEN: string;
@@ -734,6 +736,16 @@ export class SlackClient {
       },
       { token: "user", http: "POST" },
     ) as Promise<{ ok: true; files?: unknown[] }>;
+  }
+
+  // Fetch bytes from a caller-supplied http(s) URL for upload. SSRF-hardened
+  // (scheme allowlist, private-address rejection, redirect re-validation, size
+  // cap, timeout) — see safe-fetch.ts. No Slack token is involved.
+  async fetchRemoteFile(
+    url: string,
+    opts?: FetchRemoteFileOptions,
+  ): Promise<{ bytes: Uint8Array }> {
+    return fetchRemoteFile(url, opts);
   }
 
   // ---------------------------------------------------------------------------

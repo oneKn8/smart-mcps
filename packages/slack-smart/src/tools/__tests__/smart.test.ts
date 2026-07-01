@@ -503,12 +503,12 @@ describe("thread_catchup — handler", () => {
 // ---------------------------------------------------------------------------
 
 describe("smart_send — schema defaults", () => {
-  it("defaults send_as=bot and confirm=false", () => {
+  it("defaults send_as=user and confirm=false", () => {
     const parsed = parse(smart_send, {
       channel_query: "general",
       text: "hello",
     }) as { send_as: string; confirm: boolean };
-    expect(parsed.send_as).toBe("bot");
+    expect(parsed.send_as).toBe("user");
     expect(parsed.confirm).toBe(false);
   });
 });
@@ -557,7 +557,7 @@ describe("smart_send — confirm gate", () => {
     expect(client.postMessage).not.toHaveBeenCalled();
   });
 
-  it("preview contains the resolved channel label and identity", async () => {
+  it("preview contains the resolved channel label and bot identity when send_as=bot", async () => {
     client.listChannels.mockResolvedValue({
       ok: true,
       channels: [
@@ -565,7 +565,11 @@ describe("smart_send — confirm gate", () => {
       ],
     });
 
-    const input = parse(smart_send, { channel_query: "general", text: "preview test" });
+    const input = parse(smart_send, {
+      channel_query: "general",
+      text: "preview test",
+      send_as: "bot",
+    });
     let preview = "";
     try {
       await smart_send.handler(input, ctx(client));
@@ -639,7 +643,8 @@ describe("smart_send — channel_query path", () => {
     ];
     expect(args.channel).toBe("C001");
     expect(args.text).toBe("hello channel");
-    expect(token).toBe("bot");
+    // Default send_as is "user".
+    expect(token).toBe("user");
     expect(result.ok).toBe(true);
     expect(result.target).toBe("#general");
   });
@@ -694,8 +699,41 @@ describe("smart_send — user_query path", () => {
       string,
     ];
     expect(args.channel).toBe("D001");
-    expect(token).toBe("bot");
+    // Default send_as is "user".
+    expect(token).toBe("user");
     expect(result.target).toBe("@alice");
+  });
+
+  it("routes through the bot token when send_as=bot", async () => {
+    client.listUsers.mockResolvedValue({
+      ok: true,
+      members: [
+        {
+          id: "U001",
+          name: "alice",
+          is_bot: false,
+          deleted: false,
+          real_name: "Alice Smith",
+          profile: { display_name: "alice", email: "alice@example.com" },
+        },
+      ],
+    });
+    client.openDm.mockResolvedValue({ ok: true, channel: { id: "D001" } });
+    client.postMessage.mockResolvedValue({
+      ok: true,
+      channel: "D001",
+      ts: "1748510000.000003",
+    });
+
+    const input = parse(smart_send, {
+      user_query: "alice",
+      text: "hi alice",
+      send_as: "bot",
+      confirm: true,
+    });
+    await smart_send.handler(input, ctx(client));
+    const [, token] = client.postMessage.mock.calls[0] as [unknown, string];
+    expect(token).toBe("bot");
   });
 });
 

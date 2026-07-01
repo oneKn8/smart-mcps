@@ -112,7 +112,7 @@ Write tools are confirm-gated: they throw a `ConfirmRequiredError` with a human-
 |---|---|
 | `list_files` | List files visible to the user token. |
 | `file_info` | Get metadata for a single file by ID. |
-| `upload_file` | Upload a file to Slack via the 3-step external upload flow (write — confirm-gated). |
+| `upload_file` | Upload a file from a path, base64, or URL to Slack (write — confirm-gated). |
 
 ### Pins (3)
 
@@ -159,7 +159,9 @@ Write tools are confirm-gated: they throw a `ConfirmRequiredError` with a human-
 
 Write tools (`post_message`, `reply_in_thread`, `update_message`, `delete_message`, `schedule_message`, `add_reaction`, `remove_reaction`, `upload_file`, `pin_message`, `unpin_message`, `set_snooze`, `end_snooze`, `smart_send`, `invite_to_channel`, `set_channel_purpose`, `set_channel_topic`, `create_channel`, `create_canvas`, `update_canvas`) all call `guardDestructive` before touching the API. Without `confirm: true` they return a preview of the action and throw `ConfirmRequiredError`. Pass `confirm: true` to execute.
 
-Read tools default to the user token (`xoxp`). `post_message`, `reply_in_thread`, `update_message`, `delete_message`, and `schedule_message` accept a `send_as` field: `"bot"` (default) uses `SLACK_BOT_TOKEN`; `"user"` uses `SLACK_USER_TOKEN`.
+Read tools default to the user token (`xoxp`). `post_message`, `reply_in_thread`, `update_message`, `delete_message`, `schedule_message`, and `smart_send` accept a `send_as` field: `"user"` (default) uses `SLACK_USER_TOKEN`; `"bot"` uses `SLACK_BOT_TOKEN`. The default is `"user"` because the bot app is often not installed in the target workspace.
+
+`upload_file` takes exactly one source: `file_path`, `content_base64`, or `content_url` (`content_base64`/`content_url` also need `filename`). `file_path` is read from the **server's own filesystem**, so a path produced on another machine will not exist here — use `content_url` (an http/https link) or `content_base64` for caller-generated files. `content_url` fetches are SSRF-hardened: http(s) only, loopback/private/link-local/metadata destinations are rejected (for both IP literals and every resolved address), redirects are re-validated per hop, and the download is size-capped and timed out. The fetch runs only after `confirm: true`. Residual risk: DNS rebinding between validation and connection is not fully closed (would require connection-level IP pinning).
 
 ## Build and test
 
