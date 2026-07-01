@@ -30,7 +30,12 @@ export const APPS_SCRIPT_SCOPE =
   "https://www.googleapis.com/auth/script.projects " +
   "https://www.googleapis.com/auth/script.deployments " +
   "https://www.googleapis.com/auth/script.processes " +
-  "https://www.googleapis.com/auth/script.metrics";
+  "https://www.googleapis.com/auth/script.metrics " +
+  // Baseline runtime scope so scripts.run works for scripts that declare it
+  // (external HTTP only — touches no Google user data). Widen per-script by
+  // appending the scopes a given script's manifest oauthScopes requires
+  // (e.g. .../auth/drive, .../auth/gmail.modify) and re-authing.
+  "https://www.googleapis.com/auth/script.external_request";
 
 const CLIENT_JSON_RELATIVE = path.join(".santo-agent", "oauth", "client.json");
 const TOKEN_FILE_SUFFIX = ".script.json";
