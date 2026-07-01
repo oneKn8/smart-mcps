@@ -121,6 +121,23 @@ describe("moveTool", () => {
     expect(client.updateFile).not.toHaveBeenCalled();
   });
 
+  it("rejects moving a file the caller cannot edit (shared, not owned)", async () => {
+    const client = makeClient({
+      getFile: vi
+        .fn()
+        .mockResolvedValue(rawFile({ capabilities: { canEdit: false } })),
+    });
+    const parsed = moveTool.inputSchema.parse({
+      file_id: "file_alpha",
+      new_parent: "folder_new",
+    }) as Parameters<typeof moveTool.handler>[0];
+
+    await expect(
+      moveTool.handler(parsed, { client: client as unknown as never }),
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(client.updateFile).not.toHaveBeenCalled();
+  });
+
   it("auto-detect DROPS new_parent from removeParents when already a parent (M5)", async () => {
     const client = makeClient({
       getFile: vi

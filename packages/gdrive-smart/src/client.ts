@@ -18,7 +18,7 @@ const GDRIVE_REQUIRED_SCOPE = "https://www.googleapis.com/auth/drive";
  */
 const FILE_FIELDS =
   "id,name,mimeType,parents,owners(displayName,emailAddress)," +
-  "webViewLink,trashed,starred,size,modifiedTime";
+  "webViewLink,trashed,starred,size,modifiedTime,capabilities(canEdit)";
 
 /** `fields` mask for files.list — the File mask nested under `files(...)`. */
 const LIST_FIELDS = `nextPageToken,files(${FILE_FIELDS})`;
@@ -565,8 +565,10 @@ export function mapGDriveAuthError(err: unknown, account: string): unknown {
       );
     }
     return new AuthError(
-      `drive token for account ${account} has insufficient scope — ` +
-        `re-run ${reauthHintFor(account)} to re-consent with the drive scope`,
+      `Drive returned 403 for account ${account}. Two common causes: (1) the ` +
+        `token lacks the drive scope — re-run ${reauthHintFor(account)} to ` +
+        `re-consent; or (2) you're modifying a file you don't own (shared with ` +
+        `you), which re-consent cannot fix — remove it from your Drive instead.`,
       { cause: err },
     );
   }

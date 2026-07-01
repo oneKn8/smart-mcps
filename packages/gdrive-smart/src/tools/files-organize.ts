@@ -51,13 +51,30 @@ export const moveTool = defineTool<MoveInput, MoveOutput, GDriveContext>({
   description: "Move a file to another folder",
   inputSchema: moveInputSchema,
   handler: async (input, ctx) => {
+    // Resolve the file once up front. This serves two purposes: (1) reject a
+    // move on a file the caller can't edit — typically a shared-with-you item
+    // you don't own — with an actionable message, instead of letting Drive
+    // return an opaque 403 that the client would mislabel as a scope error
+    // (mirrors the copy-folder guard below); (2) resolve current parent(s) for
+    // the auto-detach path. A file may legitimately have >1 parent on shared
+    // drives.
+    const currentRaw = await ctx.client.getFile(input.file_id);
+    const current = mapFile(currentRaw);
+    const canEdit = (currentRaw as { capabilities?: { canEdit?: boolean } })
+      .capabilities?.canEdit;
+    if (canEdit === false) {
+      throw new ValidationError(
+        `Cannot move \`${input.file_id}\` — you don't have edit rights on it, ` +
+          `most likely because it's shared with you rather than owned by you. ` +
+          `Shared items can't be moved via the API; remove them from your Drive ` +
+          `in the UI instead.`,
+      );
+    }
     let removeParents: string | undefined;
     if (input.remove_parent === undefined) {
-      // Auto-detect: read the file's real current parent(s) and detach them,
-      // but DROP new_parent if it is already a current parent — otherwise
-      // addParents === removeParents, which Drive rejects as a self-contradictory
-      // move (M5). A file may legitimately have >1 parent on shared drives.
-      const current = mapFile(await ctx.client.getFile(input.file_id));
+      // Auto-detect: detach the file's real current parent(s), but DROP
+      // new_parent if it is already a current parent — otherwise addParents ===
+      // removeParents, which Drive rejects as a self-contradictory move (M5).
       const toRemove = current.parents.filter((p) => p !== input.new_parent);
       if (toRemove.length > 0) {
         removeParents = toRemove.join(",");
@@ -65,7 +82,6 @@ export const moveTool = defineTool<MoveInput, MoveOutput, GDriveContext>({
     } else {
       // Explicit remove_parent: validate it really IS a current parent so we
       // never send a bogus removeParents that silently no-ops or errors (M5).
-      const current = mapFile(await ctx.client.getFile(input.file_id));
       if (!current.parents.includes(input.remove_parent)) {
         throw new ValidationError(
           `remove_parent \`${input.remove_parent}\` is not a current parent of ` +
