@@ -35,6 +35,16 @@ import {
   updateDraft,
   deleteDraft,
 } from "./drafts.js";
+import { createFilter, listFilters, deleteFilter } from "./filters.js";
+import { getVacation, updateVacation } from "./vacation.js";
+import {
+  getImap,
+  updateImap,
+  getPop,
+  updatePop,
+  updateLanguage,
+} from "./mail-client-settings.js";
+import { listSendAs, updateSendAs } from "./send-as.js";
 
 export const tools: ToolDefinition<unknown, unknown, EmailContext>[] = [
   // Send (5)
@@ -75,4 +85,20 @@ export const tools: ToolDefinition<unknown, unknown, EmailContext>[] = [
   sendDraft as unknown as ToolDefinition<unknown, unknown, EmailContext>,
   updateDraft as unknown as ToolDefinition<unknown, unknown, EmailContext>,
   deleteDraft as unknown as ToolDefinition<unknown, unknown, EmailContext>,
+  // Filters (3) — gmail.settings.basic; create_filter resolves label names
+  createFilter as unknown as ToolDefinition<unknown, unknown, EmailContext>,
+  listFilters as unknown as ToolDefinition<unknown, unknown, EmailContext>,
+  deleteFilter as unknown as ToolDefinition<unknown, unknown, EmailContext>,
+  // Vacation (2) — gmail.settings.basic
+  getVacation as unknown as ToolDefinition<unknown, unknown, EmailContext>,
+  updateVacation as unknown as ToolDefinition<unknown, unknown, EmailContext>,
+  // IMAP / POP / language (5) — gmail.settings.basic
+  getImap as unknown as ToolDefinition<unknown, unknown, EmailContext>,
+  updateImap as unknown as ToolDefinition<unknown, unknown, EmailContext>,
+  getPop as unknown as ToolDefinition<unknown, unknown, EmailContext>,
+  updatePop as unknown as ToolDefinition<unknown, unknown, EmailContext>,
+  updateLanguage as unknown as ToolDefinition<unknown, unknown, EmailContext>,
+  // Send-as (2) — gmail.settings.basic (signature / display name updates)
+  listSendAs as unknown as ToolDefinition<unknown, unknown, EmailContext>,
+  updateSendAs as unknown as ToolDefinition<unknown, unknown, EmailContext>,
 ];

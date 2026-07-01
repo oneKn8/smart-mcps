@@ -128,6 +128,61 @@ export type ListDraftsOpts = {
   pageToken?: string;
 };
 
+// ---- Settings surface: filters / vacation / imap / pop / language / sendAs ----
+// These types are the camelCase Gmail wire shapes that client methods send.
+// The snake_case slim shapes returned to MCP callers live in settings-mapper.ts.
+
+export type GmailFilterCriteria = {
+  from?: string;
+  to?: string;
+  subject?: string;
+  query?: string;
+  negatedQuery?: string;
+  hasAttachment?: boolean;
+  excludeChats?: boolean;
+  size?: number;
+  sizeComparison?: "unspecified" | "smaller" | "larger";
+};
+
+export type GmailFilterAction = {
+  addLabelIds?: string[];
+  removeLabelIds?: string[];
+  forward?: string;
+};
+
+export type CreateFilterOpts = {
+  criteria: GmailFilterCriteria;
+  action: GmailFilterAction;
+};
+
+export type GmailVacationSettings = {
+  enableAutoReply?: boolean;
+  responseSubject?: string;
+  responseBodyPlainText?: string;
+  responseBodyHtml?: string;
+  restrictToContacts?: boolean;
+  restrictToDomain?: boolean;
+  startTime?: string;
+  endTime?: string;
+};
+
+export type GmailImapSettings = {
+  enabled?: boolean;
+  autoExpunge?: boolean;
+  expungeBehavior?: string;
+  maxFolderSize?: number;
+};
+
+export type GmailPopSettings = {
+  accessWindow?: string;
+  disposition?: string;
+};
+
+export type UpdateSendAsOpts = {
+  signature?: string;
+  displayName?: string;
+};
+
 export class EmailClient {
   private readonly oauthClients = new Map<string, GoogleOAuthClient>();
   private readonly home: string | undefined;
@@ -672,6 +727,225 @@ export class EmailClient {
       id,
     );
   }
+
+  // --- Settings: filters -----------------------------------------------------
+  // Path uses `me` (the authed user, selected by oauthFor(account)) to match the
+  // existing send/read/label convention; Gmail's userId path param accepts "me".
+  // 403 here means the token lacks gmail.settings.basic (not gmail.modify), so
+  // these use a settings-specific scope-insufficient error mapper.
+
+  /**
+   * POST /users/me/settings/filters — create a mail filter. Body is a Filter
+   * resource (criteria + action, no id); Gmail returns the created Filter with a
+   * server-assigned id. Returns the raw resource for the tool layer to slim.
+   */
+  async createFilter(account: string, opts: CreateFilterOpts): Promise<unknown> {
+    const accessToken = await this.oauthFor(account).getAccessToken();
+    try {
+      return await fetchJson<unknown>(
+        `${GMAIL_API_BASE}/users/me/settings/filters`,
+        {
+          method: "POST",
+          body: { criteria: opts.criteria, action: opts.action },
+          token: accessToken,
+        },
+      );
+    } catch (err) {
+      throw mapGmailSettingsAuthError(err, account);
+    }
+  }
+
+  /**
+   * GET /users/me/settings/filters — list mail filters. Gmail returns
+   * `{ filter: [...] }`; normalized to a bare array (empty when the field is
+   * absent). Each element is a raw Filter for the tool layer to slim.
+   */
+  async listFilters(account: string): Promise<unknown[]> {
+    const accessToken = await this.oauthFor(account).getAccessToken();
+    let raw: { filter?: unknown[] };
+    try {
+      raw = await fetchJson(`${GMAIL_API_BASE}/users/me/settings/filters`, {
+        token: accessToken,
+      });
+    } catch (err) {
+      throw mapGmailSettingsAuthError(err, account);
+    }
+    return Array.isArray(raw.filter) ? raw.filter : [];
+  }
+
+  /**
+   * DELETE /users/me/settings/filters/{id} — remove a filter. Gmail returns 204.
+   * Recoverable only by recreating the filter.
+   */
+  async deleteFilter(account: string, filterId: string): Promise<void> {
+    const accessToken = await this.oauthFor(account).getAccessToken();
+    try {
+      await fetchJson<unknown>(
+        `${GMAIL_API_BASE}/users/me/settings/filters/${encodeURIComponent(filterId)}`,
+        { method: "DELETE", token: accessToken },
+      );
+    } catch (err) {
+      throw mapGmailSettingsAuthError(err, account);
+    }
+  }
+
+  // --- Settings: vacation ----------------------------------------------------
+
+  /** GET /users/me/settings/vacation — vacation auto-reply settings (raw). */
+  async getVacation(account: string): Promise<unknown> {
+    const accessToken = await this.oauthFor(account).getAccessToken();
+    try {
+      return await fetchJson<unknown>(
+        `${GMAIL_API_BASE}/users/me/settings/vacation`,
+        { token: accessToken },
+      );
+    } catch (err) {
+      throw mapGmailSettingsAuthError(err, account);
+    }
+  }
+
+  /**
+   * PUT /users/me/settings/vacation — replace vacation auto-reply settings.
+   * Body is a VacationSettings resource; PUT `{ enableAutoReply: false }` clears
+   * it. Returns the updated resource (raw).
+   */
+  async updateVacation(
+    account: string,
+    settings: GmailVacationSettings,
+  ): Promise<unknown> {
+    const accessToken = await this.oauthFor(account).getAccessToken();
+    try {
+      return await fetchJson<unknown>(
+        `${GMAIL_API_BASE}/users/me/settings/vacation`,
+        { method: "PUT", body: settings, token: accessToken },
+      );
+    } catch (err) {
+      throw mapGmailSettingsAuthError(err, account);
+    }
+  }
+
+  // --- Settings: imap / pop / language --------------------------------------
+
+  /** GET /users/me/settings/imap — IMAP access settings (raw). */
+  async getImap(account: string): Promise<unknown> {
+    const accessToken = await this.oauthFor(account).getAccessToken();
+    try {
+      return await fetchJson<unknown>(
+        `${GMAIL_API_BASE}/users/me/settings/imap`,
+        { token: accessToken },
+      );
+    } catch (err) {
+      throw mapGmailSettingsAuthError(err, account);
+    }
+  }
+
+  /** PUT /users/me/settings/imap — replace IMAP access settings (raw echo). */
+  async updateImap(
+    account: string,
+    settings: GmailImapSettings,
+  ): Promise<unknown> {
+    const accessToken = await this.oauthFor(account).getAccessToken();
+    try {
+      return await fetchJson<unknown>(
+        `${GMAIL_API_BASE}/users/me/settings/imap`,
+        { method: "PUT", body: settings, token: accessToken },
+      );
+    } catch (err) {
+      throw mapGmailSettingsAuthError(err, account);
+    }
+  }
+
+  /** GET /users/me/settings/pop — POP access settings (raw). */
+  async getPop(account: string): Promise<unknown> {
+    const accessToken = await this.oauthFor(account).getAccessToken();
+    try {
+      return await fetchJson<unknown>(
+        `${GMAIL_API_BASE}/users/me/settings/pop`,
+        { token: accessToken },
+      );
+    } catch (err) {
+      throw mapGmailSettingsAuthError(err, account);
+    }
+  }
+
+  /** PUT /users/me/settings/pop — replace POP access settings (raw echo). */
+  async updatePop(
+    account: string,
+    settings: GmailPopSettings,
+  ): Promise<unknown> {
+    const accessToken = await this.oauthFor(account).getAccessToken();
+    try {
+      return await fetchJson<unknown>(
+        `${GMAIL_API_BASE}/users/me/settings/pop`,
+        { method: "PUT", body: settings, token: accessToken },
+      );
+    } catch (err) {
+      throw mapGmailSettingsAuthError(err, account);
+    }
+  }
+
+  /**
+   * PUT /users/me/settings/language — set the display language (RFC 3066 tag).
+   * Body is `{ displayLanguage }`; Gmail may echo back a close stored variant.
+   */
+  async updateLanguage(
+    account: string,
+    displayLanguage: string,
+  ): Promise<unknown> {
+    const accessToken = await this.oauthFor(account).getAccessToken();
+    try {
+      return await fetchJson<unknown>(
+        `${GMAIL_API_BASE}/users/me/settings/language`,
+        { method: "PUT", body: { displayLanguage }, token: accessToken },
+      );
+    } catch (err) {
+      throw mapGmailSettingsAuthError(err, account);
+    }
+  }
+
+  // --- Settings: sendAs ------------------------------------------------------
+
+  /**
+   * GET /users/me/settings/sendAs — list send-as aliases. Gmail returns
+   * `{ sendAs: [...] }`; normalized to a bare array (empty when absent). Each
+   * element is a raw SendAs for the tool layer to slim.
+   */
+  async listSendAs(account: string): Promise<unknown[]> {
+    const accessToken = await this.oauthFor(account).getAccessToken();
+    let raw: { sendAs?: unknown[] };
+    try {
+      raw = await fetchJson(`${GMAIL_API_BASE}/users/me/settings/sendAs`, {
+        token: accessToken,
+      });
+    } catch (err) {
+      throw mapGmailSettingsAuthError(err, account);
+    }
+    return Array.isArray(raw.sendAs) ? raw.sendAs : [];
+  }
+
+  /**
+   * PUT /users/me/settings/sendAs/{sendAsEmail} — update an existing alias's
+   * signature and/or display name. Only `signature` / `displayName` are sent.
+   * Returns the updated SendAs (raw).
+   */
+  async updateSendAs(
+    account: string,
+    sendAsEmail: string,
+    opts: UpdateSendAsOpts,
+  ): Promise<unknown> {
+    const accessToken = await this.oauthFor(account).getAccessToken();
+    const body: Record<string, unknown> = {};
+    if (opts.signature !== undefined) body["signature"] = opts.signature;
+    if (opts.displayName !== undefined) body["displayName"] = opts.displayName;
+    try {
+      return await fetchJson<unknown>(
+        `${GMAIL_API_BASE}/users/me/settings/sendAs/${encodeURIComponent(sendAsEmail)}`,
+        { method: "PUT", body, token: accessToken },
+      );
+    } catch (err) {
+      throw mapGmailSettingsAuthError(err, account);
+    }
+  }
 }
 
 /**
@@ -698,6 +972,31 @@ function mapGmailAuthError(err: unknown, account: string): unknown {
   if (msg.includes("→ 403")) {
     return new AuthError(
       `scope insufficient for account ${account} — re-run python3 ~/.santo-agent/bin/auth.py --account ${account} after expanding scope to gmail.modify`,
+      { cause: err },
+    );
+  }
+  if (msg.includes("→ 401")) {
+    return new AuthError(
+      `access token rejected for account ${account}; re-run python3 ~/.santo-agent/bin/auth.py --account ${account}`,
+      { cause: err },
+    );
+  }
+  return err;
+}
+
+/**
+ * Settings/filters variant of `mapGmailAuthError`. The settings surface needs
+ * the `gmail.settings.basic` scope, which is NOT implied by `gmail.modify` /
+ * `mail.google.com`, so a 403 here means a different scope bump than the
+ * send/read/modify surface. Promotes 403 to a scope-insufficient hint naming
+ * that scope; 401 to a token-rejected hint.
+ */
+function mapGmailSettingsAuthError(err: unknown, account: string): unknown {
+  if (!(err instanceof AuthError)) return err;
+  const msg = err.message;
+  if (msg.includes("→ 403")) {
+    return new AuthError(
+      `scope insufficient for account ${account} — re-run python3 ~/.santo-agent/bin/auth.py --account ${account} after expanding scope to gmail.settings.basic`,
       { cause: err },
     );
   }
