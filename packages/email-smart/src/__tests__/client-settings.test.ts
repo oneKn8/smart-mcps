@@ -316,12 +316,12 @@ describe("EmailClient.listSendAs / updateSendAs", () => {
     expect(await client.listSendAs("alice")).toEqual([]);
   });
 
-  it("PUTs /settings/sendAs/{email} with only signature + displayName", async () => {
+  it("PATCHes /settings/sendAs/{email} with only signature + displayName", async () => {
     let capturedBody: unknown;
     let capturedAuth: string | null = null;
     let capturedEmail: string | undefined;
     server.use(
-      http.put(`${SETTINGS}/sendAs/:email`, async ({ request, params }) => {
+      http.patch(`${SETTINGS}/sendAs/:email`, async ({ request, params }) => {
         capturedAuth = request.headers.get("authorization");
         capturedEmail = params["email"] as string;
         capturedBody = await request.json();
@@ -350,10 +350,10 @@ describe("EmailClient.listSendAs / updateSendAs", () => {
     });
   });
 
-  it("omits displayName from the PUT body when not provided", async () => {
+  it("omits displayName from the PATCH body when not provided", async () => {
     let capturedBody: unknown;
     server.use(
-      http.put(`${SETTINGS}/sendAs/:email`, async ({ request }) => {
+      http.patch(`${SETTINGS}/sendAs/:email`, async ({ request }) => {
         capturedBody = await request.json();
         return HttpResponse.json({ sendAsEmail: "alias@x.com" });
       }),

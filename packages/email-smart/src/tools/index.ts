@@ -45,6 +45,23 @@ import {
   updateLanguage,
 } from "./mail-client-settings.js";
 import { listSendAs, updateSendAs } from "./send-as.js";
+import {
+  getAutoForwarding,
+  updateAutoForwarding,
+  listForwardingAddresses,
+  createForwardingAddress,
+  deleteForwardingAddress,
+} from "./forwarding.js";
+import {
+  listDelegates,
+  createDelegate,
+  deleteDelegate,
+} from "./delegates.js";
+import {
+  deleteMessagePermanent,
+  deleteThreadPermanent,
+  batchDeleteMessages,
+} from "./permanent-delete.js";
 
 export const tools: ToolDefinition<unknown, unknown, EmailContext>[] = [
   // Send (5)
@@ -101,4 +118,19 @@ export const tools: ToolDefinition<unknown, unknown, EmailContext>[] = [
   // Send-as (2) — gmail.settings.basic (signature / display name updates)
   listSendAs as unknown as ToolDefinition<unknown, unknown, EmailContext>,
   updateSendAs as unknown as ToolDefinition<unknown, unknown, EmailContext>,
+  // Auto-forwarding (2) — gmail.settings.sharing; update gated when enabling
+  getAutoForwarding as unknown as ToolDefinition<unknown, unknown, EmailContext>,
+  updateAutoForwarding as unknown as ToolDefinition<unknown, unknown, EmailContext>,
+  // Forwarding addresses (3) — gmail.settings.sharing; create/delete gated
+  listForwardingAddresses as unknown as ToolDefinition<unknown, unknown, EmailContext>,
+  createForwardingAddress as unknown as ToolDefinition<unknown, unknown, EmailContext>,
+  deleteForwardingAddress as unknown as ToolDefinition<unknown, unknown, EmailContext>,
+  // Delegates (3) — gmail.settings.sharing; create/delete gated
+  listDelegates as unknown as ToolDefinition<unknown, unknown, EmailContext>,
+  createDelegate as unknown as ToolDefinition<unknown, unknown, EmailContext>,
+  deleteDelegate as unknown as ToolDefinition<unknown, unknown, EmailContext>,
+  // Permanent delete (3) — mail.google.com; hard-gated, batch dry_run default
+  deleteMessagePermanent as unknown as ToolDefinition<unknown, unknown, EmailContext>,
+  batchDeleteMessages as unknown as ToolDefinition<unknown, unknown, EmailContext>,
+  deleteThreadPermanent as unknown as ToolDefinition<unknown, unknown, EmailContext>,
 ];

@@ -183,6 +183,12 @@ export type UpdateSendAsOpts = {
   displayName?: string;
 };
 
+export type GmailAutoForwarding = {
+  enabled?: boolean;
+  emailAddress?: string;
+  disposition?: string;
+};
+
 export class EmailClient {
   private readonly oauthClients = new Map<string, GoogleOAuthClient>();
   private readonly home: string | undefined;
@@ -924,9 +930,11 @@ export class EmailClient {
   }
 
   /**
-   * PUT /users/me/settings/sendAs/{sendAsEmail} — update an existing alias's
-   * signature and/or display name. Only `signature` / `displayName` are sent.
-   * Returns the updated SendAs (raw).
+   * PATCH /users/me/settings/sendAs/{sendAsEmail} — partial update of an
+   * existing alias's signature and/or display name. PATCH (not PUT) so unsent
+   * fields like `replyToAddress` / `isDefault` are preserved; a PUT would
+   * replace the whole resource and silently reset them. Only `signature` /
+   * `displayName` are sent. Returns the updated SendAs (raw).
    */
   async updateSendAs(
     account: string,
@@ -940,10 +948,223 @@ export class EmailClient {
     try {
       return await fetchJson<unknown>(
         `${GMAIL_API_BASE}/users/me/settings/sendAs/${encodeURIComponent(sendAsEmail)}`,
-        { method: "PUT", body, token: accessToken },
+        { method: "PATCH", body, token: accessToken },
       );
     } catch (err) {
       throw mapGmailSettingsAuthError(err, account);
+    }
+  }
+
+  // --- Settings: auto-forwarding (sharing scope) -----------------------------
+  // 403 here means the token lacks gmail.settings.sharing (not just .basic), so
+  // these use a sharing-specific scope-insufficient error mapper.
+
+  /** GET /users/me/settings/autoForwarding — auto-forwarding settings (raw). */
+  async getAutoForwarding(account: string): Promise<unknown> {
+    const accessToken = await this.oauthFor(account).getAccessToken();
+    try {
+      return await fetchJson<unknown>(
+        `${GMAIL_API_BASE}/users/me/settings/autoForwarding`,
+        { token: accessToken },
+      );
+    } catch (err) {
+      throw mapGmailSharingAuthError(err, account);
+    }
+  }
+
+  /**
+   * PUT /users/me/settings/autoForwarding — replace auto-forwarding settings.
+   * Body is an AutoForwarding resource; `emailAddress` must already be a
+   * verified forwarding address when enabling. Returns the updated resource.
+   */
+  async updateAutoForwarding(
+    account: string,
+    settings: GmailAutoForwarding,
+  ): Promise<unknown> {
+    const accessToken = await this.oauthFor(account).getAccessToken();
+    try {
+      return await fetchJson<unknown>(
+        `${GMAIL_API_BASE}/users/me/settings/autoForwarding`,
+        { method: "PUT", body: settings, token: accessToken },
+      );
+    } catch (err) {
+      throw mapGmailSharingAuthError(err, account);
+    }
+  }
+
+  // --- Settings: forwarding addresses (sharing scope) ------------------------
+
+  /**
+   * GET /users/me/settings/forwardingAddresses — list forwarding addresses.
+   * Gmail returns `{ forwardingAddresses: [...] }`; normalized to a bare array
+   * (empty when absent). Each element is a raw ForwardingAddress to slim.
+   */
+  async listForwardingAddresses(account: string): Promise<unknown[]> {
+    const accessToken = await this.oauthFor(account).getAccessToken();
+    let raw: { forwardingAddresses?: unknown[] };
+    try {
+      raw = await fetchJson(
+        `${GMAIL_API_BASE}/users/me/settings/forwardingAddresses`,
+        { token: accessToken },
+      );
+    } catch (err) {
+      throw mapGmailSharingAuthError(err, account);
+    }
+    return Array.isArray(raw.forwardingAddresses) ? raw.forwardingAddresses : [];
+  }
+
+  /**
+   * POST /users/me/settings/forwardingAddresses — register a forwarding
+   * address. Body is `{ forwardingEmail }`; Gmail may set verificationStatus to
+   * `pending` and mail the address to confirm ownership. Returns the raw
+   * ForwardingAddress.
+   */
+  async createForwardingAddress(
+    account: string,
+    forwardingEmail: string,
+  ): Promise<unknown> {
+    const accessToken = await this.oauthFor(account).getAccessToken();
+    try {
+      return await fetchJson<unknown>(
+        `${GMAIL_API_BASE}/users/me/settings/forwardingAddresses`,
+        { method: "POST", body: { forwardingEmail }, token: accessToken },
+      );
+    } catch (err) {
+      throw mapGmailSharingAuthError(err, account);
+    }
+  }
+
+  /**
+   * DELETE /users/me/settings/forwardingAddresses/{forwardingEmail} — remove a
+   * forwarding address (revokes any verification). Gmail returns 204.
+   */
+  async deleteForwardingAddress(
+    account: string,
+    forwardingEmail: string,
+  ): Promise<void> {
+    const accessToken = await this.oauthFor(account).getAccessToken();
+    try {
+      await fetchJson<unknown>(
+        `${GMAIL_API_BASE}/users/me/settings/forwardingAddresses/${encodeURIComponent(forwardingEmail)}`,
+        { method: "DELETE", token: accessToken },
+      );
+    } catch (err) {
+      throw mapGmailSharingAuthError(err, account);
+    }
+  }
+
+  // --- Settings: delegates (sharing scope) -----------------------------------
+
+  /**
+   * GET /users/me/settings/delegates — list mailbox delegates. Gmail returns
+   * `{ delegates: [...] }`; normalized to a bare array (empty when absent). Each
+   * element is a raw Delegate to slim.
+   */
+  async listDelegates(account: string): Promise<unknown[]> {
+    const accessToken = await this.oauthFor(account).getAccessToken();
+    let raw: { delegates?: unknown[] };
+    try {
+      raw = await fetchJson(`${GMAIL_API_BASE}/users/me/settings/delegates`, {
+        token: accessToken,
+      });
+    } catch (err) {
+      throw mapGmailSharingAuthError(err, account);
+    }
+    return Array.isArray(raw.delegates) ? raw.delegates : [];
+  }
+
+  /**
+   * POST /users/me/settings/delegates — grant a delegate read/send/delete
+   * access to this mailbox. Body is `{ delegateEmail }`; Workspace-only and
+   * domain-restricted. Returns the raw Delegate.
+   */
+  async createDelegate(
+    account: string,
+    delegateEmail: string,
+  ): Promise<unknown> {
+    const accessToken = await this.oauthFor(account).getAccessToken();
+    try {
+      return await fetchJson<unknown>(
+        `${GMAIL_API_BASE}/users/me/settings/delegates`,
+        { method: "POST", body: { delegateEmail }, token: accessToken },
+      );
+    } catch (err) {
+      throw mapGmailSharingAuthError(err, account);
+    }
+  }
+
+  /**
+   * DELETE /users/me/settings/delegates/{delegateEmail} — revoke a delegate's
+   * access. Gmail returns 204.
+   */
+  async deleteDelegate(
+    account: string,
+    delegateEmail: string,
+  ): Promise<void> {
+    const accessToken = await this.oauthFor(account).getAccessToken();
+    try {
+      await fetchJson<unknown>(
+        `${GMAIL_API_BASE}/users/me/settings/delegates/${encodeURIComponent(delegateEmail)}`,
+        { method: "DELETE", token: accessToken },
+      );
+    } catch (err) {
+      throw mapGmailSharingAuthError(err, account);
+    }
+  }
+
+  // --- Permanent delete (mail.google.com scope; IRREVERSIBLE) ----------------
+  // These bypass Trash and cannot be undone. A 403 here means the token lacks
+  // the full `https://mail.google.com/` scope (gmail.modify is insufficient),
+  // so they use a delete-specific scope-insufficient error mapper.
+
+  /**
+   * DELETE /users/me/messages/{id} — immediately and PERMANENTLY delete a
+   * message (bypasses Trash, cannot be undone). Gmail returns 204.
+   */
+  async deleteMessage(account: string, messageId: string): Promise<void> {
+    const accessToken = await this.oauthFor(account).getAccessToken();
+    try {
+      await fetchJson<unknown>(
+        `${GMAIL_API_BASE}/users/me/messages/${encodeURIComponent(messageId)}`,
+        { method: "DELETE", token: accessToken },
+      );
+    } catch (err) {
+      throw mapGmailDeleteAuthError(err, account);
+    }
+  }
+
+  /**
+   * POST /users/me/messages/batchDelete — PERMANENTLY delete many messages by
+   * id (bypasses Trash, cannot be undone). Body is `{ ids }`; Gmail returns 204
+   * and gives no per-id error for already-deleted / nonexistent ids. Chunk to
+   * <=1000 ids per call (caller's responsibility).
+   */
+  async batchDeleteMessages(account: string, ids: string[]): Promise<void> {
+    const accessToken = await this.oauthFor(account).getAccessToken();
+    try {
+      await fetchJson<unknown>(
+        `${GMAIL_API_BASE}/users/me/messages/batchDelete`,
+        { method: "POST", body: { ids }, token: accessToken },
+      );
+    } catch (err) {
+      throw mapGmailDeleteAuthError(err, account);
+    }
+  }
+
+  /**
+   * DELETE /users/me/threads/{id} — immediately and PERMANENTLY delete a thread
+   * and every message in it (bypasses Trash, cannot be undone). Gmail returns
+   * 204.
+   */
+  async deleteThread(account: string, threadId: string): Promise<void> {
+    const accessToken = await this.oauthFor(account).getAccessToken();
+    try {
+      await fetchJson<unknown>(
+        `${GMAIL_API_BASE}/users/me/threads/${encodeURIComponent(threadId)}`,
+        { method: "DELETE", token: accessToken },
+      );
+    } catch (err) {
+      throw mapGmailDeleteAuthError(err, account);
     }
   }
 }
@@ -1007,4 +1228,50 @@ function mapGmailSettingsAuthError(err: unknown, account: string): unknown {
     );
   }
   return err;
+}
+
+/**
+ * Shared body for the scope-specific settings/delete auth mappers: promote a
+ * 403 to a scope-insufficient hint naming the exact scope this surface needs,
+ * and a 401 to a token-rejected hint. `scopeHint` is the scope string quoted in
+ * the re-auth guidance (e.g. `gmail.settings.sharing`, `https://mail.google.com/`).
+ */
+function mapScopeAuthError(
+  err: unknown,
+  account: string,
+  scopeHint: string,
+): unknown {
+  if (!(err instanceof AuthError)) return err;
+  const msg = err.message;
+  if (msg.includes("→ 403")) {
+    return new AuthError(
+      `scope insufficient for account ${account} — re-run python3 ~/.santo-agent/bin/auth.py --account ${account} after expanding scope to ${scopeHint}`,
+      { cause: err },
+    );
+  }
+  if (msg.includes("→ 401")) {
+    return new AuthError(
+      `access token rejected for account ${account}; re-run python3 ~/.santo-agent/bin/auth.py --account ${account}`,
+      { cause: err },
+    );
+  }
+  return err;
+}
+
+/**
+ * Sharing-scope variant. Auto-forwarding, forwarding addresses, and delegates
+ * need `gmail.settings.sharing`, which is NOT implied by `gmail.settings.basic`
+ * / `mail.google.com`. A 403 here names that scope.
+ */
+function mapGmailSharingAuthError(err: unknown, account: string): unknown {
+  return mapScopeAuthError(err, account, "gmail.settings.sharing");
+}
+
+/**
+ * Permanent-delete variant. messages.delete / batchDelete / threads.delete need
+ * the full `https://mail.google.com/` scope; `gmail.modify` is rejected. A 403
+ * here names that scope.
+ */
+function mapGmailDeleteAuthError(err: unknown, account: string): unknown {
+  return mapScopeAuthError(err, account, "https://mail.google.com/");
 }

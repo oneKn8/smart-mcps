@@ -1,15 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { tools } from "../tools/index.js";
 
-// email-smart shipped 30 tools through Phase 8. Phase 9-A adds the 12
+// email-smart shipped 30 tools through Phase 8. Phase 9-A added the 12
 // gmail.settings.basic tools (filters + vacation + imap/pop/language + send-as),
-// bringing the total to 42. A follow-up implementer (Phase 9-B: sharing scope +
-// permanent delete — auto-forwarding, forwarding addresses, delegates,
-// delete_message/thread_permanent, batch_delete_messages) will bump this count
-// further; update the assertion below when those land.
+// bringing the total to 42. Phase 9-B adds the 11 gmail.settings.sharing +
+// permanent-delete tools (auto-forwarding, forwarding addresses, delegates,
+// delete_message/thread_permanent, batch_delete_messages), bringing the total
+// to 53.
 describe("tools/index — wire", () => {
-  it("exports exactly 42 tools", () => {
-    expect(tools).toHaveLength(42);
+  it("exports exactly 53 tools", () => {
+    expect(tools).toHaveLength(53);
   });
 
   it("all tool names are unique", () => {
@@ -36,7 +36,7 @@ describe("tools/index — wire", () => {
     expect(new Set(descriptions).size).toBe(descriptions.length);
   });
 
-  it("contains the expected 42 tool names", () => {
+  it("contains the expected 53 tool names", () => {
     const expected = [
       // Send (5)
       "send_email",
@@ -92,6 +92,21 @@ describe("tools/index — wire", () => {
       // Send-as (2)
       "list_send_as",
       "update_send_as",
+      // Auto-forwarding (2)
+      "get_auto_forwarding",
+      "update_auto_forwarding",
+      // Forwarding addresses (3)
+      "list_forwarding_addresses",
+      "create_forwarding_address",
+      "delete_forwarding_address",
+      // Delegates (3)
+      "list_delegates",
+      "create_delegate",
+      "delete_delegate",
+      // Permanent delete (3)
+      "delete_message_permanent",
+      "batch_delete_messages",
+      "delete_thread_permanent",
     ].sort();
     expect(tools.map((t) => t.name).sort()).toEqual(expected);
   });

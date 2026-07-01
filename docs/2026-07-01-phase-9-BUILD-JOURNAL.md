@@ -11,8 +11,8 @@ Extends existing email-smart (30 tools) IN PLACE. Multi-account (methods take ac
 - [x] Implement A: filters + 12 basic-settings tools (42 total, 358->411 tests) — verified green +
       filter label-resolution inspected, committed. NOTE: introduced EMAIL_DEFAULT_ACCOUNT env for
       default identity; update_send_as used PUT (fix to PATCH in cross-verify — PUT clobbers other sendAs fields).
-- [~] Implement B: sharing + permanent-delete (11 tools) -> 53 total. SEQUENTIAL after A. (dispatched)
-      Also fix update_send_as PUT->PATCH.
+- [x] Implement B: sharing + 11 permanent-delete tools (53 total, 411->461 tests) — verified green +
+      gating inspected (12 guardDestructive sites), update_send_as PUT->PATCH fixed, committed+pushed.
 - [ ] Adversarial cross-verify (gating on delete/forwarding/delegates, filter label resolution)
 - [ ] LIVE E2E reversible paths (create_filter->list->delete; get_vacation; list_send_as). Irreversible
       (permanent delete, forwarding, delegates) NOT live-tested — unit+gating only, stated honestly.

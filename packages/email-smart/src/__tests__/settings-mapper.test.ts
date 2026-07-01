@@ -6,6 +6,9 @@ import {
   mapPop,
   mapLanguage,
   mapSendAs,
+  mapAutoForwarding,
+  mapForwardingAddress,
+  mapDelegate,
 } from "../settings-mapper.js";
 
 describe("mapFilter", () => {
@@ -159,5 +162,64 @@ describe("mapSendAs", () => {
   it("defaults send_as_email and omits absent fields", () => {
     const result = mapSendAs({ sendAsEmail: "a@x.com" });
     expect(Object.keys(result)).toEqual(["send_as_email"]);
+  });
+});
+
+describe("mapAutoForwarding", () => {
+  it("maps camelCase to snake_case slim shape", () => {
+    const result = mapAutoForwarding({
+      enabled: true,
+      emailAddress: "dest@x.com",
+      disposition: "archive",
+    });
+    expect(result).toEqual({
+      enabled: true,
+      email_address: "dest@x.com",
+      disposition: "archive",
+    });
+  });
+
+  it("strips upstream extras and defaults enabled to false", () => {
+    const result = mapAutoForwarding({ surprise: 1 });
+    expect(result).toEqual({ enabled: false });
+    expect(Object.keys(result)).toEqual(["enabled"]);
+  });
+});
+
+describe("mapForwardingAddress", () => {
+  it("maps forwardingEmail + verificationStatus", () => {
+    const result = mapForwardingAddress({
+      forwardingEmail: "dest@x.com",
+      verificationStatus: "accepted",
+    });
+    expect(result).toEqual({
+      forwarding_email: "dest@x.com",
+      verification_status: "accepted",
+    });
+  });
+
+  it("defaults forwarding_email and strips extras", () => {
+    const result = mapForwardingAddress({ mystery: true });
+    expect(result).toEqual({ forwarding_email: "" });
+    expect(Object.keys(result)).toEqual(["forwarding_email"]);
+  });
+});
+
+describe("mapDelegate", () => {
+  it("maps delegateEmail + verificationStatus", () => {
+    const result = mapDelegate({
+      delegateEmail: "assistant@x.com",
+      verificationStatus: "pending",
+    });
+    expect(result).toEqual({
+      delegate_email: "assistant@x.com",
+      verification_status: "pending",
+    });
+  });
+
+  it("defaults delegate_email and strips extras", () => {
+    const result = mapDelegate({ mystery: true });
+    expect(result).toEqual({ delegate_email: "" });
+    expect(Object.keys(result)).toEqual(["delegate_email"]);
   });
 });

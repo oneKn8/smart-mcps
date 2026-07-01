@@ -208,3 +208,57 @@ export function mapSendAs(raw: unknown): SlimSendAs {
     out.verification_status = verificationStatus;
   return out;
 }
+
+// ---------- AutoForwarding ----------
+
+export type SlimAutoForwarding = {
+  enabled: boolean;
+  email_address?: string;
+  disposition?: string;
+};
+
+export function mapAutoForwarding(raw: unknown): SlimAutoForwarding {
+  const obj = asObject(raw);
+  const out: SlimAutoForwarding = { enabled: bool(obj["enabled"]) ?? false };
+  const emailAddress = str(obj["emailAddress"]);
+  if (emailAddress !== undefined) out.email_address = emailAddress;
+  const disposition = str(obj["disposition"]);
+  if (disposition !== undefined) out.disposition = disposition;
+  return out;
+}
+
+// ---------- ForwardingAddress ----------
+
+export type SlimForwardingAddress = {
+  forwarding_email: string;
+  verification_status?: string;
+};
+
+export function mapForwardingAddress(raw: unknown): SlimForwardingAddress {
+  const obj = asObject(raw);
+  const out: SlimForwardingAddress = {
+    forwarding_email: str(obj["forwardingEmail"]) ?? "",
+  };
+  const verificationStatus = str(obj["verificationStatus"]);
+  if (verificationStatus !== undefined)
+    out.verification_status = verificationStatus;
+  return out;
+}
+
+// ---------- Delegate ----------
+
+export type SlimDelegate = {
+  delegate_email: string;
+  verification_status?: string;
+};
+
+export function mapDelegate(raw: unknown): SlimDelegate {
+  const obj = asObject(raw);
+  const out: SlimDelegate = {
+    delegate_email: str(obj["delegateEmail"]) ?? "",
+  };
+  const verificationStatus = str(obj["verificationStatus"]);
+  if (verificationStatus !== undefined)
+    out.verification_status = verificationStatus;
+  return out;
+}
