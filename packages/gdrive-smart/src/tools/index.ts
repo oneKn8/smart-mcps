@@ -25,16 +25,21 @@ import {
   updatePermissionTool,
   unshareTool,
 } from "./permissions.js";
+import {
+  uploadTool,
+  updateContentTool,
+  downloadTool,
+  exportFileTool,
+} from "./media.js";
 
 /**
  * Registry of every gdrive-smart tool. Imported by both `server.ts` (to
  * register with the MCP runtime) and `__tests__/wire.test.ts` (to assert
  * count + naming invariants without parsing server.ts).
  *
- * This half (JSON / organize / lifecycle / read / sharing) contributes 18
- * tools. The media implementer adds 4 more (upload / update_content /
- * download / export) in a separate file, which will bump the wire-test count
- * to 22.
+ * 22 tools total: 18 from the JSON half (organize / lifecycle / read /
+ * sharing) plus 4 from the media half (upload / update_content / download /
+ * export_file).
  */
 export const tools = [
   // Create / organize (3)
@@ -60,4 +65,9 @@ export const tools = [
   listPermissionsTool,
   updatePermissionTool,
   unshareTool,
+  // Media (4)
+  uploadTool,
+  updateContentTool,
+  downloadTool,
+  exportFileTool,
 ] as unknown as ToolDefinition<unknown, unknown, GDriveContext>[];

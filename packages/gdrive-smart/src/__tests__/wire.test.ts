@@ -4,10 +4,9 @@ import { tools } from "../tools/index.js";
 // Wire test: the canary that proves all tools land correctly. If a tool is
 // added/removed/renamed, exactly one assertion below fires — by design.
 //
-// This half (JSON / organize / lifecycle / read / sharing) registers exactly
-// 18 tools. The media implementer adds 4 more (upload / update_content /
-// download / export), which will bump the count here to 22 — update the
-// expected count + name list when that half lands.
+// 22 tools total: 18 from the JSON half (organize / lifecycle / read /
+// sharing) plus 4 from the media half (upload / update_content / download /
+// export_file).
 
 const EXPECTED_TOOLS = [
   // Create / organize (3)
@@ -33,14 +32,19 @@ const EXPECTED_TOOLS = [
   "list_permissions",
   "update_permission",
   "unshare",
+  // Media (4)
+  "upload",
+  "update_content",
+  "download",
+  "export_file",
 ] as const;
 
 describe("gdrive-smart wire", () => {
-  it("registers exactly 18 tools", () => {
-    expect(tools).toHaveLength(18);
+  it("registers exactly 22 tools", () => {
+    expect(tools).toHaveLength(22);
   });
 
-  it("matches the expected 18 tool names exactly", () => {
+  it("matches the expected 22 tool names exactly", () => {
     expect(tools.map((t) => t.name).sort()).toEqual([...EXPECTED_TOOLS].sort());
   });
 
