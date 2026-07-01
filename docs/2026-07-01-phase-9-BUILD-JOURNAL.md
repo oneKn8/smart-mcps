@@ -13,7 +13,13 @@ Extends existing email-smart (30 tools) IN PLACE. Multi-account (methods take ac
       default identity; update_send_as used PUT (fix to PATCH in cross-verify — PUT clobbers other sendAs fields).
 - [x] Implement B: sharing + 11 permanent-delete tools (53 total, 411->461 tests) — verified green +
       gating inspected (12 guardDestructive sites), update_send_as PUT->PATCH fixed, committed+pushed.
-- [ ] Adversarial cross-verify (gating on delete/forwarding/delegates, filter label resolution)
+- [x] Adversarial cross-verify: core gating SOLID. All 5 findings FIXED (461->473 tests): HIGH create_filter
+      forward action now gated; MED update_imap deleteForever gated; LOW filter name-first+ambiguity refusal;
+      LOW sharing-read scope hint -> settings.basic; LOW EMAIL_DEFAULT_ACCOUNT validated. Committed+pushed.
+- [ ] LIVE E2E reversible paths (create_filter->list->delete etc.) — pending Santo's scope re-auth.
+- WARNING: host root / is 100% full (1.8G free of 460G) — flag to Santo; may cause git/build flakiness.
+- auth.py (~/.santo-agent/bin/) SCOPES bumped to mail.google.com + settings.basic + settings.sharing.
+  Santo: register 3 scopes on consent screen (console.cloud.google.com/auth/scopes) + re-run auth.py. Pending.
 - [ ] LIVE E2E reversible paths (create_filter->list->delete; get_vacation; list_send_as). Irreversible
       (permanent delete, forwarding, delegates) NOT live-tested — unit+gating only, stated honestly.
 - [ ] Scope bump (email auth CLI -> mail.google.com + settings.basic + settings.sharing) + register + handoff

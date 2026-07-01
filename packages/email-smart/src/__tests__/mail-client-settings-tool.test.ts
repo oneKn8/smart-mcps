@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { ConfirmRequiredError } from "smart-mcp-core";
 import {
   getImap,
   updateImap,
@@ -82,16 +83,44 @@ describe("get_imap / update_imap", () => {
     });
   });
 
-  it("update_imap builds camelCase settings", async () => {
+  it("update_imap builds camelCase settings (deleteForever gated, confirm:true)", async () => {
     const { context, client } = makeContext();
     client.updateImap.mockImplementation(async (_a, s) => s);
     await updateImap.handler(
-      { account: "alice", enabled: true, expunge_behavior: "deleteForever" },
+      {
+        account: "alice",
+        enabled: true,
+        expunge_behavior: "deleteForever",
+        confirm: true,
+      },
       context,
     );
     expect(client.updateImap).toHaveBeenCalledWith("alice", {
       enabled: true,
       expungeBehavior: "deleteForever",
+    });
+  });
+
+  it("update_imap gates deleteForever: ConfirmRequiredError without confirm", async () => {
+    const { context, client } = makeContext();
+    await expect(
+      updateImap.handler(
+        { account: "alice", expunge_behavior: "deleteForever" },
+        context,
+      ),
+    ).rejects.toBeInstanceOf(ConfirmRequiredError);
+    expect(client.updateImap).not.toHaveBeenCalled();
+  });
+
+  it("update_imap does NOT gate a non-deleteForever expunge change", async () => {
+    const { context, client } = makeContext();
+    client.updateImap.mockImplementation(async (_a, s) => s);
+    await updateImap.handler(
+      { account: "alice", expunge_behavior: "trash" },
+      context,
+    );
+    expect(client.updateImap).toHaveBeenCalledWith("alice", {
+      expungeBehavior: "trash",
     });
   });
 });

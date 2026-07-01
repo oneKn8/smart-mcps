@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { defineTool } from "smart-mcp-core";
+import { defineTool, guardDestructive } from "smart-mcp-core";
 import type { EmailContext } from "../context.js";
 import type { GmailImapSettings, GmailPopSettings } from "../client.js";
 import {
@@ -42,6 +42,9 @@ const updateImapInputSchema = z
       .enum(["expungeBehaviorUnspecified", "archive", "trash", "deleteForever"])
       .optional(),
     max_folder_size: z.number().int().min(0).optional(),
+    // Gate for the data-loss path: `deleteForever` makes every future IMAP-client
+    // delete permanent (bypasses trash). Other imap updates stay ungated.
+    confirm: z.boolean().optional().default(false),
   })
   .refine(
     (d) =>
@@ -62,6 +65,13 @@ export const updateImap = defineTool<UpdateImapInput, SlimImap, EmailContext>({
   handler: async (input, context) => {
     const account = resolveAccount(input.account, context);
     rejectIfSmtp(account, context.home);
+    if (input.expunge_behavior === "deleteForever") {
+      guardDestructive({
+        confirm: input.confirm,
+        preview:
+          "Will set IMAP expunge to deleteForever — future IMAP-client deletes PERMANENTLY delete mail (bypass trash), not recoverable.",
+      });
+    }
     const settings: GmailImapSettings = {};
     if (input.enabled !== undefined) settings.enabled = input.enabled;
     if (input.auto_expunge !== undefined)

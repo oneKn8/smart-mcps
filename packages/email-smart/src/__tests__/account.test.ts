@@ -62,6 +62,14 @@ describe("resolveAccount", () => {
     expect(resolveAccount(undefined, ctx())).toBe("alice");
   });
 
+  it("throws when EMAIL_DEFAULT_ACCOUNT is not a configured identity", () => {
+    writeIdentity("alice");
+    writeIdentity("bob");
+    process.env.EMAIL_DEFAULT_ACCOUNT = "ghost";
+    expect(() => resolveAccount(undefined, ctx())).toThrow(ValidationError);
+    expect(() => resolveAccount(undefined, ctx())).toThrow(/ghost/);
+  });
+
   it("falls back to the single configured identity", () => {
     writeIdentity("solo");
     expect(resolveAccount(undefined, ctx())).toBe("solo");

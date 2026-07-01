@@ -968,7 +968,9 @@ export class EmailClient {
         { token: accessToken },
       );
     } catch (err) {
-      throw mapGmailSharingAuthError(err, account);
+      // READ: accepts gmail.settings.basic/modify/readonly — hint the lighter
+      // scope, not the sensitive sharing scope (which only the WRITE needs).
+      throw mapGmailSettingsAuthError(err, account);
     }
   }
 
@@ -1008,7 +1010,9 @@ export class EmailClient {
         { token: accessToken },
       );
     } catch (err) {
-      throw mapGmailSharingAuthError(err, account);
+      // READ: accepts gmail.settings.basic/modify/readonly — hint the lighter
+      // scope, not the sensitive sharing scope (which only the WRITES need).
+      throw mapGmailSettingsAuthError(err, account);
     }
     return Array.isArray(raw.forwardingAddresses) ? raw.forwardingAddresses : [];
   }
@@ -1068,7 +1072,9 @@ export class EmailClient {
         token: accessToken,
       });
     } catch (err) {
-      throw mapGmailSharingAuthError(err, account);
+      // READ: accepts gmail.settings.basic/modify/readonly — hint the lighter
+      // scope, not the sensitive sharing scope (which only the WRITES need).
+      throw mapGmailSettingsAuthError(err, account);
     }
     return Array.isArray(raw.delegates) ? raw.delegates : [];
   }

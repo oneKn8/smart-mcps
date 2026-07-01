@@ -21,7 +21,15 @@ export function resolveAccount(
 
   const envDefault = process.env.EMAIL_DEFAULT_ACCOUNT;
   if (typeof envDefault === "string" && envDefault.length > 0) {
-    return envDefault;
+    // Validate against the configured identities: a stale/typo env value would
+    // otherwise silently route settings writes to a nonexistent/wrong mailbox.
+    const configured = listIdentities(context.home);
+    if (configured.some((i) => i.account === envDefault)) return envDefault;
+    throw new ValidationError(
+      `EMAIL_DEFAULT_ACCOUNT '${envDefault}' is not a configured identity; configured: ${
+        configured.map((i) => i.account).join(", ") || "(none)"
+      }`,
+    );
   }
 
   const identities = listIdentities(context.home);

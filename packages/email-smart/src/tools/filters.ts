@@ -1,5 +1,10 @@
 import { z } from "zod";
-import { defineTool, NotFoundError } from "smart-mcp-core";
+import {
+  defineTool,
+  guardDestructive,
+  NotFoundError,
+  ValidationError,
+} from "smart-mcp-core";
 import type { EmailContext } from "../context.js";
 import type {
   GmailFilterAction,
@@ -55,6 +60,10 @@ const createFilterInputSchema = z
     account: z.string().min(1).optional(),
     criteria: criteriaSchema,
     action: actionSchema,
+    // Gate for the mail-redirect exfiltration path: an `action.forward` silently
+    // redirects matching incoming mail to an external address, so it requires
+    // explicit confirmation (label-only filters stay ungated).
+    confirm: z.boolean().optional().default(false),
   })
   .refine((d) => Object.values(d.criteria).some((v) => v !== undefined), {
     message: "criteria must have at least one field",
@@ -88,10 +97,15 @@ function buildCriteria(
 
 /**
  * Resolve label NAMES or ids to Gmail label ids for `create_filter`. Fetches
- * the account's labels once; a token matching a known id passes through, a
- * token matching a known name maps to that label's id, and a recognised system
- * label id passes through even if list_labels did not surface it. Anything else
- * is a NotFoundError so a typo never silently produces a no-op filter.
+ * the account's labels once. Resolution is NAME-FIRST: a user-supplied token is
+ * far more likely a human-readable name than a `Label_N` id, so a token matching
+ * a label name maps to that label's id. If the token is not a known name it is
+ * tried as an id, then as a recognised system label id (INBOX etc.), else a
+ * NotFoundError so a typo never silently produces a no-op filter.
+ *
+ * Ambiguity is refused rather than silently resolved: a token that is BOTH a
+ * label name AND a different label's id, or a name shared by multiple labels,
+ * throws a ValidationError so the caller passes an unambiguous id.
  */
 async function buildAction(
   context: EmailContext,
@@ -104,17 +118,38 @@ async function buildAction(
     (action.remove_label_ids?.length ?? 0) > 0;
 
   let byId: Set<string> | undefined;
-  let byName: Map<string, string> | undefined;
+  let nameToId: Map<string, string> | undefined;
+  let duplicateNames: Set<string> | undefined;
   if (needsLabels) {
     const labels = await context.client.listLabels(account);
     byId = new Set(labels.map((l) => l.id));
-    byName = new Map(labels.map((l) => [l.name, l.id]));
+    nameToId = new Map<string, string>();
+    duplicateNames = new Set<string>();
+    for (const l of labels) {
+      if (nameToId.has(l.name)) duplicateNames.add(l.name);
+      else nameToId.set(l.name, l.id);
+    }
   }
 
   const resolve = (token: string): string => {
+    // A name shared by 2+ labels is ambiguous; refuse rather than pick one.
+    if (duplicateNames?.has(token)) {
+      throw new ValidationError(
+        `label name "${token}" is ambiguous: multiple labels share this name; pass the exact label id instead`,
+      );
+    }
+    const nameId = nameToId?.get(token);
+    if (nameId !== undefined) {
+      // Token is a unique label NAME (name-first wins). It is still ambiguous if
+      // the same token is ALSO the id of a DIFFERENT label.
+      if (byId?.has(token) && token !== nameId) {
+        throw new ValidationError(
+          `token "${token}" is ambiguous: it is a label name (id ${nameId}) and also a label id; pass the unambiguous id`,
+        );
+      }
+      return nameId;
+    }
     if (byId?.has(token)) return token;
-    const named = byName?.get(token);
-    if (named !== undefined) return named;
     if (SYSTEM_LABEL_IDS.has(token)) return token;
     throw new NotFoundError(
       `label not found: ${token}; run list_labels to see available labels`,
@@ -138,6 +173,14 @@ export const createFilter = defineTool<CreateFilterInput, SlimFilter, EmailConte
   handler: async (input, context) => {
     const account = resolveAccount(input.account, context);
     rejectIfSmtp(account, context.home);
+    // Gate BEFORE any side effect (and before the label fetch): a forward action
+    // redirects matching incoming mail outside the account.
+    if (input.action.forward !== undefined) {
+      guardDestructive({
+        confirm: input.confirm,
+        preview: `Will create a filter that FORWARDS matching incoming mail to ${input.action.forward} OUTSIDE this account.`,
+      });
+    }
     const criteria = buildCriteria(input.criteria);
     const action = await buildAction(context, account, input.action);
     const created = await context.client.createFilter(account, {

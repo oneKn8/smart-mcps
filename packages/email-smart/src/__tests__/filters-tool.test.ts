@@ -2,7 +2,11 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { NotFoundError, ValidationError } from "smart-mcp-core";
+import {
+  NotFoundError,
+  ValidationError,
+  ConfirmRequiredError,
+} from "smart-mcp-core";
 import { createFilter, listFilters, deleteFilter } from "../tools/filters.js";
 import type { EmailClient } from "../client.js";
 import type { EmailContext } from "../context.js";
@@ -119,7 +123,7 @@ describe("create_filter tool", () => {
     });
   });
 
-  it("maps all criteria fields to camelCase for the client", async () => {
+  it("maps all criteria fields to camelCase for the client (forward gated, confirm:true)", async () => {
     const { context, client } = makeContext();
     client.createFilter.mockImplementation(async (_a, opts) => ({
       id: "F_c",
@@ -142,6 +146,7 @@ describe("create_filter tool", () => {
           size_comparison: "larger",
         },
         action: { forward: "dest@x.com" },
+        confirm: true,
       },
       context,
     );
@@ -162,6 +167,127 @@ describe("create_filter tool", () => {
     });
     // forward-only action does not fetch labels.
     expect(client.listLabels).not.toHaveBeenCalled();
+  });
+
+  it("gates a forward filter: ConfirmRequiredError without confirm", async () => {
+    const { context, client } = makeContext();
+    await expect(
+      createFilter.handler(
+        {
+          account: "alice",
+          criteria: { from: "a@b.com" },
+          action: { forward: "attacker@evil.com" },
+        },
+        context,
+      ),
+    ).rejects.toBeInstanceOf(ConfirmRequiredError);
+    // No filter is created and no labels are fetched before the gate.
+    expect(client.createFilter).not.toHaveBeenCalled();
+    expect(client.listLabels).not.toHaveBeenCalled();
+  });
+
+  it("surfaces the forward destination in the confirm preview", async () => {
+    const { context } = makeContext();
+    await expect(
+      createFilter.handler(
+        {
+          account: "alice",
+          criteria: { from: "a@b.com" },
+          action: { forward: "attacker@evil.com" },
+        },
+        context,
+      ),
+    ).rejects.toMatchObject({
+      preview: expect.stringContaining("attacker@evil.com"),
+    });
+  });
+
+  it("does NOT gate a label-only filter (no confirm needed)", async () => {
+    const { context, client } = makeContext();
+    client.listLabels.mockResolvedValue([
+      { id: "Label_7", name: "Critical", type: "user" },
+    ]);
+    client.createFilter.mockImplementation(async (_a, opts) => ({
+      id: "F_lbl",
+      criteria: opts.criteria,
+      action: opts.action,
+    }));
+    await createFilter.handler(
+      {
+        account: "alice",
+        criteria: { from: "a@b.com" },
+        action: { add_label_ids: ["Critical"] },
+      },
+      context,
+    );
+    expect(client.createFilter).toHaveBeenCalledWith("alice", {
+      criteria: { from: "a@b.com" },
+      action: { addLabelIds: ["Label_7"] },
+    });
+  });
+
+  it("throws on an ambiguous token that is both a label name and another label's id", async () => {
+    const { context, client } = makeContext();
+    // "Work" is the NAME of Label_7 and also the ID of a different label.
+    client.listLabels.mockResolvedValue([
+      { id: "Label_7", name: "Work", type: "user" },
+      { id: "Work", name: "Personal", type: "user" },
+    ]);
+    await expect(
+      createFilter.handler(
+        {
+          account: "alice",
+          criteria: { from: "a@b.com" },
+          action: { add_label_ids: ["Work"] },
+        },
+        context,
+      ),
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(client.createFilter).not.toHaveBeenCalled();
+  });
+
+  it("throws on a duplicate label name rather than silently picking one", async () => {
+    const { context, client } = makeContext();
+    client.listLabels.mockResolvedValue([
+      { id: "Label_1", name: "Finance", type: "user" },
+      { id: "Label_2", name: "Finance", type: "user" },
+    ]);
+    await expect(
+      createFilter.handler(
+        {
+          account: "alice",
+          criteria: { from: "a@b.com" },
+          action: { add_label_ids: ["Finance"] },
+        },
+        context,
+      ),
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(client.createFilter).not.toHaveBeenCalled();
+  });
+
+  it("resolves NAME-first: a token matching a name maps to that label's id", async () => {
+    const { context, client } = makeContext();
+    // Token "Archive" is a NAME here; name-first must win and map to Label_9.
+    client.listLabels.mockResolvedValue([
+      { id: "Label_9", name: "Archive", type: "user" },
+    ]);
+    client.createFilter.mockImplementation(async (_a, opts) => ({
+      id: "F_nf",
+      criteria: opts.criteria,
+      action: opts.action,
+    }));
+    await createFilter.handler(
+      {
+        account: "alice",
+        criteria: { from: "a@b.com" },
+        action: { add_label_ids: ["Archive"] },
+      },
+      context,
+    );
+    expect(client.createFilter).toHaveBeenCalledWith("alice", {
+      criteria: { from: "a@b.com" },
+      action: { addLabelIds: ["Label_9"] },
+    });
   });
 
   it("throws NotFoundError for an unknown label name", async () => {

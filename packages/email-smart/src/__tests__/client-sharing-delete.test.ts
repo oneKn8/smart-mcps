@@ -284,6 +284,58 @@ describe("EmailClient delegates", () => {
   });
 });
 
+// ============= Read-scope hints (READS need basic, not sharing) =============
+
+describe("sharing-family READ 403s hint the lighter settings.basic scope", () => {
+  it("getAutoForwarding 403 mentions gmail.settings.basic, not sharing", async () => {
+    server.use(
+      http.get(`${SETTINGS}/autoForwarding`, () =>
+        HttpResponse.json(
+          { error: { code: 403, message: "Insufficient Permission" } },
+          { status: 403 },
+        ),
+      ),
+    );
+    const client = new EmailClient(tmpHome);
+    const err = await client.getAutoForwarding("alice").catch((e) => e);
+    expect(err).toBeInstanceOf(AuthError);
+    expect((err as AuthError).message).toContain("gmail.settings.basic");
+    expect((err as AuthError).message).not.toContain("gmail.settings.sharing");
+  });
+
+  it("listForwardingAddresses 403 mentions gmail.settings.basic, not sharing", async () => {
+    server.use(
+      http.get(`${SETTINGS}/forwardingAddresses`, () =>
+        HttpResponse.json(
+          { error: { code: 403, message: "Insufficient Permission" } },
+          { status: 403 },
+        ),
+      ),
+    );
+    const client = new EmailClient(tmpHome);
+    const err = await client.listForwardingAddresses("alice").catch((e) => e);
+    expect(err).toBeInstanceOf(AuthError);
+    expect((err as AuthError).message).toContain("gmail.settings.basic");
+    expect((err as AuthError).message).not.toContain("gmail.settings.sharing");
+  });
+
+  it("listDelegates 403 mentions gmail.settings.basic, not sharing", async () => {
+    server.use(
+      http.get(`${SETTINGS}/delegates`, () =>
+        HttpResponse.json(
+          { error: { code: 403, message: "Insufficient Permission" } },
+          { status: 403 },
+        ),
+      ),
+    );
+    const client = new EmailClient(tmpHome);
+    const err = await client.listDelegates("alice").catch((e) => e);
+    expect(err).toBeInstanceOf(AuthError);
+    expect((err as AuthError).message).toContain("gmail.settings.basic");
+    expect((err as AuthError).message).not.toContain("gmail.settings.sharing");
+  });
+});
+
 // ============================ Permanent delete ==============================
 
 describe("EmailClient permanent delete", () => {
