@@ -23,8 +23,10 @@ const FILE_FIELDS =
 /** `fields` mask for files.list — the File mask nested under `files(...)`. */
 const LIST_FIELDS = `nextPageToken,files(${FILE_FIELDS})`;
 
-/** `fields` mask for permission-returning methods. */
-const PERMISSION_FIELDS = "id,type,role,emailAddress,domain";
+/** `fields` mask for permission-returning methods. `allowFileDiscovery`
+ * distinguishes a discoverable/searchable link from an anyone-with-the-link
+ * grant (L3). */
+const PERMISSION_FIELDS = "id,type,role,emailAddress,domain,allowFileDiscovery";
 
 /** files.list pageSize is capped at 100 by Drive; clamp to keep behavior sane. */
 const MAX_PAGE_SIZE = 100;
@@ -135,7 +137,7 @@ export class GDriveClient {
         method: "POST",
         token,
         body,
-        searchParams: { fields: FILE_FIELDS },
+        searchParams: { fields: FILE_FIELDS, supportsAllDrives: true },
       });
     } catch (err) {
       throw mapGDriveAuthError(err, this.account);
@@ -165,7 +167,7 @@ export class GDriveClient {
         method: "POST",
         token,
         body,
-        searchParams: { fields: FILE_FIELDS },
+        searchParams: { fields: FILE_FIELDS, supportsAllDrives: true },
       });
     } catch (err) {
       throw mapGDriveAuthError(err, this.account);
@@ -221,7 +223,7 @@ export class GDriveClient {
   ): Promise<unknown> {
     const token = await this.oauthClient.getAccessToken();
     const searchParams: Record<string, string | number | boolean | undefined> =
-      { fields: FILE_FIELDS };
+      { fields: FILE_FIELDS, supportsAllDrives: true };
     if (parents.addParents !== undefined) {
       searchParams.addParents = parents.addParents;
     }
@@ -258,7 +260,12 @@ export class GDriveClient {
     try {
       return await fetchJson<unknown>(
         `${GDRIVE_API_BASE}/files/${encodeURIComponent(fileId)}/copy`,
-        { method: "POST", token, body, searchParams: { fields: FILE_FIELDS } },
+        {
+          method: "POST",
+          token,
+          body,
+          searchParams: { fields: FILE_FIELDS, supportsAllDrives: true },
+        },
       );
     } catch (err) {
       if (err instanceof NotFoundError) {
@@ -282,7 +289,7 @@ export class GDriveClient {
     try {
       await fetchJson<unknown>(
         `${GDRIVE_API_BASE}/files/${encodeURIComponent(fileId)}`,
-        { method: "DELETE", token },
+        { method: "DELETE", token, searchParams: { supportsAllDrives: true } },
       );
     } catch (err) {
       if (err instanceof NotFoundError) {
@@ -322,7 +329,13 @@ export class GDriveClient {
     try {
       return await fetchJson<unknown>(
         `${GDRIVE_API_BASE}/files/${encodeURIComponent(fileId)}`,
-        { token, searchParams: { fields: fields ?? FILE_FIELDS } },
+        {
+          token,
+          searchParams: {
+            fields: fields ?? FILE_FIELDS,
+            supportsAllDrives: true,
+          },
+        },
       );
     } catch (err) {
       if (err instanceof NotFoundError) {
@@ -340,16 +353,31 @@ export class GDriveClient {
    * `files` normalized to `[]` when Google omits it.
    */
   async listFiles(
-    opts: { q?: string; pageSize?: number; pageToken?: string } = {},
+    opts: {
+      q?: string;
+      pageSize?: number;
+      pageToken?: string;
+      driveId?: string;
+      corpora?: string;
+    } = {},
   ): Promise<{ files: unknown[]; nextPageToken?: string }> {
     const token = await this.oauthClient.getAccessToken();
     const searchParams: Record<string, string | number | boolean | undefined> =
-      { fields: LIST_FIELDS };
+      { fields: LIST_FIELDS, supportsAllDrives: true };
     if (opts.q !== undefined) searchParams.q = opts.q;
     if (opts.pageSize !== undefined) {
       searchParams.pageSize = clampPageSize(opts.pageSize);
     }
     if (opts.pageToken !== undefined) searchParams.pageToken = opts.pageToken;
+    // Shared-drive listing: scoping to one drive requires driveId +
+    // includeItemsFromAllDrives; corpora defaults to `drive` for that scope (L5).
+    if (opts.driveId !== undefined) {
+      searchParams.driveId = opts.driveId;
+      searchParams.includeItemsFromAllDrives = true;
+      searchParams.corpora = opts.corpora ?? "drive";
+    } else if (opts.corpora !== undefined) {
+      searchParams.corpora = opts.corpora;
+    }
     let raw: { files?: unknown[]; nextPageToken?: string };
     try {
       raw = await fetchJson<{ files?: unknown[]; nextPageToken?: string }>(
@@ -385,6 +413,7 @@ export class GDriveClient {
       type: string;
       emailAddress?: string;
       domain?: string;
+      allowFileDiscovery?: boolean;
       sendNotificationEmail?: boolean;
       transferOwnership?: boolean;
     },
@@ -396,8 +425,13 @@ export class GDriveClient {
     };
     if (opts.emailAddress !== undefined) body.emailAddress = opts.emailAddress;
     if (opts.domain !== undefined) body.domain = opts.domain;
+    // allowFileDiscovery is a Permission-resource BODY field (L3): true =
+    // discoverable/searchable link, false = anyone-with-the-link only.
+    if (opts.allowFileDiscovery !== undefined) {
+      body.allowFileDiscovery = opts.allowFileDiscovery;
+    }
     const searchParams: Record<string, string | number | boolean | undefined> =
-      { fields: PERMISSION_FIELDS };
+      { fields: PERMISSION_FIELDS, supportsAllDrives: true };
     if (opts.sendNotificationEmail !== undefined) {
       searchParams.sendNotificationEmail = opts.sendNotificationEmail;
     }
@@ -428,7 +462,13 @@ export class GDriveClient {
     try {
       raw = await fetchJson<{ permissions?: unknown[] }>(
         `${GDRIVE_API_BASE}/files/${encodeURIComponent(fileId)}/permissions`,
-        { token, searchParams: { fields: `permissions(${PERMISSION_FIELDS})` } },
+        {
+          token,
+          searchParams: {
+            fields: `permissions(${PERMISSION_FIELDS})`,
+            supportsAllDrives: true,
+          },
+        },
       );
     } catch (err) {
       if (err instanceof NotFoundError) {
@@ -452,7 +492,7 @@ export class GDriveClient {
   ): Promise<unknown> {
     const token = await this.oauthClient.getAccessToken();
     const searchParams: Record<string, string | number | boolean | undefined> =
-      { fields: PERMISSION_FIELDS };
+      { fields: PERMISSION_FIELDS, supportsAllDrives: true };
     if (opts.transferOwnership !== undefined) {
       searchParams.transferOwnership = opts.transferOwnership;
     }
@@ -484,7 +524,7 @@ export class GDriveClient {
       await fetchJson<unknown>(
         `${GDRIVE_API_BASE}/files/${encodeURIComponent(fileId)}` +
           `/permissions/${encodeURIComponent(permissionId)}`,
-        { method: "DELETE", token },
+        { method: "DELETE", token, searchParams: { supportsAllDrives: true } },
       );
     } catch (err) {
       if (err instanceof NotFoundError) {

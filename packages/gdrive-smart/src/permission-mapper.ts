@@ -1,4 +1,4 @@
-import { nullableString } from "./null-helpers.js";
+import { nullableString, nullableBoolean } from "./null-helpers.js";
 
 /**
  * Slim Drive permission shape. Strips upstream noise (`kind`, `etag`,
@@ -17,6 +17,12 @@ export type SlimPermission = {
   role: "owner" | "organizer" | "fileOrganizer" | "writer" | "commenter" | "reader";
   email_address: string | null;
   domain: string | null;
+  /**
+   * For `domain`/`anyone` grants: `true` = a discoverable/searchable link,
+   * `false` = anyone-with-the-link only. `null` when Drive omits it (e.g.
+   * user/group grants, where it has no meaning) (L3).
+   */
+  allow_file_discovery: boolean | null;
 };
 
 const TYPE_VALUES = new Set(["user", "group", "domain", "anyone"]);
@@ -69,5 +75,6 @@ export function mapPermission(raw: unknown): SlimPermission {
     role: pickRole(obj),
     email_address: nullableString(obj.emailAddress),
     domain: nullableString(obj.domain),
+    allow_file_discovery: nullableBoolean(obj.allowFileDiscovery),
   };
 }

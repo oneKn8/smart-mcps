@@ -8,6 +8,8 @@ import {
   updateContent,
   downloadMedia,
   exportDoc,
+  validateMimeType,
+  assertNoTraversal,
 } from "../media.js";
 
 // =============================================================================
@@ -73,6 +75,8 @@ export const uploadTool = defineTool<UploadInput, MediaFileOutput, GDriveContext
   description: "Upload a local file to Drive",
   inputSchema: uploadInputSchema,
   handler: async (input, ctx) => {
+    assertNoTraversal(input.local_path);
+    if (input.mime_type !== undefined) validateMimeType(input.mime_type);
     assertLocalFileExists(input.local_path);
     const name = input.name ?? basename(input.local_path);
     const raw = await uploadMultipart(
@@ -110,6 +114,8 @@ export const updateContentTool = defineTool<
   description: "Replace a file's contents from a local file",
   inputSchema: updateContentInputSchema,
   handler: async (input, ctx) => {
+    assertNoTraversal(input.local_path);
+    if (input.mime_type !== undefined) validateMimeType(input.mime_type);
     assertLocalFileExists(input.local_path);
     const raw = await updateContent(
       tokenGetterOf(ctx),
@@ -131,9 +137,12 @@ export const updateContentTool = defineTool<
 const downloadInputSchema = z.object({
   file_id: z.string().min(1),
   dest_path: z.string().min(1),
+  /** Refuse to clobber an existing dest_path unless this is true (M4). */
+  overwrite: z.boolean().optional().default(false),
 });
 
-type DownloadInput = z.infer<typeof downloadInputSchema>;
+type DownloadInput = z.input<typeof downloadInputSchema>;
+type DownloadParsed = z.infer<typeof downloadInputSchema>;
 type DownloadOutput = { path: string; bytes: number };
 
 export const downloadTool = defineTool<
@@ -143,13 +152,17 @@ export const downloadTool = defineTool<
 >({
   name: "download",
   description: "Download a file's bytes to a local path",
-  inputSchema: downloadInputSchema,
+  // Cast required because `overwrite` has `.optional().default(...)`.
+  inputSchema: downloadInputSchema as unknown as z.ZodType<DownloadInput>,
   handler: async (input, ctx) => {
+    const parsed = input as DownloadParsed;
+    assertNoTraversal(parsed.dest_path);
     return downloadMedia(
       tokenGetterOf(ctx),
-      input.file_id,
-      input.dest_path,
+      parsed.file_id,
+      parsed.dest_path,
       ctx.client.getAccount(),
+      parsed.overwrite,
     );
   },
 });
@@ -163,9 +176,12 @@ const exportFileInputSchema = z.object({
   /** Target export MIME type, e.g. `application/pdf`. */
   mime_type: z.string().min(1),
   dest_path: z.string().min(1),
+  /** Refuse to clobber an existing dest_path unless this is true (M4). */
+  overwrite: z.boolean().optional().default(false),
 });
 
-type ExportFileInput = z.infer<typeof exportFileInputSchema>;
+type ExportFileInput = z.input<typeof exportFileInputSchema>;
+type ExportFileParsed = z.infer<typeof exportFileInputSchema>;
 type ExportFileOutput = { path: string; bytes: number; mime_type: string };
 
 export const exportFileTool = defineTool<
@@ -175,14 +191,18 @@ export const exportFileTool = defineTool<
 >({
   name: "export_file",
   description: "Export a Google doc to a local file",
-  inputSchema: exportFileInputSchema,
+  // Cast required because `overwrite` has `.optional().default(...)`.
+  inputSchema: exportFileInputSchema as unknown as z.ZodType<ExportFileInput>,
   handler: async (input, ctx) => {
+    const parsed = input as ExportFileParsed;
+    assertNoTraversal(parsed.dest_path);
     return exportDoc(
       tokenGetterOf(ctx),
-      input.file_id,
-      input.mime_type,
-      input.dest_path,
+      parsed.file_id,
+      parsed.mime_type,
+      parsed.dest_path,
       ctx.client.getAccount(),
+      parsed.overwrite,
     );
   },
 });

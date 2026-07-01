@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { getTool, listTool } from "../files-read.js";
+import { getTool, listTool, escapeQValue } from "../files-read.js";
 
 type FakeClient = {
   getFile: ReturnType<typeof vi.fn>;
@@ -115,5 +115,53 @@ describe("listTool", () => {
 
   it("rejects a page_size above 100 at the schema", () => {
     expect(() => listTool.inputSchema.parse({ page_size: 500 })).toThrow();
+  });
+
+  it("passes drive_id + corpora through for shared-drive listing (L5)", async () => {
+    const client = makeClient({
+      listFiles: vi.fn().mockResolvedValue({ files: [] }),
+    });
+    const parsed = listTool.inputSchema.parse({
+      folder_id: "folder_x",
+      drive_id: "drive_team",
+      corpora: "drive",
+    }) as Parameters<typeof listTool.handler>[0];
+
+    await listTool.handler(parsed, { client: client as unknown as never });
+
+    expect(client.listFiles).toHaveBeenCalledWith({
+      q: "'folder_x' in parents and trashed = false",
+      driveId: "drive_team",
+      corpora: "drive",
+    });
+  });
+
+  it("escapes a folder_id containing a single quote before building q (L1)", async () => {
+    const client = makeClient({
+      listFiles: vi.fn().mockResolvedValue({ files: [] }),
+    });
+    const parsed = listTool.inputSchema.parse({
+      folder_id: "abc' or trashed=false or '",
+    }) as Parameters<typeof listTool.handler>[0];
+
+    await listTool.handler(parsed, { client: client as unknown as never });
+
+    // The quote is backslash-escaped so it can't break out of the literal.
+    expect(client.listFiles).toHaveBeenCalledWith({
+      q: "'abc\\' or trashed=false or \\'' in parents and trashed = false",
+    });
+  });
+});
+
+describe("escapeQValue (L1)", () => {
+  it("escapes backslash first, then single quote", () => {
+    expect(escapeQValue("a'b")).toBe("a\\'b");
+    expect(escapeQValue("a\\b")).toBe("a\\\\b");
+    // backslash-before-quote must not double-escape the wrong char.
+    expect(escapeQValue("a\\'b")).toBe("a\\\\\\'b");
+  });
+
+  it("leaves an ordinary id unchanged", () => {
+    expect(escapeQValue("folder_x")).toBe("folder_x");
   });
 });

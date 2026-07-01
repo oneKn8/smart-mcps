@@ -7,6 +7,7 @@ const SLIM_KEYS: ReadonlyArray<keyof SlimPermission> = [
   "role",
   "email_address",
   "domain",
+  "allow_file_discovery",
 ];
 
 function fixture(over: Record<string, unknown> = {}): Record<string, unknown> {
@@ -27,6 +28,7 @@ describe("mapPermission — basics", () => {
       role: "writer",
       email_address: "alice@example.test",
       domain: null,
+      allow_file_discovery: null,
     });
   });
 
@@ -36,6 +38,7 @@ describe("mapPermission — basics", () => {
       type: "domain",
       role: "reader",
       domain: "example.test",
+      allowFileDiscovery: true,
     });
     expect(slim).toEqual({
       id: "perm_domain",
@@ -43,7 +46,24 @@ describe("mapPermission — basics", () => {
       role: "reader",
       email_address: null,
       domain: "example.test",
+      allow_file_discovery: true,
     });
+  });
+
+  it("surfaces allowFileDiscovery for an anyone link (L3)", () => {
+    expect(
+      mapPermission({
+        id: "anyoneWithLink",
+        type: "anyone",
+        role: "reader",
+        allowFileDiscovery: false,
+      }).allow_file_discovery,
+    ).toBe(false);
+    // Absent -> null (never leaks a fabricated boolean).
+    expect(
+      mapPermission({ id: "p", type: "user", role: "writer" })
+        .allow_file_discovery,
+    ).toBeNull();
   });
 
   it("maps an anyone (public link) permission with both principals null", () => {

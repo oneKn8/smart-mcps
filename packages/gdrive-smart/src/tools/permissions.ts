@@ -27,6 +27,12 @@ const shareInputSchema = z.object({
   type: typeSchema,
   email_address: z.string().optional(),
   domain: z.string().optional(),
+  /**
+   * Only meaningful for type 'anyone' (L3): true = a discoverable/searchable
+   * public link, false (default) = anyone-with-the-link only. Defaults to the
+   * safer link-only behavior.
+   */
+  allow_file_discovery: z.boolean().optional(),
   send_notification_email: z.boolean().optional(),
   transfer_ownership: z.boolean().optional().default(false),
   confirm: z.boolean().optional().default(false),
@@ -93,6 +99,12 @@ export const shareTool = defineTool<ShareInput, ShareOutput, GDriveContext>({
       preview +=
         " WARNING: this TRANSFERS OWNERSHIP — you will be downgraded to writer and may lose control of the file.";
     }
+    // organizer is the shared-drive owner-equivalent role (full control,
+    // including managing members / deleting) — flag it in the gate preview (L4).
+    if (parsed.role === "organizer") {
+      preview +=
+        " WARNING: 'organizer' is the shared-drive owner-equivalent role (full control).";
+    }
     guardDestructive({ confirm: parsed.confirm, preview });
 
     const raw = await ctx.client.createPermission(parsed.file_id, {
@@ -102,6 +114,11 @@ export const shareTool = defineTool<ShareInput, ShareOutput, GDriveContext>({
         ? { emailAddress: parsed.email_address }
         : {}),
       ...(parsed.domain !== undefined ? { domain: parsed.domain } : {}),
+      // Link-only by default for a public 'anyone' grant; surfaced so callers
+      // must opt in to a discoverable/searchable link (L3).
+      ...(parsed.type === "anyone"
+        ? { allowFileDiscovery: parsed.allow_file_discovery ?? false }
+        : {}),
       sendNotificationEmail,
       ...(transferOwnership ? { transferOwnership: true } : {}),
     });
@@ -165,13 +182,20 @@ export const updatePermissionTool = defineTool<
     const transferOwnership =
       parsed.role === "owner" || parsed.transfer_ownership;
 
-    // Only elevating to owner / transferring ownership is hard to reverse;
-    // plain role changes (e.g. writer -> reader) apply without a gate.
+    // Elevating to owner (ownership transfer) OR to organizer (shared-drive
+    // owner-equivalent, full control) is hard to reverse and must be gated;
+    // plain role changes (e.g. writer -> reader) apply without a gate (L4).
     if (transferOwnership) {
       const preview =
         `Change permission \`${parsed.permission_id}\` on file \`${parsed.file_id}\` ` +
         `to role '${parsed.role}'. WARNING: this TRANSFERS OWNERSHIP — you will be ` +
         "downgraded to writer and may lose control of the file.";
+      guardDestructive({ confirm: parsed.confirm, preview });
+    } else if (parsed.role === "organizer") {
+      const preview =
+        `Change permission \`${parsed.permission_id}\` on file \`${parsed.file_id}\` ` +
+        "to role 'organizer'. WARNING: 'organizer' is the shared-drive " +
+        "owner-equivalent role (full control, including managing members and deleting).";
       guardDestructive({ confirm: parsed.confirm, preview });
     }
 

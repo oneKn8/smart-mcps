@@ -540,8 +540,9 @@ describe("GDriveClient — permissions", () => {
     expect(capturedUrl?.searchParams.get("sendNotificationEmail")).toBe("false");
     expect(capturedUrl?.searchParams.get("transferOwnership")).toBe("false");
     expect(capturedUrl?.searchParams.get("fields")).toBe(
-      "id,type,role,emailAddress,domain",
+      "id,type,role,emailAddress,domain,allowFileDiscovery",
     );
+    expect(capturedUrl?.searchParams.get("supportsAllDrives")).toBe("true");
     expect(out).toEqual({ id: "perm_new", type: "user", role: "writer" });
   });
 
@@ -557,7 +558,7 @@ describe("GDriveClient — permissions", () => {
     const c = new GDriveClient("alice", { home: tmpHome });
     const out = await c.listPermissions("file_alpha");
     expect(capturedUrl?.searchParams.get("fields")).toBe(
-      "permissions(id,type,role,emailAddress,domain)",
+      "permissions(id,type,role,emailAddress,domain,allowFileDiscovery)",
     );
     expect(out).toEqual([{ id: "perm_a" }]);
   });
@@ -622,5 +623,96 @@ describe("GDriveClient — permissions", () => {
       name: "NotFoundError",
       message: expect.stringContaining("perm_ghost"),
     });
+  });
+
+  it("createPermission sends allowFileDiscovery in the body when provided (L3)", async () => {
+    writeGoodToken();
+    let captured: unknown;
+    server.use(
+      http.post(PERMISSIONS_URL("file_alpha"), async ({ request }) => {
+        captured = await request.json();
+        return HttpResponse.json({ id: "anyoneWithLink", type: "anyone", role: "reader" });
+      }),
+    );
+    const c = new GDriveClient("alice", { home: tmpHome });
+    await c.createPermission("file_alpha", {
+      role: "reader",
+      type: "anyone",
+      allowFileDiscovery: false,
+    });
+    expect(captured).toEqual({
+      role: "reader",
+      type: "anyone",
+      allowFileDiscovery: false,
+    });
+  });
+});
+
+// =============================================================================
+// L5 — shared-drive support (supportsAllDrives + drive_id/corpora)
+// =============================================================================
+
+describe("GDriveClient — shared drives (L5)", () => {
+  it("adds supportsAllDrives=true on a representative files call", async () => {
+    writeGoodToken();
+    let capturedUrl: URL | undefined;
+    server.use(
+      http.post(FILES_URL, ({ request }) => {
+        capturedUrl = new URL(request.url);
+        return HttpResponse.json({ id: "folder_new" });
+      }),
+    );
+    const c = new GDriveClient("alice", { home: tmpHome });
+    await c.createFolder({ name: "Invoices" });
+    expect(capturedUrl?.searchParams.get("supportsAllDrives")).toBe("true");
+  });
+
+  it("adds supportsAllDrives=true on getFile", async () => {
+    writeGoodToken();
+    let capturedUrl: URL | undefined;
+    server.use(
+      http.get(FILE_URL("file_alpha"), ({ request }) => {
+        capturedUrl = new URL(request.url);
+        return HttpResponse.json({ id: "file_alpha" });
+      }),
+    );
+    const c = new GDriveClient("alice", { home: tmpHome });
+    await c.getFile("file_alpha");
+    expect(capturedUrl?.searchParams.get("supportsAllDrives")).toBe("true");
+  });
+
+  it("passes driveId + includeItemsFromAllDrives + corpora on listFiles", async () => {
+    writeGoodToken();
+    let capturedUrl: URL | undefined;
+    server.use(
+      http.get(FILES_URL, ({ request }) => {
+        capturedUrl = new URL(request.url);
+        return HttpResponse.json({ files: [] });
+      }),
+    );
+    const c = new GDriveClient("alice", { home: tmpHome });
+    await c.listFiles({ q: "trashed=false", driveId: "drive_team" });
+    expect(capturedUrl?.searchParams.get("driveId")).toBe("drive_team");
+    expect(capturedUrl?.searchParams.get("includeItemsFromAllDrives")).toBe(
+      "true",
+    );
+    expect(capturedUrl?.searchParams.get("corpora")).toBe("drive");
+    expect(capturedUrl?.searchParams.get("supportsAllDrives")).toBe("true");
+  });
+
+  it("honors an explicit corpora and omits drive-only params without driveId", async () => {
+    writeGoodToken();
+    let capturedUrl: URL | undefined;
+    server.use(
+      http.get(FILES_URL, ({ request }) => {
+        capturedUrl = new URL(request.url);
+        return HttpResponse.json({ files: [] });
+      }),
+    );
+    const c = new GDriveClient("alice", { home: tmpHome });
+    await c.listFiles({ corpora: "allDrives" });
+    expect(capturedUrl?.searchParams.get("corpora")).toBe("allDrives");
+    expect(capturedUrl?.searchParams.get("driveId")).toBeNull();
+    expect(capturedUrl?.searchParams.get("includeItemsFromAllDrives")).toBeNull();
   });
 });

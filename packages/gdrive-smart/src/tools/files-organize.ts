@@ -51,14 +51,32 @@ export const moveTool = defineTool<MoveInput, MoveOutput, GDriveContext>({
   description: "Move a file to another folder",
   inputSchema: moveInputSchema,
   handler: async (input, ctx) => {
-    let removeParents = input.remove_parent;
-    if (removeParents === undefined) {
-      // A Drive file has one parent, but read the actual current parent(s) so
-      // the move detaches from wherever the file really lives (§2.3).
+    let removeParents: string | undefined;
+    if (input.remove_parent === undefined) {
+      // Auto-detect: read the file's real current parent(s) and detach them,
+      // but DROP new_parent if it is already a current parent — otherwise
+      // addParents === removeParents, which Drive rejects as a self-contradictory
+      // move (M5). A file may legitimately have >1 parent on shared drives.
       const current = mapFile(await ctx.client.getFile(input.file_id));
-      if (current.parents.length > 0) {
-        removeParents = current.parents.join(",");
+      const toRemove = current.parents.filter((p) => p !== input.new_parent);
+      if (toRemove.length > 0) {
+        removeParents = toRemove.join(",");
       }
+    } else {
+      // Explicit remove_parent: validate it really IS a current parent so we
+      // never send a bogus removeParents that silently no-ops or errors (M5).
+      const current = mapFile(await ctx.client.getFile(input.file_id));
+      if (!current.parents.includes(input.remove_parent)) {
+        throw new ValidationError(
+          `remove_parent \`${input.remove_parent}\` is not a current parent of ` +
+            `\`${input.file_id}\` (current parents: ${
+              current.parents.length > 0
+                ? current.parents.map((p) => `\`${p}\``).join(", ")
+                : "none"
+            }).`,
+        );
+      }
+      removeParents = input.remove_parent;
     }
     const raw = await ctx.client.updateFile(
       input.file_id,

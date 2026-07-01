@@ -9,7 +9,12 @@ import {
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AuthError, NotFoundError, UpstreamError } from "smart-mcp-core";
+import {
+  AuthError,
+  NotFoundError,
+  UpstreamError,
+  ValidationError,
+} from "smart-mcp-core";
 import {
   uploadMultipart,
   updateContent,
@@ -176,6 +181,158 @@ describe("uploadMultipart", () => {
       uploadMultipart(getToken, { name: "u.txt", localPath }, ACCOUNT),
     ).rejects.toBeInstanceOf(AuthError);
   });
+
+  it("uses a crypto.randomUUID-based multipart boundary (L2)", async () => {
+    const localPath = join(dir, "boundary.txt");
+    writeFileSync(localPath, "x");
+    const fetchMock = vi.fn().mockResolvedValue(okJson({ id: "f" }));
+    vi.stubGlobal("fetch", fetchMock);
+    await uploadMultipart(getToken, { name: "boundary.txt", localPath }, ACCOUNT);
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const ct = (init.headers as Record<string, string>)["content-type"];
+    expect(ct).toMatch(
+      /boundary=gdrive_smart_boundary_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    );
+  });
+});
+
+// =============================================================================
+// C1 — mime_type header-injection defense
+// =============================================================================
+
+describe("mime_type validation (C1 header injection)", () => {
+  const INJECTION = "text/plain\r\nX-Injected: pwned\r\n\r\nEVIL";
+
+  it("rejects a CRLF-injecting mime_type in uploadMultipart and builds NO body", async () => {
+    const localPath = join(dir, "evil.txt");
+    writeFileSync(localPath, "data");
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      uploadMultipart(
+        getToken,
+        { name: "evil.txt", localPath, mimeType: INJECTION },
+        ACCOUNT,
+      ),
+    ).rejects.toBeInstanceOf(ValidationError);
+    // No request was ever assembled or sent.
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects the same injection in updateContent and builds NO body", async () => {
+    const localPath = join(dir, "evil2.txt");
+    writeFileSync(localPath, "data");
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      updateContent(getToken, "file_1", { localPath, mimeType: INJECTION }, ACCOUNT),
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a bare control char and a non type/subtype value", async () => {
+    const localPath = join(dir, "c.txt");
+    writeFileSync(localPath, "data");
+    vi.stubGlobal("fetch", vi.fn());
+    await expect(
+      uploadMultipart(
+        getToken,
+        { name: "c.txt", localPath, mimeType: "text/plain\x00" },
+        ACCOUNT,
+      ),
+    ).rejects.toBeInstanceOf(ValidationError);
+    await expect(
+      uploadMultipart(
+        getToken,
+        { name: "c.txt", localPath, mimeType: "not-a-mime" },
+        ACCOUNT,
+      ),
+    ).rejects.toBeInstanceOf(ValidationError);
+  });
+
+  it("accepts a clean RFC 6838 mime_type", async () => {
+    const localPath = join(dir, "ok.txt");
+    writeFileSync(localPath, "data");
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(okJson({ id: "f" })));
+    await expect(
+      uploadMultipart(
+        getToken,
+        { name: "ok.txt", localPath, mimeType: "image/jpeg" },
+        ACCOUNT,
+      ),
+    ).resolves.toBeDefined();
+  });
+});
+
+// =============================================================================
+// M4 — path safety (traversal + overwrite)
+// =============================================================================
+
+describe("path safety (M4)", () => {
+  it("downloadMedia rejects a dest_path with a .. traversal segment (no fetch)", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(
+      downloadMedia(getToken, "f", "/home/user/../etc/passwd", ACCOUNT),
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("uploadMultipart rejects a local_path with a .. traversal segment (no fetch)", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(
+      uploadMultipart(getToken, { name: "x", localPath: "/a/../secret" }, ACCOUNT),
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("downloadMedia refuses to overwrite an existing file unless overwrite=true", async () => {
+    const dest = join(dir, "exists.bin");
+    writeFileSync(dest, "old");
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(okBytes(new Uint8Array([1, 2, 3])));
+    vi.stubGlobal("fetch", fetchMock);
+
+    // Without the flag: refuse, and never hit the network.
+    await expect(
+      downloadMedia(getToken, "f", dest, ACCOUNT),
+    ).rejects.toMatchObject({
+      name: "ValidationError",
+      message: expect.stringContaining(dest),
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    // With overwrite=true: writes the new bytes.
+    const res = await downloadMedia(getToken, "f", dest, ACCOUNT, true);
+    expect(res.bytes).toBe(3);
+    expect(Array.from(readFileSync(dest))).toEqual([1, 2, 3]);
+  });
+
+  it("exportDoc refuses to overwrite an existing file unless overwrite=true", async () => {
+    const dest = join(dir, "doc.pdf");
+    writeFileSync(dest, "old");
+    const fetchMock = vi.fn().mockResolvedValue(okBytes(new Uint8Array([80])));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      exportDoc(getToken, "d", "application/pdf", dest, ACCOUNT),
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    const res = await exportDoc(
+      getToken,
+      "d",
+      "application/pdf",
+      dest,
+      ACCOUNT,
+      true,
+    );
+    expect(res.bytes).toBe(1);
+  });
 });
 
 describe("updateContent", () => {
@@ -263,6 +420,40 @@ describe("downloadMedia", () => {
     await expect(
       downloadMedia(getToken, "file_dl", join(dir, "o"), ACCOUNT),
     ).rejects.toBeInstanceOf(UpstreamError);
+  });
+
+  it("maps a 403 fileNotDownloadable to a ValidationError pointing at export_file, NOT re-auth (M3)", async () => {
+    const body = JSON.stringify({
+      error: {
+        errors: [{ reason: "fileNotDownloadable" }],
+        code: 403,
+        message:
+          "Only files with binary content can be downloaded. Use Export with Docs Editors files.",
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(errResponse(403, body)),
+    );
+    const err = await downloadMedia(
+      getToken,
+      "doc_native",
+      join(dir, "o"),
+      ACCOUNT,
+    ).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ValidationError);
+    expect(err).not.toBeInstanceOf(AuthError);
+    expect((err as Error).message).toMatch(/export_file/);
+  });
+
+  it("still maps a genuine 403 insufficient-scope download to AuthError", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(errResponse(403, "Insufficient Permission")),
+    );
+    await expect(
+      downloadMedia(getToken, "file_dl", join(dir, "o"), ACCOUNT),
+    ).rejects.toBeInstanceOf(AuthError);
   });
 });
 

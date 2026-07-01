@@ -10,15 +10,22 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-// Stub the raw media layer so the tool tests exercise wiring/validation only —
-// no fetch, no network. The disk-level behavior is covered in
-// `src/__tests__/media.test.ts`.
-vi.mock("../../media.js", () => ({
-  uploadMultipart: vi.fn(),
-  updateContent: vi.fn(),
-  downloadMedia: vi.fn(),
-  exportDoc: vi.fn(),
-}));
+// Stub the raw NETWORK functions of the media layer so the tool tests exercise
+// wiring/validation only — no fetch, no network. The disk-level behavior is
+// covered in `src/__tests__/media.test.ts`. The pure guards (validateMimeType /
+// assertNoTraversal) are kept REAL via importActual so the tool-layer C1/M4
+// checks actually run.
+vi.mock("../../media.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../../media.js")>("../../media.js");
+  return {
+    ...actual,
+    uploadMultipart: vi.fn(),
+    updateContent: vi.fn(),
+    downloadMedia: vi.fn(),
+    exportDoc: vi.fn(),
+  };
+});
 
 import {
   uploadMultipart,
@@ -132,6 +139,31 @@ describe("uploadTool", () => {
     ).rejects.toMatchObject({ name: "ValidationError" });
     expect(uploadMultipart).not.toHaveBeenCalled();
   });
+
+  it("rejects a header-injecting mime_type before uploading (C1)", async () => {
+    const localPath = join(dir, "evil.jpg");
+    writeFileSync(localPath, "bytes");
+    const parsed = uploadTool.inputSchema.parse({
+      local_path: localPath,
+      mime_type: "image/jpeg\r\nX-Injected: pwned",
+    }) as Parameters<typeof uploadTool.handler>[0];
+
+    await expect(
+      uploadTool.handler(parsed, ctxOf(makeClient())),
+    ).rejects.toMatchObject({ name: "ValidationError" });
+    expect(uploadMultipart).not.toHaveBeenCalled();
+  });
+
+  it("rejects a local_path with a .. traversal segment (M4)", async () => {
+    const parsed = uploadTool.inputSchema.parse({
+      local_path: "/home/user/../secret",
+    }) as Parameters<typeof uploadTool.handler>[0];
+
+    await expect(
+      uploadTool.handler(parsed, ctxOf(makeClient())),
+    ).rejects.toMatchObject({ name: "ValidationError" });
+    expect(uploadMultipart).not.toHaveBeenCalled();
+  });
 });
 
 describe("updateContentTool", () => {
@@ -179,7 +211,7 @@ describe("updateContentTool", () => {
 });
 
 describe("downloadTool", () => {
-  it("passes file_id + dest_path + account and returns path/bytes", async () => {
+  it("passes file_id + dest_path + account + overwrite and returns path/bytes", async () => {
     vi.mocked(downloadMedia).mockResolvedValue({
       path: "/tmp/out.bin",
       bytes: 42,
@@ -195,7 +227,33 @@ describe("downloadTool", () => {
     expect(call[1]).toBe("file_dl");
     expect(call[2]).toBe("/tmp/out.bin");
     expect(call[3]).toBe(ACCOUNT);
+    // overwrite defaults to false and is threaded to the media layer (M4).
+    expect(call[4]).toBe(false);
     expect(out).toEqual({ path: "/tmp/out.bin", bytes: 42 });
+  });
+
+  it("forwards overwrite=true when supplied", async () => {
+    vi.mocked(downloadMedia).mockResolvedValue({ path: "/tmp/o", bytes: 1 });
+    const parsed = downloadTool.inputSchema.parse({
+      file_id: "file_dl",
+      dest_path: "/tmp/o",
+      overwrite: true,
+    }) as Parameters<typeof downloadTool.handler>[0];
+
+    await downloadTool.handler(parsed, ctxOf(makeClient()));
+    expect(vi.mocked(downloadMedia).mock.calls[0]![4]).toBe(true);
+  });
+
+  it("rejects a dest_path with a .. traversal segment before any download (M4)", async () => {
+    const parsed = downloadTool.inputSchema.parse({
+      file_id: "file_dl",
+      dest_path: "/home/user/../etc/passwd",
+    }) as Parameters<typeof downloadTool.handler>[0];
+
+    await expect(
+      downloadTool.handler(parsed, ctxOf(makeClient())),
+    ).rejects.toMatchObject({ name: "ValidationError" });
+    expect(downloadMedia).not.toHaveBeenCalled();
   });
 });
 

@@ -11,6 +11,7 @@ type FakeClient = {
   deleteFile: ReturnType<typeof vi.fn>;
   emptyTrash: ReturnType<typeof vi.fn>;
   listFiles: ReturnType<typeof vi.fn>;
+  getFile: ReturnType<typeof vi.fn>;
 };
 
 function makeClient(over: Partial<FakeClient> = {}): FakeClient {
@@ -19,9 +20,12 @@ function makeClient(over: Partial<FakeClient> = {}): FakeClient {
     deleteFile: vi.fn(),
     emptyTrash: vi.fn(),
     listFiles: vi.fn(),
+    getFile: vi.fn(),
     ...over,
   };
 }
+
+const FOLDER_MIME = "application/vnd.google-apps.folder";
 
 const rawFile = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
   id: "file_alpha",
@@ -100,6 +104,9 @@ describe("deleteTool — hard confirm gate", () => {
 
   it("deletes when confirm=true", async () => {
     const client = makeClient({
+      getFile: vi
+        .fn()
+        .mockResolvedValue(rawFile({ mimeType: "text/plain" })),
       deleteFile: vi.fn().mockResolvedValue(undefined),
     });
     const parsed = deleteTool.inputSchema.parse({
@@ -112,6 +119,42 @@ describe("deleteTool — hard confirm gate", () => {
     });
     expect(client.deleteFile).toHaveBeenCalledWith("file_alpha");
     expect(out).toEqual({ deleted: true });
+  });
+
+  it("folder delete preview WARNS about recursive content loss (M2)", async () => {
+    const client = makeClient({
+      getFile: vi
+        .fn()
+        .mockResolvedValue(rawFile({ mimeType: FOLDER_MIME })),
+    });
+    const parsed = deleteTool.inputSchema.parse({
+      file_id: "folder_alpha",
+    }) as Parameters<typeof deleteTool.handler>[0];
+
+    await expect(
+      deleteTool.handler(parsed, { client: client as unknown as never }),
+    ).rejects.toMatchObject({
+      name: "ConfirmRequiredError",
+      preview: expect.stringContaining("ALL its contents (recursive, irreversible)"),
+    });
+    expect(client.getFile).toHaveBeenCalledWith("folder_alpha", "id,name,mimeType");
+    expect(client.deleteFile).not.toHaveBeenCalled();
+  });
+
+  it("plain-file delete preview does NOT mention recursive contents (M2)", async () => {
+    const client = makeClient({
+      getFile: vi
+        .fn()
+        .mockResolvedValue(rawFile({ mimeType: "text/plain" })),
+    });
+    const parsed = deleteTool.inputSchema.parse({
+      file_id: "file_alpha",
+    }) as Parameters<typeof deleteTool.handler>[0];
+
+    const err = await deleteTool
+      .handler(parsed, { client: client as unknown as never })
+      .catch((e: unknown) => e);
+    expect((err as { preview: string }).preview).not.toMatch(/recursive/i);
   });
 });
 
@@ -186,6 +229,70 @@ describe("emptyTrashTool — dry_run default true", () => {
     });
     expect(client.emptyTrash).toHaveBeenCalled();
     expect(out).toEqual({ emptied: true, deleted_count: 1 });
+  });
+
+  it("paginates trashed files to a TRUE count across pages (M1)", async () => {
+    const page1 = Array.from({ length: 100 }, (_, i) =>
+      rawFile({ id: `t${i}` }),
+    );
+    const page2 = Array.from({ length: 50 }, (_, i) =>
+      rawFile({ id: `u${i}` }),
+    );
+    const listFiles = vi
+      .fn()
+      .mockResolvedValueOnce({ files: page1, nextPageToken: "PAGE2" })
+      .mockResolvedValueOnce({ files: page2 });
+    const client = makeClient({ listFiles });
+
+    // dry_run: true count reflects BOTH pages, second call carries the token.
+    const dryParsed = emptyTrashTool.inputSchema.parse({}) as Parameters<
+      typeof emptyTrashTool.handler
+    >[0];
+    const dry = await emptyTrashTool.handler(dryParsed, {
+      client: client as unknown as never,
+    });
+    expect(listFiles).toHaveBeenCalledTimes(2);
+    expect(listFiles.mock.calls[1]![0]).toEqual({
+      q: "trashed=true",
+      pageSize: 100,
+      pageToken: "PAGE2",
+    });
+    expect(dry).toMatchObject({ dry_run: true, count: 150 });
+
+    // confirm path: deleted_count is the true total and preview says EVERY.
+    listFiles.mockClear();
+    listFiles
+      .mockResolvedValueOnce({ files: page1, nextPageToken: "PAGE2" })
+      .mockResolvedValueOnce({ files: page2 });
+    const emptyClient = makeClient({
+      listFiles,
+      emptyTrash: vi.fn().mockResolvedValue(undefined),
+    });
+    const confParsed = emptyTrashTool.inputSchema.parse({
+      dry_run: false,
+      confirm: true,
+    }) as Parameters<typeof emptyTrashTool.handler>[0];
+    const out = await emptyTrashTool.handler(confParsed, {
+      client: emptyClient as unknown as never,
+    });
+    expect(out).toEqual({ emptied: true, deleted_count: 150 });
+  });
+
+  it("preview states EVERY trashed file is removed, not just a page (M1)", async () => {
+    const client = makeClient({
+      listFiles: vi
+        .fn()
+        .mockResolvedValue({ files: [rawFile({ id: "t1" })] }),
+    });
+    const parsed = emptyTrashTool.inputSchema.parse({
+      dry_run: false,
+    }) as Parameters<typeof emptyTrashTool.handler>[0];
+
+    await expect(
+      emptyTrashTool.handler(parsed, { client: client as unknown as never }),
+    ).rejects.toMatchObject({
+      preview: expect.stringMatching(/EVERY trashed file/),
+    });
   });
 
   it("dry_run wins over confirm (confirm ignored while dry_run true)", async () => {

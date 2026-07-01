@@ -175,10 +175,11 @@ describe("shareTool — confirmed handler", () => {
       role: "writer",
       email_address: "bob@example.test",
       domain: null,
+      allow_file_discovery: null,
     });
   });
 
-  it("anyone share: notifications default OFF (non-user type)", async () => {
+  it("anyone share: notifications OFF + link-only allowFileDiscovery:false (L3)", async () => {
     const client = makeClient({
       createPermission: vi
         .fn()
@@ -196,7 +197,47 @@ describe("shareTool — confirmed handler", () => {
     expect(client.createPermission).toHaveBeenCalledWith("file_alpha", {
       role: "reader",
       type: "anyone",
+      allowFileDiscovery: false,
       sendNotificationEmail: false,
+    });
+  });
+
+  it("anyone share: allow_file_discovery:true opts into a discoverable link (L3)", async () => {
+    const client = makeClient({
+      createPermission: vi
+        .fn()
+        .mockResolvedValue({ id: "anyoneWithLink", type: "anyone", role: "reader" }),
+    });
+    const parsed = shareTool.inputSchema.parse({
+      file_id: "file_alpha",
+      role: "reader",
+      type: "anyone",
+      allow_file_discovery: true,
+      confirm: true,
+    }) as Parameters<typeof shareTool.handler>[0];
+
+    await shareTool.handler(parsed, { client: client as unknown as never });
+
+    expect(client.createPermission).toHaveBeenCalledWith(
+      "file_alpha",
+      expect.objectContaining({ allowFileDiscovery: true }),
+    );
+  });
+
+  it("organizer share warns it is shared-drive owner-equivalent (L4)", async () => {
+    const client = makeClient();
+    const parsed = shareTool.inputSchema.parse({
+      file_id: "file_alpha",
+      role: "organizer",
+      type: "user",
+      email_address: "bob@example.test",
+    }) as Parameters<typeof shareTool.handler>[0];
+
+    await expect(
+      shareTool.handler(parsed, { client: client as unknown as never }),
+    ).rejects.toMatchObject({
+      name: "ConfirmRequiredError",
+      preview: expect.stringMatching(/organizer/i),
     });
   });
 
@@ -272,6 +313,7 @@ describe("listPermissionsTool", () => {
       role: "reader",
       email_address: null,
       domain: null,
+      allow_file_discovery: null,
     });
   });
 });
@@ -362,6 +404,49 @@ describe("updatePermissionTool", () => {
         client: client as unknown as never,
       }),
     ).rejects.toMatchObject({ name: "ConfirmRequiredError" });
+  });
+
+  it("elevating to organizer is confirm-gated (owner-equivalent) (L4)", async () => {
+    const client = makeClient();
+    const parsed = updatePermissionTool.inputSchema.parse({
+      file_id: "file_alpha",
+      permission_id: "perm_a",
+      role: "organizer",
+    }) as Parameters<typeof updatePermissionTool.handler>[0];
+
+    await expect(
+      updatePermissionTool.handler(parsed, {
+        client: client as unknown as never,
+      }),
+    ).rejects.toMatchObject({
+      name: "ConfirmRequiredError",
+      preview: expect.stringMatching(/organizer/i),
+    });
+    expect(client.updatePermission).not.toHaveBeenCalled();
+  });
+
+  it("organizer with confirm applies WITHOUT transferOwnership (L4)", async () => {
+    const client = makeClient({
+      updatePermission: vi
+        .fn()
+        .mockResolvedValue({ id: "perm_a", type: "user", role: "organizer" }),
+    });
+    const parsed = updatePermissionTool.inputSchema.parse({
+      file_id: "file_alpha",
+      permission_id: "perm_a",
+      role: "organizer",
+      confirm: true,
+    }) as Parameters<typeof updatePermissionTool.handler>[0];
+
+    await updatePermissionTool.handler(parsed, {
+      client: client as unknown as never,
+    });
+
+    expect(client.updatePermission).toHaveBeenCalledWith(
+      "file_alpha",
+      "perm_a",
+      { role: "organizer" },
+    );
   });
 });
 

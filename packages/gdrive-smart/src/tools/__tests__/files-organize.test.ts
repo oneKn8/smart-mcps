@@ -78,8 +78,13 @@ describe("moveTool", () => {
     expect(out.file.parents).toEqual(["folder_new"]);
   });
 
-  it("uses an explicit remove_parent without a getFile lookup", async () => {
+  it("validates an explicit remove_parent IS a current parent, then moves (M5)", async () => {
     const client = makeClient({
+      getFile: vi
+        .fn()
+        .mockResolvedValue(
+          rawFile({ parents: ["folder_specific", "folder_other"] }),
+        ),
       updateFile: vi.fn().mockResolvedValue(rawFile()),
     });
     const parsed = moveTool.inputSchema.parse({
@@ -90,11 +95,72 @@ describe("moveTool", () => {
 
     await moveTool.handler(parsed, { client: client as unknown as never });
 
-    expect(client.getFile).not.toHaveBeenCalled();
+    expect(client.getFile).toHaveBeenCalledWith("file_alpha");
     expect(client.updateFile).toHaveBeenCalledWith(
       "file_alpha",
       {},
       { addParents: "folder_new", removeParents: "folder_specific" },
+    );
+  });
+
+  it("rejects an explicit remove_parent that is NOT a current parent (M5)", async () => {
+    const client = makeClient({
+      getFile: vi
+        .fn()
+        .mockResolvedValue(rawFile({ parents: ["folder_old"] })),
+    });
+    const parsed = moveTool.inputSchema.parse({
+      file_id: "file_alpha",
+      new_parent: "folder_new",
+      remove_parent: "folder_ghost",
+    }) as Parameters<typeof moveTool.handler>[0];
+
+    await expect(
+      moveTool.handler(parsed, { client: client as unknown as never }),
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(client.updateFile).not.toHaveBeenCalled();
+  });
+
+  it("auto-detect DROPS new_parent from removeParents when already a parent (M5)", async () => {
+    const client = makeClient({
+      getFile: vi
+        .fn()
+        .mockResolvedValue(rawFile({ parents: ["folder_new", "folder_old"] })),
+      updateFile: vi.fn().mockResolvedValue(rawFile()),
+    });
+    const parsed = moveTool.inputSchema.parse({
+      file_id: "file_alpha",
+      new_parent: "folder_new",
+    }) as Parameters<typeof moveTool.handler>[0];
+
+    await moveTool.handler(parsed, { client: client as unknown as never });
+
+    // never add==remove: only the OTHER parent is removed.
+    expect(client.updateFile).toHaveBeenCalledWith(
+      "file_alpha",
+      {},
+      { addParents: "folder_new", removeParents: "folder_old" },
+    );
+  });
+
+  it("auto-detect omits removeParents when new_parent is the only parent (M5)", async () => {
+    const client = makeClient({
+      getFile: vi
+        .fn()
+        .mockResolvedValue(rawFile({ parents: ["folder_new"] })),
+      updateFile: vi.fn().mockResolvedValue(rawFile()),
+    });
+    const parsed = moveTool.inputSchema.parse({
+      file_id: "file_alpha",
+      new_parent: "folder_new",
+    }) as Parameters<typeof moveTool.handler>[0];
+
+    await moveTool.handler(parsed, { client: client as unknown as never });
+
+    expect(client.updateFile).toHaveBeenCalledWith(
+      "file_alpha",
+      {},
+      { addParents: "folder_new" },
     );
   });
 

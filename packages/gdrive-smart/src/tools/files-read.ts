@@ -3,6 +3,17 @@ import { defineTool } from "smart-mcp-core";
 import type { GDriveContext } from "../context.js";
 import { mapFile, type SlimFile } from "../file-mapper.js";
 
+/**
+ * Escape a user value for safe interpolation inside a Drive `q` string literal.
+ * Per the search-files guide (reference §2.8), `\` and `'` are the two
+ * metacharacters inside single-quoted `q` literals; escape the backslash FIRST,
+ * then the quote, so a crafted `folder_id` can't break out of the literal and
+ * inject clauses (L1).
+ */
+export function escapeQValue(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+}
+
 // =============================================================================
 // get (files.get with the explicit FILE_FIELDS mask)
 // =============================================================================
@@ -38,6 +49,10 @@ const listInputSchema = z.object({
   q: z.string().optional(),
   page_size: z.number().int().min(1).max(100).optional(),
   page_token: z.string().optional(),
+  /** Shared-drive id to scope the listing to (enables includeItemsFromAllDrives) (L5). */
+  drive_id: z.string().optional(),
+  /** Search corpus for shared drives (L5). Defaults to `drive` when drive_id is set. */
+  corpora: z.enum(["user", "drive", "domain", "allDrives"]).optional(),
 });
 
 type ListInput = z.infer<typeof listInputSchema>;
@@ -50,7 +65,7 @@ export const listTool = defineTool<ListInput, ListOutput, GDriveContext>({
   handler: async (input, ctx) => {
     let q = input.q;
     if (q === undefined && input.folder_id !== undefined) {
-      q = `'${input.folder_id}' in parents and trashed = false`;
+      q = `'${escapeQValue(input.folder_id)}' in parents and trashed = false`;
     }
     const listed = await ctx.client.listFiles({
       ...(q !== undefined ? { q } : {}),
@@ -58,6 +73,8 @@ export const listTool = defineTool<ListInput, ListOutput, GDriveContext>({
       ...(input.page_token !== undefined
         ? { pageToken: input.page_token }
         : {}),
+      ...(input.drive_id !== undefined ? { driveId: input.drive_id } : {}),
+      ...(input.corpora !== undefined ? { corpora: input.corpora } : {}),
     });
     return {
       files: listed.files.map(mapFile),

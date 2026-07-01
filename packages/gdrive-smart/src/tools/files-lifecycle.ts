@@ -3,6 +3,8 @@ import { defineTool, guardDestructive } from "smart-mcp-core";
 import type { GDriveContext } from "../context.js";
 import { mapFile, type SlimFile } from "../file-mapper.js";
 
+const FOLDER_MIME = "application/vnd.google-apps.folder";
+
 // =============================================================================
 // trash (files.update trashed:true — REVERSIBLE, the safe default "delete")
 // =============================================================================
@@ -69,8 +71,19 @@ export const deleteTool = defineTool<DeleteInput, DeleteOutput, GDriveContext>({
   inputSchema: deleteInputSchema as unknown as z.ZodType<DeleteInput>,
   handler: async (input, ctx) => {
     const parsed = input as DeleteParsed;
+    // Resolve the target first so the preview can warn when this is a FOLDER —
+    // files.delete on a folder recursively destroys every descendant the user
+    // owns, bypassing Trash entirely (M2).
+    const raw = await ctx.client.getFile(parsed.file_id, "id,name,mimeType");
+    const isFolder =
+      typeof raw === "object" &&
+      raw !== null &&
+      (raw as Record<string, unknown>).mimeType === FOLDER_MIME;
+    const scope = isFolder
+      ? `folder \`${parsed.file_id}\` and ALL its contents (recursive, irreversible)`
+      : `file \`${parsed.file_id}\``;
     const preview =
-      `Permanently delete file \`${parsed.file_id}\`. ` +
+      `Permanently delete ${scope}. ` +
       "This is permanent, cannot be undone (bypasses Trash). " +
       "Use `trash` instead to keep it recoverable for 30 days.";
     guardDestructive({ confirm: parsed.confirm, preview });
@@ -106,18 +119,27 @@ export const emptyTrashTool = defineTool<
     emptyTrashInputSchema as unknown as z.ZodType<EmptyTrashInput>,
   handler: async (input, ctx) => {
     const parsed = input as EmptyTrashParsed;
-    // Always enumerate the trashed files first — this is both the dry-run
-    // payload and the count that anchors the confirm preview.
-    const listed = await ctx.client.listFiles({
-      q: "trashed=true",
-      pageSize: 100,
-    });
-    const files = listed.files.map(mapFile);
+    // Enumerate EVERY trashed file, paginating through nextPageToken. `emptyTrash`
+    // wipes the entire trash, so a single 100-item page would under-report the
+    // real blast radius in both the dry-run payload and the confirm preview (M1).
+    const files: SlimFile[] = [];
+    let pageToken: string | undefined;
+    do {
+      const listed = await ctx.client.listFiles({
+        q: "trashed=true",
+        pageSize: 100,
+        ...(pageToken !== undefined ? { pageToken } : {}),
+      });
+      for (const raw of listed.files) files.push(mapFile(raw));
+      pageToken = listed.nextPageToken;
+    } while (pageToken !== undefined);
+
     if (parsed.dry_run) {
       return { dry_run: true, would_delete: files, count: files.length };
     }
     const preview =
       `Permanently delete ALL ${files.length} trashed file(s). ` +
+      "empty_trash removes EVERY trashed file in your Drive, not just this page. " +
       "This is permanent, cannot be undone.";
     guardDestructive({ confirm: parsed.confirm, preview });
     await ctx.client.emptyTrash();
