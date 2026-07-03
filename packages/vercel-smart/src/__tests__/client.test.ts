@@ -1,7 +1,13 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach, beforeEach } from "vitest";
 import { setupServer } from "msw/node";
 import { http, HttpResponse } from "msw";
-import { AuthError, NotFoundError, RateLimitError } from "smart-mcp-core";
+import {
+  AuthError,
+  NotFoundError,
+  RateLimitError,
+  UpstreamError,
+  AmbiguousMatchError,
+} from "smart-mcp-core";
 import { VercelClient } from "../client.js";
 
 const server = setupServer();
@@ -846,7 +852,7 @@ describe("VercelClient.listDeployments", () => {
     let seenAuth: string | null = null;
     let seenUrl: string | null = null;
     server.use(
-      http.get("https://api.vercel.com/v6/deployments", ({ request }) => {
+      http.get("https://api.vercel.com/v7/deployments", ({ request }) => {
         seenAuth = request.headers.get("authorization");
         seenUrl = request.url;
         return HttpResponse.json(mockResponse);
@@ -879,7 +885,7 @@ describe("VercelClient.listDeployments", () => {
     );
     let seenUrl: string | null = null;
     server.use(
-      http.get("https://api.vercel.com/v6/deployments", ({ request }) => {
+      http.get("https://api.vercel.com/v7/deployments", ({ request }) => {
         seenUrl = request.url;
         return HttpResponse.json(mockResponse);
       }),
@@ -895,7 +901,7 @@ describe("VercelClient.listDeployments", () => {
     stubNoTeams();
     let seenUrl: string | null = null;
     server.use(
-      http.get("https://api.vercel.com/v6/deployments", ({ request }) => {
+      http.get("https://api.vercel.com/v7/deployments", ({ request }) => {
         seenUrl = request.url;
         return HttpResponse.json(mockResponse);
       }),
@@ -911,7 +917,7 @@ describe("VercelClient.listDeployments", () => {
     stubTeams([{ id: "team_xyz", slug: "xyzteam", name: "XYZ" }]);
     let seenUrl: string | null = null;
     server.use(
-      http.get("https://api.vercel.com/v6/deployments", ({ request }) => {
+      http.get("https://api.vercel.com/v7/deployments", ({ request }) => {
         seenUrl = request.url;
         return HttpResponse.json(mockResponse);
       }),
@@ -925,12 +931,707 @@ describe("VercelClient.listDeployments", () => {
     process.env.VERCEL_TOKEN = "test_token";
     stubNoTeams();
     server.use(
-      http.get("https://api.vercel.com/v6/deployments", () =>
+      http.get("https://api.vercel.com/v7/deployments", () =>
         HttpResponse.json(mockResponse),
       ),
     );
     const client = new VercelClient();
     const result = await client.listDeployments({ limit: 20 });
     expect(result).toEqual(mockResponse);
+  });
+});
+
+// --- Helpers for the write/mutation surface (resolveProjectStrict-based) -----
+
+// Resolve a single project under team_a (teamId=team_a asserted downstream).
+function stubResolveTeam(project: { id: string; name: string }) {
+  stubTeams([{ id: "team_a", slug: "alpha-team", name: "Alpha Team" }]);
+  server.use(
+    http.get("https://api.vercel.com/v9/projects", ({ request }) => {
+      const teamId = new URL(request.url).searchParams.get("teamId");
+      if (teamId === "team_a") {
+        return HttpResponse.json({
+          projects: [project],
+          pagination: { count: 1, next: null },
+        });
+      }
+      return HttpResponse.json({
+        projects: [],
+        pagination: { count: 0, next: null },
+      });
+    }),
+  );
+}
+
+describe("VercelClient.resolveProjectStrict", () => {
+  it("resolves a unique name and derives the team scope", async () => {
+    process.env.VERCEL_TOKEN = "test_token";
+    stubResolveTeam({ id: "prj_t1", name: "team-site" });
+    const client = new VercelClient();
+    const found = await client.resolveProjectStrict("team-site");
+    expect(found.scope).toEqual({ kind: "team", id: "team_a", slug: "alpha-team" });
+    expect((found.project as { id: string }).id).toBe("prj_t1");
+  });
+
+  it("throws AmbiguousMatchError when the same NAME exists in >1 scope", async () => {
+    process.env.VERCEL_TOKEN = "test_token";
+    stubTeams([{ id: "team_a", slug: "alpha-team", name: "Alpha Team" }]);
+    server.use(
+      http.get("https://api.vercel.com/v9/projects", ({ request }) => {
+        const teamId = new URL(request.url).searchParams.get("teamId");
+        // Same name "dup" under both personal and team_a, distinct ids.
+        if (teamId === "team_a") {
+          return HttpResponse.json({
+            projects: [{ id: "prj_team_dup", name: "dup" }],
+            pagination: { count: 1, next: null },
+          });
+        }
+        return HttpResponse.json({
+          projects: [{ id: "prj_personal_dup", name: "dup" }],
+          pagination: { count: 1, next: null },
+        });
+      }),
+    );
+    const client = new VercelClient();
+    await expect(client.resolveProjectStrict("dup")).rejects.toBeInstanceOf(
+      AmbiguousMatchError,
+    );
+  });
+
+  it("resolves by unique id even when the name is ambiguous", async () => {
+    process.env.VERCEL_TOKEN = "test_token";
+    stubTeams([{ id: "team_a", slug: "alpha-team", name: "Alpha Team" }]);
+    server.use(
+      http.get("https://api.vercel.com/v9/projects", ({ request }) => {
+        const teamId = new URL(request.url).searchParams.get("teamId");
+        if (teamId === "team_a") {
+          return HttpResponse.json({
+            projects: [{ id: "prj_team_dup", name: "dup" }],
+            pagination: { count: 1, next: null },
+          });
+        }
+        return HttpResponse.json({
+          projects: [{ id: "prj_personal_dup", name: "dup" }],
+          pagination: { count: 1, next: null },
+        });
+      }),
+    );
+    const client = new VercelClient();
+    const found = await client.resolveProjectStrict("prj_team_dup");
+    expect(found.scope).toEqual({ kind: "team", id: "team_a", slug: "alpha-team" });
+  });
+
+  it("throws NotFoundError when the project cannot be resolved", async () => {
+    process.env.VERCEL_TOKEN = "test_token";
+    stubNoTeams();
+    server.use(
+      http.get("https://api.vercel.com/v9/projects", () =>
+        HttpResponse.json({
+          projects: [],
+          pagination: { count: 0, next: null },
+        }),
+      ),
+    );
+    const client = new VercelClient();
+    await expect(
+      client.resolveProjectStrict("missing"),
+    ).rejects.toBeInstanceOf(NotFoundError);
+  });
+
+  it("paginates a scope (follows pagination.next as until)", async () => {
+    process.env.VERCEL_TOKEN = "test_token";
+    stubNoTeams();
+    const seenUntil: Array<string | null> = [];
+    server.use(
+      http.get("https://api.vercel.com/v9/projects", ({ request }) => {
+        const until = new URL(request.url).searchParams.get("until");
+        seenUntil.push(until);
+        if (until === null) {
+          return HttpResponse.json({
+            projects: [{ id: "prj_1", name: "page1" }],
+            pagination: { count: 1, next: 1699999999999 },
+          });
+        }
+        return HttpResponse.json({
+          projects: [{ id: "prj_2", name: "page2" }],
+          pagination: { count: 1, next: null },
+        });
+      }),
+    );
+    const client = new VercelClient();
+    const found = await client.resolveProjectStrict("page2");
+    expect((found.project as { id: string }).id).toBe("prj_2");
+    // First page has no `until`; second page passes the next cursor.
+    expect(seenUntil).toEqual([null, "1699999999999"]);
+  });
+});
+
+describe("VercelClient.listProjectEnv", () => {
+  const envResponse = {
+    envs: [
+      {
+        id: "env_1",
+        key: "API_KEY",
+        type: "encrypted",
+        target: ["production"],
+        gitBranch: null,
+        updatedAt: 1700000000000,
+      },
+    ],
+  };
+
+  it("GET /v10/.../env with bearer + teamId; no decrypt by default", async () => {
+    process.env.VERCEL_TOKEN = "test_token";
+    stubResolveTeam({ id: "prj_t1", name: "team-site" });
+    let seenAuth: string | null = null;
+    let seenUrl: string | null = null;
+    server.use(
+      http.get(
+        "https://api.vercel.com/v10/projects/team-site/env",
+        ({ request }) => {
+          seenAuth = request.headers.get("authorization");
+          seenUrl = request.url;
+          return HttpResponse.json(envResponse);
+        },
+      ),
+    );
+    const client = new VercelClient();
+    const result = await client.listProjectEnv("team-site");
+    expect(seenAuth).toBe("Bearer test_token");
+    expect(seenUrl).toContain("teamId=team_a");
+    expect(seenUrl).not.toContain("decrypt=");
+    expect(result).toEqual(envResponse);
+  });
+
+  it("passes decrypt=true and gitBranch when requested", async () => {
+    process.env.VERCEL_TOKEN = "test_token";
+    stubResolveTeam({ id: "prj_t1", name: "team-site" });
+    let seenUrl: string | null = null;
+    server.use(
+      http.get(
+        "https://api.vercel.com/v10/projects/team-site/env",
+        ({ request }) => {
+          seenUrl = request.url;
+          return HttpResponse.json(envResponse);
+        },
+      ),
+    );
+    const client = new VercelClient();
+    await client.listProjectEnv("team-site", { decrypt: true, gitBranch: "main" });
+    expect(seenUrl).toContain("decrypt=true");
+    expect(seenUrl).toContain("gitBranch=main");
+  });
+});
+
+describe("VercelClient.revealProjectEnv", () => {
+  it("GET /v1/.../env/{id} with bearer + teamId", async () => {
+    process.env.VERCEL_TOKEN = "test_token";
+    stubResolveTeam({ id: "prj_t1", name: "team-site" });
+    let seenAuth: string | null = null;
+    let seenUrl: string | null = null;
+    server.use(
+      http.get(
+        "https://api.vercel.com/v1/projects/team-site/env/env_1",
+        ({ request }) => {
+          seenAuth = request.headers.get("authorization");
+          seenUrl = request.url;
+          return HttpResponse.json({ id: "env_1", key: "API_KEY", value: "s3cret", type: "encrypted" });
+        },
+      ),
+    );
+    const client = new VercelClient();
+    const result = await client.revealProjectEnv("team-site", "env_1");
+    expect(seenAuth).toBe("Bearer test_token");
+    expect(seenUrl).toContain("teamId=team_a");
+    expect((result as { value: string }).value).toBe("s3cret");
+  });
+});
+
+describe("VercelClient.upsertProjectEnv", () => {
+  it("POST /v10/.../env?upsert=true with body, teamId, bearer", async () => {
+    process.env.VERCEL_TOKEN = "test_token";
+    stubResolveTeam({ id: "prj_t1", name: "team-site" });
+    let seenMethod: string | null = null;
+    let seenUrl: string | null = null;
+    let seenBody: unknown = null;
+    server.use(
+      http.post(
+        "https://api.vercel.com/v10/projects/team-site/env",
+        async ({ request }) => {
+          seenMethod = request.method;
+          seenUrl = request.url;
+          seenBody = await request.json();
+          return HttpResponse.json({ created: { id: "env_new" } });
+        },
+      ),
+    );
+    const client = new VercelClient();
+    await client.upsertProjectEnv("team-site", {
+      key: "NEW_KEY",
+      value: "v",
+      type: "encrypted",
+      target: ["production"],
+    });
+    expect(seenMethod).toBe("POST");
+    expect(seenUrl).toContain("upsert=true");
+    expect(seenUrl).toContain("teamId=team_a");
+    expect(seenBody).toEqual({
+      key: "NEW_KEY",
+      value: "v",
+      type: "encrypted",
+      target: ["production"],
+    });
+  });
+
+  it("does NOT retry on 5xx (retries:0 -> single call, throws)", async () => {
+    process.env.VERCEL_TOKEN = "test_token";
+    stubResolveTeam({ id: "prj_t1", name: "team-site" });
+    let calls = 0;
+    server.use(
+      http.post("https://api.vercel.com/v10/projects/team-site/env", () => {
+        calls++;
+        return HttpResponse.json({ error: "boom" }, { status: 500 });
+      }),
+    );
+    const client = new VercelClient();
+    await expect(
+      client.upsertProjectEnv("team-site", { key: "K", value: "v" }),
+    ).rejects.toBeInstanceOf(UpstreamError);
+    expect(calls).toBe(1);
+  });
+});
+
+describe("VercelClient.updateProjectEnv", () => {
+  it("PATCH /v9/.../env/{id} with body, teamId", async () => {
+    process.env.VERCEL_TOKEN = "test_token";
+    stubResolveTeam({ id: "prj_t1", name: "team-site" });
+    let seenMethod: string | null = null;
+    let seenUrl: string | null = null;
+    let seenBody: unknown = null;
+    server.use(
+      http.patch(
+        "https://api.vercel.com/v9/projects/team-site/env/env_1",
+        async ({ request }) => {
+          seenMethod = request.method;
+          seenUrl = request.url;
+          seenBody = await request.json();
+          return HttpResponse.json({ id: "env_1", key: "API_KEY", type: "encrypted" });
+        },
+      ),
+    );
+    const client = new VercelClient();
+    await client.updateProjectEnv("team-site", "env_1", { value: "rotated" });
+    expect(seenMethod).toBe("PATCH");
+    expect(seenUrl).toContain("teamId=team_a");
+    expect(seenBody).toEqual({ value: "rotated" });
+  });
+});
+
+describe("VercelClient.deleteProjectEnv", () => {
+  it("DELETE /v9/.../env/{id} with teamId; 204 -> undefined", async () => {
+    process.env.VERCEL_TOKEN = "test_token";
+    stubResolveTeam({ id: "prj_t1", name: "team-site" });
+    let seenMethod: string | null = null;
+    let seenUrl: string | null = null;
+    server.use(
+      http.delete(
+        "https://api.vercel.com/v9/projects/team-site/env/env_1",
+        ({ request }) => {
+          seenMethod = request.method;
+          seenUrl = request.url;
+          return new HttpResponse(null, { status: 204 });
+        },
+      ),
+    );
+    const client = new VercelClient();
+    const result = await client.deleteProjectEnv("team-site", "env_1");
+    expect(seenMethod).toBe("DELETE");
+    expect(seenUrl).toContain("teamId=team_a");
+    expect(result).toBeUndefined();
+  });
+});
+
+describe("VercelClient.addProjectDomain", () => {
+  it("POST /v10/.../domains with body, teamId, bearer", async () => {
+    process.env.VERCEL_TOKEN = "test_token";
+    stubResolveTeam({ id: "prj_t1", name: "team-site" });
+    let seenMethod: string | null = null;
+    let seenUrl: string | null = null;
+    let seenBody: unknown = null;
+    server.use(
+      http.post(
+        "https://api.vercel.com/v10/projects/team-site/domains",
+        async ({ request }) => {
+          seenMethod = request.method;
+          seenUrl = request.url;
+          seenBody = await request.json();
+          return HttpResponse.json({ name: "team-site.com", verified: false });
+        },
+      ),
+    );
+    const client = new VercelClient();
+    await client.addProjectDomain("team-site", { name: "team-site.com" });
+    expect(seenMethod).toBe("POST");
+    expect(seenUrl).toContain("teamId=team_a");
+    expect(seenBody).toEqual({ name: "team-site.com" });
+  });
+
+  it("does NOT retry on 5xx (retries:0 -> single call)", async () => {
+    process.env.VERCEL_TOKEN = "test_token";
+    stubResolveTeam({ id: "prj_t1", name: "team-site" });
+    let calls = 0;
+    server.use(
+      http.post("https://api.vercel.com/v10/projects/team-site/domains", () => {
+        calls++;
+        return HttpResponse.json({ error: "boom" }, { status: 502 });
+      }),
+    );
+    const client = new VercelClient();
+    await expect(
+      client.addProjectDomain("team-site", { name: "team-site.com" }),
+    ).rejects.toBeInstanceOf(UpstreamError);
+    expect(calls).toBe(1);
+  });
+});
+
+describe("VercelClient.verifyProjectDomain", () => {
+  it("POST /v9/.../domains/{domain}/verify with teamId", async () => {
+    process.env.VERCEL_TOKEN = "test_token";
+    stubResolveTeam({ id: "prj_t1", name: "team-site" });
+    let seenMethod: string | null = null;
+    let seenUrl: string | null = null;
+    server.use(
+      http.post(
+        "https://api.vercel.com/v9/projects/team-site/domains/team-site.com/verify",
+        ({ request }) => {
+          seenMethod = request.method;
+          seenUrl = request.url;
+          return HttpResponse.json({ verified: true });
+        },
+      ),
+    );
+    const client = new VercelClient();
+    const result = await client.verifyProjectDomain("team-site", "team-site.com");
+    expect(seenMethod).toBe("POST");
+    expect(seenUrl).toContain("teamId=team_a");
+    expect(result).toEqual({ verified: true });
+  });
+});
+
+describe("VercelClient.removeProjectDomain", () => {
+  it("DELETE /v9/.../domains/{domain} with teamId", async () => {
+    process.env.VERCEL_TOKEN = "test_token";
+    stubResolveTeam({ id: "prj_t1", name: "team-site" });
+    let seenMethod: string | null = null;
+    let seenUrl: string | null = null;
+    server.use(
+      http.delete(
+        "https://api.vercel.com/v9/projects/team-site/domains/team-site.com",
+        ({ request }) => {
+          seenMethod = request.method;
+          seenUrl = request.url;
+          return HttpResponse.json({ uid: "dom_1" });
+        },
+      ),
+    );
+    const client = new VercelClient();
+    await client.removeProjectDomain("team-site", "team-site.com");
+    expect(seenMethod).toBe("DELETE");
+    expect(seenUrl).toContain("teamId=team_a");
+  });
+});
+
+describe("VercelClient.getDeployment", () => {
+  it("GET /v13/deployments/{id} with teamId derived from project", async () => {
+    process.env.VERCEL_TOKEN = "test_token";
+    stubResolveTeam({ id: "prj_t1", name: "team-site" });
+    let seenAuth: string | null = null;
+    let seenUrl: string | null = null;
+    server.use(
+      http.get(
+        "https://api.vercel.com/v13/deployments/dpl_1",
+        ({ request }) => {
+          seenAuth = request.headers.get("authorization");
+          seenUrl = request.url;
+          return HttpResponse.json({ uid: "dpl_1", readyState: "READY" });
+        },
+      ),
+    );
+    const client = new VercelClient();
+    const result = await client.getDeployment("dpl_1", { project: "team-site" });
+    expect(seenAuth).toBe("Bearer test_token");
+    expect(seenUrl).toContain("teamId=team_a");
+    expect(result).toEqual({ uid: "dpl_1", readyState: "READY" });
+  });
+});
+
+describe("VercelClient.getDeploymentEvents", () => {
+  it("GET /v3/deployments/{id}/events?follow=0 with teamId", async () => {
+    process.env.VERCEL_TOKEN = "test_token";
+    stubResolveTeam({ id: "prj_t1", name: "team-site" });
+    let seenUrl: string | null = null;
+    server.use(
+      http.get(
+        "https://api.vercel.com/v3/deployments/dpl_1/events",
+        ({ request }) => {
+          seenUrl = request.url;
+          return HttpResponse.json([{ type: "stdout", text: "build ok" }]);
+        },
+      ),
+    );
+    const client = new VercelClient();
+    await client.getDeploymentEvents("dpl_1", { project: "team-site" });
+    expect(seenUrl).toContain("follow=0");
+    expect(seenUrl).toContain("teamId=team_a");
+  });
+});
+
+describe("VercelClient.createDeployment", () => {
+  it("POST /v13/deployments with body + explicit teamId", async () => {
+    process.env.VERCEL_TOKEN = "test_token";
+    let seenMethod: string | null = null;
+    let seenUrl: string | null = null;
+    let seenBody: unknown = null;
+    server.use(
+      http.post("https://api.vercel.com/v13/deployments", async ({ request }) => {
+        seenMethod = request.method;
+        seenUrl = request.url;
+        seenBody = await request.json();
+        return HttpResponse.json({ id: "dpl_new", url: "x.vercel.app" });
+      }),
+    );
+    const client = new VercelClient();
+    await client.createDeployment(
+      { name: "team-site", deploymentId: "dpl_old", target: "preview" },
+      { teamId: "team_a" },
+    );
+    expect(seenMethod).toBe("POST");
+    expect(seenUrl).toContain("teamId=team_a");
+    expect(seenBody).toEqual({
+      name: "team-site",
+      deploymentId: "dpl_old",
+      target: "preview",
+    });
+  });
+
+  it("does NOT retry on 5xx (retries:0 -> single call)", async () => {
+    process.env.VERCEL_TOKEN = "test_token";
+    let calls = 0;
+    server.use(
+      http.post("https://api.vercel.com/v13/deployments", () => {
+        calls++;
+        return HttpResponse.json({ error: "boom" }, { status: 500 });
+      }),
+    );
+    const client = new VercelClient();
+    await expect(
+      client.createDeployment({ name: "team-site" }, { teamId: "team_a" }),
+    ).rejects.toBeInstanceOf(UpstreamError);
+    expect(calls).toBe(1);
+  });
+});
+
+describe("VercelClient.promoteDeployment", () => {
+  it("POST /v10/.../promote/{dpl} with teamId; empty 201 -> resolves", async () => {
+    process.env.VERCEL_TOKEN = "test_token";
+    stubResolveTeam({ id: "prj_t1", name: "team-site" });
+    let seenMethod: string | null = null;
+    let seenAuth: string | null = null;
+    let seenUrl: string | null = null;
+    server.use(
+      http.post(
+        "https://api.vercel.com/v10/projects/team-site/promote/dpl_1",
+        ({ request }) => {
+          seenMethod = request.method;
+          seenAuth = request.headers.get("authorization");
+          seenUrl = request.url;
+          return new HttpResponse(null, { status: 201 });
+        },
+      ),
+    );
+    const client = new VercelClient();
+    const result = await client.promoteDeployment("team-site", "dpl_1");
+    expect(seenMethod).toBe("POST");
+    expect(seenAuth).toBe("Bearer test_token");
+    expect(seenUrl).toContain("teamId=team_a");
+    expect(result).toBeUndefined();
+  });
+
+  it("does NOT retry on 5xx (single call, throws UpstreamError)", async () => {
+    process.env.VERCEL_TOKEN = "test_token";
+    stubResolveTeam({ id: "prj_t1", name: "team-site" });
+    let calls = 0;
+    server.use(
+      http.post(
+        "https://api.vercel.com/v10/projects/team-site/promote/dpl_1",
+        () => {
+          calls++;
+          return HttpResponse.json({ error: "boom" }, { status: 500 });
+        },
+      ),
+    );
+    const client = new VercelClient();
+    await expect(
+      client.promoteDeployment("team-site", "dpl_1"),
+    ).rejects.toBeInstanceOf(UpstreamError);
+    expect(calls).toBe(1);
+  });
+});
+
+describe("VercelClient.cancelDeployment", () => {
+  it("PATCH /v12/deployments/{id}/cancel with explicit teamId", async () => {
+    process.env.VERCEL_TOKEN = "test_token";
+    let seenMethod: string | null = null;
+    let seenUrl: string | null = null;
+    server.use(
+      http.patch(
+        "https://api.vercel.com/v12/deployments/dpl_1/cancel",
+        ({ request }) => {
+          seenMethod = request.method;
+          seenUrl = request.url;
+          return HttpResponse.json({ uid: "dpl_1", state: "CANCELED" });
+        },
+      ),
+    );
+    const client = new VercelClient();
+    await client.cancelDeployment("dpl_1", { teamId: "team_a" });
+    expect(seenMethod).toBe("PATCH");
+    expect(seenUrl).toContain("teamId=team_a");
+  });
+});
+
+describe("VercelClient.deleteDeployment", () => {
+  it("DELETE /v13/deployments/{id} with explicit teamId", async () => {
+    process.env.VERCEL_TOKEN = "test_token";
+    let seenMethod: string | null = null;
+    let seenUrl: string | null = null;
+    server.use(
+      http.delete(
+        "https://api.vercel.com/v13/deployments/dpl_1",
+        ({ request }) => {
+          seenMethod = request.method;
+          seenUrl = request.url;
+          return HttpResponse.json({ uid: "dpl_1", state: "DELETED" });
+        },
+      ),
+    );
+    const client = new VercelClient();
+    await client.deleteDeployment("dpl_1", { teamId: "team_a" });
+    expect(seenMethod).toBe("DELETE");
+    expect(seenUrl).toContain("teamId=team_a");
+  });
+});
+
+describe("VercelClient.updateProject", () => {
+  it("PATCH /v9/projects/{id} with body + teamId", async () => {
+    process.env.VERCEL_TOKEN = "test_token";
+    stubResolveTeam({ id: "prj_t1", name: "team-site" });
+    let seenMethod: string | null = null;
+    let seenUrl: string | null = null;
+    let seenBody: unknown = null;
+    server.use(
+      http.patch(
+        "https://api.vercel.com/v9/projects/team-site",
+        async ({ request }) => {
+          seenMethod = request.method;
+          seenUrl = request.url;
+          seenBody = await request.json();
+          return HttpResponse.json({ id: "prj_t1", name: "team-site" });
+        },
+      ),
+    );
+    const client = new VercelClient();
+    await client.updateProject("team-site", { framework: "nextjs" });
+    expect(seenMethod).toBe("PATCH");
+    expect(seenUrl).toContain("teamId=team_a");
+    expect(seenBody).toEqual({ framework: "nextjs" });
+  });
+});
+
+describe("VercelClient.deleteProject", () => {
+  it("DELETE /v9/projects/{id} with teamId; 204 -> undefined", async () => {
+    process.env.VERCEL_TOKEN = "test_token";
+    stubResolveTeam({ id: "prj_t1", name: "team-site" });
+    let seenMethod: string | null = null;
+    let seenUrl: string | null = null;
+    server.use(
+      http.delete(
+        "https://api.vercel.com/v9/projects/team-site",
+        ({ request }) => {
+          seenMethod = request.method;
+          seenUrl = request.url;
+          return new HttpResponse(null, { status: 204 });
+        },
+      ),
+    );
+    const client = new VercelClient();
+    const result = await client.deleteProject("team-site");
+    expect(seenMethod).toBe("DELETE");
+    expect(seenUrl).toContain("teamId=team_a");
+    expect(result).toBeUndefined();
+  });
+});
+
+describe("VercelClient.pauseProject / unpauseProject", () => {
+  it("pauseProject POSTs /v1/.../pause with teamId; empty 200 -> resolves", async () => {
+    process.env.VERCEL_TOKEN = "test_token";
+    stubResolveTeam({ id: "prj_t1", name: "team-site" });
+    let seenMethod: string | null = null;
+    let seenAuth: string | null = null;
+    let seenUrl: string | null = null;
+    server.use(
+      http.post(
+        "https://api.vercel.com/v1/projects/team-site/pause",
+        ({ request }) => {
+          seenMethod = request.method;
+          seenAuth = request.headers.get("authorization");
+          seenUrl = request.url;
+          return new HttpResponse(null, { status: 200 });
+        },
+      ),
+    );
+    const client = new VercelClient();
+    const result = await client.pauseProject("team-site");
+    expect(seenMethod).toBe("POST");
+    expect(seenAuth).toBe("Bearer test_token");
+    expect(seenUrl).toContain("teamId=team_a");
+    expect(result).toBeUndefined();
+  });
+
+  it("unpauseProject POSTs /v1/.../unpause with teamId", async () => {
+    process.env.VERCEL_TOKEN = "test_token";
+    stubResolveTeam({ id: "prj_t1", name: "team-site" });
+    let seenUrl: string | null = null;
+    server.use(
+      http.post(
+        "https://api.vercel.com/v1/projects/team-site/unpause",
+        ({ request }) => {
+          seenUrl = request.url;
+          return new HttpResponse(null, { status: 200 });
+        },
+      ),
+    );
+    const client = new VercelClient();
+    await client.unpauseProject("team-site");
+    expect(seenUrl).toContain("teamId=team_a");
+  });
+
+  it("pauseProject maps 401 to AuthError mentioning VERCEL_TOKEN", async () => {
+    process.env.VERCEL_TOKEN = "bad_token";
+    stubResolveTeam({ id: "prj_t1", name: "team-site" });
+    server.use(
+      http.post(
+        "https://api.vercel.com/v1/projects/team-site/pause",
+        () => HttpResponse.json({ error: "unauthorized" }, { status: 401 }),
+      ),
+    );
+    const client = new VercelClient();
+    try {
+      await client.pauseProject("team-site");
+      throw new Error("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(AuthError);
+      expect((err as Error).message).toContain("VERCEL_TOKEN");
+    }
   });
 });
