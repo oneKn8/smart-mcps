@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { defineTool, guardDestructive } from "smart-mcp-core";
-import { assertProdAllowed } from "../safety.js";
+import { assertProdAllowed, assertTeamWritable } from "../safety.js";
 import type {
   VercelClient,
   VercelDeployment,
@@ -292,6 +292,7 @@ export const redeploy = defineTool<RedeployInput, RedeployOutput, Context>({
     const { project, scope } = await context.client.resolveProjectStrict(
       input.project,
     );
+    assertTeamWritable(scope.kind === "team" ? scope.slug : null, input.project);
     const teamId = teamIdOf(scope);
 
     const preview = [
@@ -451,6 +452,7 @@ export const cancelDeployment = defineTool<
     const { project, scope } = await context.client.resolveProjectStrict(
       input.project,
     );
+    assertTeamWritable(scope.kind === "team" ? scope.slug : null, input.project);
     const teamId = teamIdOf(scope);
 
     const preview = [
@@ -504,6 +506,7 @@ export const deleteDeployment = defineTool<
     const { project, scope } = await context.client.resolveProjectStrict(
       input.project,
     );
+    assertTeamWritable(scope.kind === "team" ? scope.slug : null, input.project);
     const teamId = teamIdOf(scope);
 
     const preview = [

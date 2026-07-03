@@ -9,6 +9,7 @@ import {
   ValidationError,
   AmbiguousMatchError,
 } from "smart-mcp-core";
+import { assertTeamWritable } from "./safety.js";
 
 export type VercelCreds = {
   VERCEL_TOKEN: string;
@@ -431,6 +432,21 @@ export class VercelClient {
   }
 
   /**
+   * Resolve a project for a WRITE: strict resolution (M5 — refuses ambiguous
+   * cross-team names) plus a team deny-list check so no mutation ever lands on a
+   * protected team's project (default: example-denied-team). Read paths keep using
+   * resolveProjectStrict directly, so reads of a denied team still work.
+   */
+  async resolveProjectStrictForWrite(
+    idOrName: string,
+  ): Promise<{ project: VercelProject; scope: TeamScope }> {
+    const resolved = await this.resolveProjectStrict(idOrName);
+    const slug = resolved.scope.kind === "team" ? resolved.scope.slug : null;
+    assertTeamWritable(slug, idOrName);
+    return resolved;
+  }
+
+  /**
    * Issues a mutation whose successful response carries NO body — Vercel returns
    * an empty 200/201/202 for pause / unpause / promote. Core's fetchJson always
    * calls response.json(), which throws on an empty body (it only special-cases
@@ -619,7 +635,7 @@ export class VercelClient {
     idOrName: string,
     body: UpsertProjectEnvBody | UpsertProjectEnvBody[],
   ): Promise<Record<string, unknown>> {
-    const { scope } = await this.resolveProjectStrict(idOrName);
+    const { scope } = await this.resolveProjectStrictForWrite(idOrName);
     const searchParams: Record<string, string | number | undefined> = {
       upsert: "true",
     };
@@ -642,7 +658,7 @@ export class VercelClient {
     envId: string,
     body: UpdateProjectEnvBody,
   ): Promise<ProjectEnv> {
-    const { scope } = await this.resolveProjectStrict(idOrName);
+    const { scope } = await this.resolveProjectStrictForWrite(idOrName);
     const searchParams: Record<string, string | number | undefined> = {};
     const teamId = scopeTeamId(scope);
     if (teamId) searchParams.teamId = teamId;
@@ -661,7 +677,7 @@ export class VercelClient {
     idOrName: string,
     envId: string,
   ): Promise<unknown> {
-    const { scope } = await this.resolveProjectStrict(idOrName);
+    const { scope } = await this.resolveProjectStrictForWrite(idOrName);
     const searchParams: Record<string, string | number | undefined> = {};
     const teamId = scopeTeamId(scope);
     if (teamId) searchParams.teamId = teamId;
@@ -681,7 +697,7 @@ export class VercelClient {
     idOrName: string,
     body: AddProjectDomainBody,
   ): Promise<ProjectDomain> {
-    const { scope } = await this.resolveProjectStrict(idOrName);
+    const { scope } = await this.resolveProjectStrictForWrite(idOrName);
     const searchParams: Record<string, string | number | undefined> = {};
     const teamId = scopeTeamId(scope);
     if (teamId) searchParams.teamId = teamId;
@@ -701,7 +717,7 @@ export class VercelClient {
     idOrName: string,
     domain: string,
   ): Promise<Record<string, unknown>> {
-    const { scope } = await this.resolveProjectStrict(idOrName);
+    const { scope } = await this.resolveProjectStrictForWrite(idOrName);
     const searchParams: Record<string, string | number | undefined> = {};
     const teamId = scopeTeamId(scope);
     if (teamId) searchParams.teamId = teamId;
@@ -720,7 +736,7 @@ export class VercelClient {
     domain: string,
     body?: Record<string, unknown>,
   ): Promise<unknown> {
-    const { scope } = await this.resolveProjectStrict(idOrName);
+    const { scope } = await this.resolveProjectStrictForWrite(idOrName);
     const searchParams: Record<string, string | number | undefined> = {};
     const teamId = scopeTeamId(scope);
     if (teamId) searchParams.teamId = teamId;
@@ -802,7 +818,7 @@ export class VercelClient {
     projectId: string,
     deploymentId: string,
   ): Promise<void> {
-    const { scope } = await this.resolveProjectStrict(projectId);
+    const { scope } = await this.resolveProjectStrictForWrite(projectId);
     const searchParams: Record<string, string | number | undefined> = {};
     const teamId = scopeTeamId(scope);
     if (teamId) searchParams.teamId = teamId;
@@ -850,7 +866,7 @@ export class VercelClient {
     idOrName: string,
     body: Record<string, unknown>,
   ): Promise<VercelProject> {
-    const { scope } = await this.resolveProjectStrict(idOrName);
+    const { scope } = await this.resolveProjectStrictForWrite(idOrName);
     const searchParams: Record<string, string | number | undefined> = {};
     const teamId = scopeTeamId(scope);
     if (teamId) searchParams.teamId = teamId;
@@ -866,7 +882,7 @@ export class VercelClient {
   }
 
   async deleteProject(idOrName: string): Promise<unknown> {
-    const { scope } = await this.resolveProjectStrict(idOrName);
+    const { scope } = await this.resolveProjectStrictForWrite(idOrName);
     const searchParams: Record<string, string | number | undefined> = {};
     const teamId = scopeTeamId(scope);
     if (teamId) searchParams.teamId = teamId;
@@ -882,7 +898,7 @@ export class VercelClient {
 
   // Empty 200 body -> requestNoBody.
   async pauseProject(projectId: string): Promise<void> {
-    const { scope } = await this.resolveProjectStrict(projectId);
+    const { scope } = await this.resolveProjectStrictForWrite(projectId);
     const searchParams: Record<string, string | number | undefined> = {};
     const teamId = scopeTeamId(scope);
     if (teamId) searchParams.teamId = teamId;
@@ -893,7 +909,7 @@ export class VercelClient {
   }
 
   async unpauseProject(projectId: string): Promise<void> {
-    const { scope } = await this.resolveProjectStrict(projectId);
+    const { scope } = await this.resolveProjectStrictForWrite(projectId);
     const searchParams: Record<string, string | number | undefined> = {};
     const teamId = scopeTeamId(scope);
     if (teamId) searchParams.teamId = teamId;

@@ -57,3 +57,40 @@ export function assertRevealAllowed(): void {
     );
   }
 }
+
+/**
+ * Teams whose projects this MCP must NEVER mutate, independent of the prod/confirm
+ * gates. Default: alpha-team's Vercel team ("example-denied-team") — Santo's work is
+ * independent of former-employer, so agents driving this tool must not write to that team's
+ * projects. Reads are unaffected. The default is a floor; VERCEL_SMART_DENIED_TEAMS
+ * (comma-separated team slugs) only ADDS to it, it cannot remove the default.
+ */
+const DEFAULT_DENIED_TEAMS = ["example-denied-team"];
+
+export function deniedTeamSlugs(): string[] {
+  const extra = (process.env.VERCEL_SMART_DENIED_TEAMS ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+  return Array.from(new Set([...DEFAULT_DENIED_TEAMS, ...extra]));
+}
+
+/**
+ * Team write-deny. Throws if the resolved team is on the deny list. Called on
+ * every write-resolution so no mutation tool (env / domain / deployment / project)
+ * can touch a protected team's projects. `teamSlug` is null for personal scope,
+ * which is never denied.
+ */
+export function assertTeamWritable(
+  teamSlug: string | null | undefined,
+  project: string,
+): void {
+  if (!teamSlug) return;
+  if (deniedTeamSlugs().includes(teamSlug)) {
+    throw new PermissionError(
+      `Writes to the '${teamSlug}' team are blocked (project '${project}'). ` +
+        `This MCP is configured to never mutate that team's projects; reads still work. ` +
+        `To change the deny list, set VERCEL_SMART_DENIED_TEAMS.`,
+    );
+  }
+}
