@@ -8,6 +8,7 @@ import {
 import type { SlackContext } from "../context.js";
 import { mapUser, type SlimUser } from "../user-mapper.js";
 import { nullableString, nullableBoolean, asObject } from "../null-helpers.js";
+import { collectPaged } from "../pagination.js";
 
 // ---------------------------------------------------------------------------
 // list_users
@@ -190,7 +191,17 @@ export const resolve_user = defineTool<ResolveUserInput, SlimUser, SlackContext>
   description: "Fuzzy-resolve a partial name or display name to a single workspace member.",
   inputSchema: resolveUserInputSchema,
   handler: async (input, context) => {
-    const { members } = await context.client.listUsers({ limit: 200 });
+    const { items: members } = await collectPaged((cursor) =>
+      context.client
+        .listUsers({
+          limit: 200,
+          ...(cursor !== undefined ? { cursor } : {}),
+        })
+        .then((r) => ({
+          items: r.members,
+          nextCursor: r.response_metadata?.next_cursor,
+        })),
+    );
     const slimUsers = members.map((m) => mapUser(m));
     // AmbiguousMatchError from resolveOne surfaces candidates automatically — let it propagate.
     return resolveOne(

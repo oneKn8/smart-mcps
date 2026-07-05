@@ -330,6 +330,43 @@ describe("catch_me_up — handler", () => {
     expect(result.mentions).toHaveLength(1);
     expect(result.mentions[0]?.text).toBe("recent @alice");
   });
+
+  it("paginates DMs beyond the first page (no DM silently dropped)", async () => {
+    client.authTest.mockResolvedValue({
+      ok: true,
+      user: "alice",
+      user_id: "U001",
+      team: "T",
+      team_id: "T001",
+      url: "https://example.slack.com",
+    });
+    // Page 1 hands back a next_cursor; page 2 (cursor set) has no cursor.
+    client.listChannels.mockImplementation((args: { cursor?: string }) => {
+      if (args.cursor === undefined) {
+        return Promise.resolve({
+          ok: true,
+          channels: [{ id: "D001", name: "", is_im: true, is_mpim: false, is_private: true, is_archived: false }],
+          response_metadata: { next_cursor: "PAGE2" },
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        channels: [{ id: "D002", name: "", is_im: true, is_mpim: false, is_private: true, is_archived: false }],
+      });
+    });
+    client.getHistory.mockResolvedValue({
+      ok: true,
+      messages: [{ ts: "1748510000.000001", text: "hi", user: "U999" }],
+    });
+    client.searchMessages.mockResolvedValue({ ok: true, messages: { matches: [], total: 0 } });
+
+    const input = parse(catch_me_up, { include_mentions: false });
+    const result = (await catch_me_up.handler(input, ctx(client))) as {
+      dms: Array<{ channel_id: string }>;
+    };
+    expect(result.dms.map((d) => d.channel_id).sort()).toEqual(["D001", "D002"]);
+    expect(client.listChannels).toHaveBeenCalledTimes(2);
+  });
 });
 
 // ---------------------------------------------------------------------------

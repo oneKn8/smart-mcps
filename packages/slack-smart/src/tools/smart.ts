@@ -7,6 +7,7 @@ import {
 } from "smart-mcp-core";
 import type { SlackContext } from "../context.js";
 import { mapChannel } from "../channel-mapper.js";
+import { collectPaged } from "../pagination.js";
 import {
   mapMessage,
   slimMessageFiles,
@@ -66,15 +67,29 @@ export const catch_me_up = defineTool<CatchMeUpInput, CatchMeUpOutput, SlackCont
     const me = await context.client.authTest("user");
     const cutoff = Math.floor(Date.now() / 1000) - input.since_hours * 3600;
 
-    // Fetch IM/MPIM channels (DMs)
-    const channelResp = await context.client.listChannels({
-      types: "im,mpim",
-      exclude_archived: true,
-      limit: 100,
-    });
-    const dmChannels = channelResp.channels.map((c) =>
+    // Fetch IM/MPIM channels (DMs), paginated — an account with >100 DMs would
+    // otherwise silently lose every DM past the first page.
+    const { items: rawDms, capped: dmsCapped } = await collectPaged((cursor) =>
+      context.client
+        .listChannels({
+          types: "im,mpim",
+          exclude_archived: true,
+          limit: 200,
+          ...(cursor !== undefined ? { cursor } : {}),
+        })
+        .then((r) => ({
+          items: r.channels,
+          nextCursor: r.response_metadata?.next_cursor,
+        })),
+    );
+    const dmChannels = rawDms.map((c) =>
       mapChannel(c as Record<string, unknown>),
     );
+    if (dmsCapped) {
+      notes.push(
+        "You have a lot of DMs; only the most recent pages were scanned.",
+      );
+    }
 
     // For each DM, fetch recent history since cutoff. A single DM whose history
     // call fails (e.g. a stale/restricted channel returning channel_not_found)
@@ -258,13 +273,24 @@ export const unread_digest = defineTool<UnreadDigestInput, UnreadDigestOutput, S
       "The Slack Web API does not expose a reliable per-DM unread count; this shows recent DM activity only.",
     ];
 
-    const channelResp = await context.client.listChannels({
-      types: "im,mpim",
-      limit: 100,
-    });
-    const dmChannels = channelResp.channels.map((c) =>
+    const { items: rawDms, capped: dmsCapped } = await collectPaged((cursor) =>
+      context.client
+        .listChannels({
+          types: "im,mpim",
+          limit: 200,
+          ...(cursor !== undefined ? { cursor } : {}),
+        })
+        .then((r) => ({
+          items: r.channels,
+          nextCursor: r.response_metadata?.next_cursor,
+        })),
+    );
+    const dmChannels = rawDms.map((c) =>
       mapChannel(c as Record<string, unknown>),
     );
+    if (dmsCapped) {
+      notes.push("You have a lot of DMs; only the most recent pages were scanned.");
+    }
 
     const dms: DmDigestEntry[] = [];
     let skipped = 0;
@@ -416,12 +442,20 @@ export const smart_send = defineTool<SmartSendInput, SmartSendOutput, SlackConte
     let label: string;
 
     if (hasChannel) {
-      const channelResp = await context.client.listChannels({
-        types: "public_channel,private_channel",
-        exclude_archived: true,
-        limit: 200,
-      });
-      const channels = channelResp.channels.map((c) =>
+      const { items: rawChannels } = await collectPaged((cursor) =>
+        context.client
+          .listChannels({
+            types: "public_channel,private_channel",
+            exclude_archived: true,
+            limit: 200,
+            ...(cursor !== undefined ? { cursor } : {}),
+          })
+          .then((r) => ({
+            items: r.channels,
+            nextCursor: r.response_metadata?.next_cursor,
+          })),
+      );
+      const channels = rawChannels.map((c) =>
         mapChannel(c as Record<string, unknown>),
       );
       // resolveOne throws AmbiguousMatchError if no confident match — let it propagate
@@ -434,8 +468,18 @@ export const smart_send = defineTool<SmartSendInput, SmartSendOutput, SlackConte
       targetId = resolved.id;
       label = "#" + (resolved.name ?? resolved.id);
     } else {
-      const usersResp = await context.client.listUsers({ limit: 200 });
-      const users = usersResp.members.map(mapUser);
+      const { items: rawUsers } = await collectPaged((cursor) =>
+        context.client
+          .listUsers({
+            limit: 200,
+            ...(cursor !== undefined ? { cursor } : {}),
+          })
+          .then((r) => ({
+            items: r.members,
+            nextCursor: r.response_metadata?.next_cursor,
+          })),
+      );
+      const users = rawUsers.map(mapUser);
       // resolveOne throws AmbiguousMatchError if no confident match — let it propagate
       const resolved = resolveOne(
         input.user_query as string,
