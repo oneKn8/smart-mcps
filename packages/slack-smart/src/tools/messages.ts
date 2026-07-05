@@ -321,3 +321,33 @@ export const schedule_message = defineTool<
     };
   },
 });
+
+// ---------------------------------------------------------------------------
+// get_permalink (read-only)
+// ---------------------------------------------------------------------------
+
+const getPermalinkInputSchema = z.object({
+  channel: z.string().min(1),
+  message_ts: z.string().min(1),
+});
+
+type GetPermalinkInput = z.infer<typeof getPermalinkInputSchema>;
+
+type GetPermalinkOutput = { permalink: string; channel: string };
+
+export const get_permalink = defineTool<
+  GetPermalinkInput,
+  GetPermalinkOutput,
+  SlackContext
+>({
+  name: "get_permalink",
+  description: "Get a shareable link to a message by channel and timestamp.",
+  inputSchema: getPermalinkInputSchema,
+  handler: async (input, context) => {
+    const resp = await context.client.getPermalink({
+      channel: input.channel,
+      message_ts: input.message_ts,
+    });
+    return { permalink: resp.permalink, channel: resp.channel };
+  },
+});

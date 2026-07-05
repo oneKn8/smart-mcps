@@ -6,6 +6,7 @@ import {
   update_message,
   delete_message,
   schedule_message,
+  get_permalink,
 } from "../messages.js";
 
 // ---------------------------------------------------------------------------
@@ -17,6 +18,7 @@ type FakeClient = {
   updateMessage: ReturnType<typeof vi.fn>;
   deleteMessage: ReturnType<typeof vi.fn>;
   scheduleMessage: ReturnType<typeof vi.fn>;
+  getPermalink: ReturnType<typeof vi.fn>;
 };
 
 function makeClient(): FakeClient {
@@ -25,6 +27,7 @@ function makeClient(): FakeClient {
     updateMessage: vi.fn(),
     deleteMessage: vi.fn(),
     scheduleMessage: vi.fn(),
+    getPermalink: vi.fn(),
   };
 }
 
@@ -515,5 +518,36 @@ describe("schedule_message — confirm gate", () => {
       text: "x",
     }) as { send_as: string };
     expect(parsed.send_as).toBe("user");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// get_permalink (read-only, no confirm)
+// ---------------------------------------------------------------------------
+
+describe("get_permalink", () => {
+  it("returns the permalink and channel for a (channel, ts)", async () => {
+    const client = makeClient();
+    client.getPermalink.mockResolvedValue({
+      ok: true,
+      permalink: "https://x.slack.com/archives/C001/p111",
+      channel: "C001",
+    });
+    const input = parse(get_permalink, {
+      channel: "C001",
+      message_ts: "111.222",
+    });
+    const result = (await get_permalink.handler(input, ctx(client))) as {
+      permalink: string;
+      channel: string;
+    };
+    expect(client.getPermalink).toHaveBeenCalledWith({
+      channel: "C001",
+      message_ts: "111.222",
+    });
+    expect(result).toEqual({
+      permalink: "https://x.slack.com/archives/C001/p111",
+      channel: "C001",
+    });
   });
 });

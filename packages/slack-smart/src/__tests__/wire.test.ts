@@ -13,6 +13,7 @@ const EXPECTED_TOOL_NAMES = [
   "dnd_status",
   "end_snooze",
   "file_info",
+  "get_permalink",
   "get_reactions",
   "invite_to_channel",
   "list_channels",
@@ -22,10 +23,12 @@ const EXPECTED_TOOL_NAMES = [
   "list_usergroups",
   "list_users",
   "lookup_by_email",
+  "mark_read",
   "mentions",
   "open_dm",
   "pin_message",
   "post_message",
+  "read_file",
   "remove_reaction",
   "reply_in_thread",
   "resolve_user",
@@ -51,12 +54,12 @@ const EXPECTED_TOOL_NAMES = [
 ];
 
 describe("slack-smart tool wiring", () => {
-  it("exports the exact set of 46 tool names (sorted)", () => {
+  it("exports the exact set of 49 tool names (sorted)", () => {
     expect(tools.map((t) => t.name).sort()).toEqual(EXPECTED_TOOL_NAMES);
   });
 
   it("exports the expected number of tools", () => {
-    expect(tools).toHaveLength(46);
+    expect(tools).toHaveLength(49);
   });
 
   it("tool names include the 4 channel-management write tools", () => {
@@ -124,11 +127,12 @@ describe("slack-smart tool wiring", () => {
     expect(new Set(names).size).toBe(names.length);
   });
 
-  it("tool names include all 3 file tools", () => {
+  it("tool names include all 4 file tools", () => {
     const names = tools.map((t) => t.name);
     expect(names).toContain("list_files");
     expect(names).toContain("file_info");
     expect(names).toContain("upload_file");
+    expect(names).toContain("read_file");
   });
 
   it("tool names include all 3 pins tools", () => {

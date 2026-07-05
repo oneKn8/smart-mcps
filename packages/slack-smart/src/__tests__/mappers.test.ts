@@ -202,6 +202,40 @@ describe("mapMessage — bot message", () => {
   });
 });
 
+describe("mapMessage — file attachments", () => {
+  it("surfaces slimmed files[] so attachments are discoverable", () => {
+    const slim = mapMessage({
+      ts: "1234567890.000004",
+      text: "",
+      user: "U005",
+      files: [
+        {
+          id: "F100",
+          name: "spec.pdf",
+          mimetype: "application/pdf",
+          filetype: "pdf",
+          size: 2048,
+          url_private_download: "https://files.slack.com/x",
+          extra: "drop",
+        },
+      ],
+    });
+    expect(slim.files).toHaveLength(1);
+    expect(slim.files?.[0]).toEqual({
+      id: "F100",
+      name: "spec.pdf",
+      mimetype: "application/pdf",
+      filetype: "pdf",
+      size: 2048,
+    });
+  });
+
+  it("omits files when absent or empty", () => {
+    expect(mapMessage({ ts: "1", text: "hi", user: "U1" })).not.toHaveProperty("files");
+    expect(mapMessage({ ts: "1", text: "hi", user: "U1", files: [] })).not.toHaveProperty("files");
+  });
+});
+
 describe("mapMessage — missing fields", () => {
   it("returns ts='', text='', user=null when all absent", () => {
     const slim = mapMessage({});

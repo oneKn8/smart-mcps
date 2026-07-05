@@ -310,3 +310,29 @@ describe("SlackClient.openDm", () => {
     expect(result.channel.id).toBe("D001");
   });
 });
+
+describe("SlackClient.markConversation", () => {
+  it("POSTs to conversations.mark with channel + ts and the user token", async () => {
+    let seenBody: Record<string, unknown> | null = null;
+    let seenAuth: string | null = null;
+    server.use(
+      http.post(
+        "https://slack.com/api/conversations.mark",
+        async ({ request }) => {
+          seenAuth = request.headers.get("authorization");
+          seenBody = (await request.json()) as Record<string, unknown>;
+          return HttpResponse.json({ ok: true });
+        },
+      ),
+    );
+    const client = new SlackClient();
+    const result = await client.markConversation({
+      channel: "D001",
+      ts: "111.222",
+    });
+    expect(seenAuth).toBe("Bearer xoxp-test-token");
+    expect(seenBody?.["channel"]).toBe("D001");
+    expect(seenBody?.["ts"]).toBe("111.222");
+    expect(result.ok).toBe(true);
+  });
+});

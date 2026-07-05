@@ -10,7 +10,12 @@ import {
 import { setupServer } from "msw/node";
 import { http, HttpResponse } from "msw";
 import { SlackClient } from "../client.js";
-import { UpstreamError, ValidationError } from "smart-mcp-core";
+import {
+  AuthError,
+  NotFoundError,
+  UpstreamError,
+  ValidationError,
+} from "smart-mcp-core";
 
 const USER_TOKEN = "xoxp-test-user-token";
 
@@ -278,6 +283,132 @@ describe("SlackClient.fetchRemoteFile", () => {
     const client = new SlackClient();
     await expect(
       client.fetchRemoteFile("http://127.0.0.1/x"),
+    ).rejects.toThrow(ValidationError);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// downloadFile — files.info -> authed GET of url_private_download
+// ---------------------------------------------------------------------------
+
+describe("SlackClient.downloadFile", () => {
+  it("fetches bytes from url_private_download with the user bearer token", async () => {
+    let seenAuth: string | null = null;
+    server.use(
+      http.get("https://slack.com/api/files.info", () =>
+        HttpResponse.json({
+          ok: true,
+          file: {
+            id: "F1",
+            name: "notes.txt",
+            mimetype: "text/plain",
+            url_private_download:
+              "https://files.slack.com/files-pri/T1-F1/download/notes.txt",
+          },
+        }),
+      ),
+      http.get(
+        "https://files.slack.com/files-pri/T1-F1/download/notes.txt",
+        ({ request }) => {
+          seenAuth = request.headers.get("authorization");
+          return HttpResponse.text("hello");
+        },
+      ),
+    );
+    const client = new SlackClient();
+    const { file, bytes } = await client.downloadFile({
+      file: "F1",
+      maxBytes: 1000,
+    });
+    expect(seenAuth).toBe(`Bearer ${USER_TOKEN}`);
+    expect(new TextDecoder().decode(bytes)).toBe("hello");
+    expect((file as Record<string, unknown>)["id"]).toBe("F1");
+  });
+
+  it("throws NotFoundError when the file has no downloadable URL", async () => {
+    server.use(
+      http.get("https://slack.com/api/files.info", () =>
+        HttpResponse.json({
+          ok: true,
+          file: { id: "F2", name: "x", mimetype: "text/plain" },
+        }),
+      ),
+    );
+    const client = new SlackClient();
+    await expect(
+      client.downloadFile({ file: "F2", maxBytes: 1000 }),
+    ).rejects.toThrow(NotFoundError);
+  });
+
+  it("refuses to send the token to a non-Slack host", async () => {
+    server.use(
+      http.get("https://slack.com/api/files.info", () =>
+        HttpResponse.json({
+          ok: true,
+          file: {
+            id: "F3",
+            mimetype: "text/plain",
+            url_private_download: "https://evil.example.com/steal",
+          },
+        }),
+      ),
+    );
+    const client = new SlackClient();
+    // Rejects BEFORE any GET is made — onUnhandledRequest:"error" would fire if
+    // we ever hit the evil host.
+    await expect(
+      client.downloadFile({ file: "F3", maxBytes: 1000 }),
+    ).rejects.toThrow(ValidationError);
+  });
+
+  it("throws AuthError when Slack returns an HTML sign-in page instead of bytes", async () => {
+    server.use(
+      http.get("https://slack.com/api/files.info", () =>
+        HttpResponse.json({
+          ok: true,
+          file: {
+            id: "F4",
+            mimetype: "text/plain",
+            url_private_download:
+              "https://files.slack.com/files-pri/T1-F4/download/x",
+          },
+        }),
+      ),
+      http.get(
+        "https://files.slack.com/files-pri/T1-F4/download/x",
+        () =>
+          new HttpResponse("<html>sign in</html>", {
+            headers: { "content-type": "text/html; charset=utf-8" },
+          }),
+      ),
+    );
+    const client = new SlackClient();
+    await expect(
+      client.downloadFile({ file: "F4", maxBytes: 1000 }),
+    ).rejects.toThrow(AuthError);
+  });
+
+  it("rejects a file whose body exceeds max_bytes", async () => {
+    server.use(
+      http.get("https://slack.com/api/files.info", () =>
+        HttpResponse.json({
+          ok: true,
+          file: {
+            id: "F5",
+            mimetype: "application/octet-stream",
+            url_private_download:
+              "https://files.slack.com/files-pri/T1-F5/download/big.bin",
+          },
+        }),
+      ),
+      http.get(
+        "https://files.slack.com/files-pri/T1-F5/download/big.bin",
+        () => HttpResponse.arrayBuffer(new Uint8Array(20).buffer),
+      ),
+    );
+    const client = new SlackClient();
+    await expect(
+      client.downloadFile({ file: "F5", maxBytes: 10 }),
     ).rejects.toThrow(ValidationError);
   });
 });

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { z } from "zod";
-import { ConfirmRequiredError } from "smart-mcp-core";
+import { ConfirmRequiredError, ValidationError } from "smart-mcp-core";
 import {
   list_channels,
   channel_history,
@@ -8,6 +8,7 @@ import {
   channel_info,
   channel_members,
   open_dm,
+  mark_read,
   invite_to_channel,
   set_channel_purpose,
   set_channel_topic,
@@ -25,6 +26,7 @@ type FakeClient = {
   getChannelInfo: ReturnType<typeof vi.fn>;
   getMembers: ReturnType<typeof vi.fn>;
   openDm: ReturnType<typeof vi.fn>;
+  markConversation: ReturnType<typeof vi.fn>;
   inviteToChannel: ReturnType<typeof vi.fn>;
   setChannelPurpose: ReturnType<typeof vi.fn>;
   setChannelTopic: ReturnType<typeof vi.fn>;
@@ -39,6 +41,7 @@ function makeClient(): FakeClient {
     getChannelInfo: vi.fn(),
     getMembers: vi.fn(),
     openDm: vi.fn(),
+    markConversation: vi.fn(),
     inviteToChannel: vi.fn(),
     setChannelPurpose: vi.fn(),
     setChannelTopic: vi.fn(),
@@ -572,5 +575,84 @@ describe("create_channel — confirm gate + handler", () => {
     });
     expect(result.id).toBe("C777");
     expect(result.name).toBe("new-channel");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// mark_read
+// ---------------------------------------------------------------------------
+
+describe("mark_read", () => {
+  let client: FakeClient;
+
+  beforeEach(() => {
+    client = makeClient();
+  });
+
+  it("throws ConfirmRequiredError without confirm and does not mark", async () => {
+    const parsed = mark_read.inputSchema.parse({
+      channel: "D001",
+      ts: "111.222",
+    }) as Parameters<typeof mark_read.handler>[0];
+    await expect(mark_read.handler(parsed, ctx(client))).rejects.toThrow(
+      ConfirmRequiredError,
+    );
+    expect(client.markConversation).not.toHaveBeenCalled();
+  });
+
+  it("marks the conversation read at an explicit ts", async () => {
+    client.markConversation.mockResolvedValue({ ok: true });
+    const parsed = mark_read.inputSchema.parse({
+      channel: "D001",
+      ts: "111.222",
+      confirm: true,
+    }) as Parameters<typeof mark_read.handler>[0];
+    const result = (await mark_read.handler(parsed, ctx(client))) as {
+      ok: boolean;
+      channel: string;
+      ts: string;
+    };
+    expect(client.markConversation).toHaveBeenCalledWith({
+      channel: "D001",
+      ts: "111.222",
+    });
+    expect(client.getHistory).not.toHaveBeenCalled();
+    expect(result).toEqual({ ok: true, channel: "D001", ts: "111.222" });
+  });
+
+  it("resolves the latest ts when ts is omitted", async () => {
+    client.getHistory.mockResolvedValue({
+      ok: true,
+      messages: [{ ts: "999.111", text: "latest", user: "U1" }],
+    });
+    client.markConversation.mockResolvedValue({ ok: true });
+    const parsed = mark_read.inputSchema.parse({
+      channel: "D002",
+      confirm: true,
+    }) as Parameters<typeof mark_read.handler>[0];
+    const result = (await mark_read.handler(parsed, ctx(client))) as {
+      ts: string;
+    };
+    const [histArgs] = client.getHistory.mock.calls[0] as [
+      { channel: string; limit: number },
+    ];
+    expect(histArgs).toEqual({ channel: "D002", limit: 1 });
+    expect(client.markConversation).toHaveBeenCalledWith({
+      channel: "D002",
+      ts: "999.111",
+    });
+    expect(result.ts).toBe("999.111");
+  });
+
+  it("throws ValidationError when the channel has no messages", async () => {
+    client.getHistory.mockResolvedValue({ ok: true, messages: [] });
+    const parsed = mark_read.inputSchema.parse({
+      channel: "D003",
+      confirm: true,
+    }) as Parameters<typeof mark_read.handler>[0];
+    await expect(mark_read.handler(parsed, ctx(client))).rejects.toThrow(
+      ValidationError,
+    );
+    expect(client.markConversation).not.toHaveBeenCalled();
   });
 });

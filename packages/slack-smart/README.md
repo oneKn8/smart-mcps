@@ -1,6 +1,6 @@
 # slack-smart
 
-MCP server for Slack: read channels, DMs and threads; search messages and files; post, react, pin; manage channels (invite, purpose, topic, create); create and edit canvases; and manage Do Not Disturb — all with confirm-gated writes and smart composite shortcuts for daily catch-up. Part of the [smart-mcps](../../README.md) monorepo. Built on `smart-mcp-core`.
+MCP server for Slack: read channels, DMs and threads; search messages and files; read and upload file contents; post, react, pin; manage channels (invite, purpose, topic, create); create and edit canvases; and manage Do Not Disturb — all with confirm-gated writes and smart composite shortcuts for daily catch-up. Part of the [smart-mcps](../../README.md) monorepo. Built on `smart-mcp-core`.
 
 ## Setup
 
@@ -45,7 +45,7 @@ npm run build
 
 The installer auto-discovers `packages/*/dist/server.js` and registers `slack-smart` in Claude Code (`~/.claude.json`), Cursor (`~/.cursor/mcp.json`), and prints a Codex snippet. After registration, restart your MCP client. Tools appear under the `slack-smart` namespace.
 
-## Tools (46)
+## Tools (49)
 
 Write tools are confirm-gated: they throw a `ConfirmRequiredError` with a human-readable preview unless `confirm: true` is passed. This prevents accidental writes.
 
@@ -55,7 +55,7 @@ Write tools are confirm-gated: they throw a `ConfirmRequiredError` with a human-
 |---|---|
 | `whoami` | Return the authenticated user's id, name, and team info. |
 
-### Conversations (10)
+### Conversations (11)
 
 | Name | Description |
 |---|---|
@@ -65,12 +65,15 @@ Write tools are confirm-gated: they throw a `ConfirmRequiredError` with a human-
 | `channel_info` | Get metadata for a single channel by ID. |
 | `channel_members` | List members of a channel. |
 | `open_dm` | Open a DM or group DM and return the conversation ID. |
+| `mark_read` | Mark a channel or DM read up to a message (write — confirm-gated). |
 | `invite_to_channel` | Invite users (comma-separated IDs) to a channel (write — confirm-gated). |
 | `set_channel_purpose` | Set a channel's purpose/description (write — confirm-gated). |
 | `set_channel_topic` | Set a channel's topic (write — confirm-gated). |
 | `create_channel` | Create a public or private channel (write — confirm-gated). |
 
-### Messages (5, write — confirm-gated)
+### Messages (6)
+
+The five sends are write — confirm-gated; `get_permalink` is read-only.
 
 | Name | Description |
 |---|---|
@@ -79,6 +82,7 @@ Write tools are confirm-gated: they throw a `ConfirmRequiredError` with a human-
 | `update_message` | Edit the text of an existing message. |
 | `delete_message` | Delete a message by channel and timestamp. |
 | `schedule_message` | Schedule a message to be sent at a future unix timestamp. |
+| `get_permalink` | Get a shareable link to a message by channel and timestamp. |
 
 ### Search (2, read-only)
 
@@ -106,12 +110,13 @@ Write tools are confirm-gated: they throw a `ConfirmRequiredError` with a human-
 | `user_presence` | Get the presence status of a user. |
 | `resolve_user` | Resolve a display name or real name to a user ID. |
 
-### Files (3)
+### Files (4)
 
 | Name | Description |
 |---|---|
 | `list_files` | List files visible to the user token. |
 | `file_info` | Get metadata for a single file by ID. |
+| `read_file` | Read a file's content by ID (text inline, binary base64). |
 | `upload_file` | Upload a file from a path, base64, or URL to Slack (write — confirm-gated). |
 
 ### Pins (3)
@@ -157,7 +162,7 @@ Write tools are confirm-gated: they throw a `ConfirmRequiredError` with a human-
 
 ## Safety
 
-Write tools (`post_message`, `reply_in_thread`, `update_message`, `delete_message`, `schedule_message`, `add_reaction`, `remove_reaction`, `upload_file`, `pin_message`, `unpin_message`, `set_snooze`, `end_snooze`, `smart_send`, `invite_to_channel`, `set_channel_purpose`, `set_channel_topic`, `create_channel`, `create_canvas`, `update_canvas`) all call `guardDestructive` before touching the API. Without `confirm: true` they return a preview of the action and throw `ConfirmRequiredError`. Pass `confirm: true` to execute.
+Write tools (`post_message`, `reply_in_thread`, `update_message`, `delete_message`, `schedule_message`, `mark_read`, `add_reaction`, `remove_reaction`, `upload_file`, `pin_message`, `unpin_message`, `set_snooze`, `end_snooze`, `smart_send`, `invite_to_channel`, `set_channel_purpose`, `set_channel_topic`, `create_channel`, `create_canvas`, `update_canvas`) all call `guardDestructive` before touching the API. Without `confirm: true` they return a preview of the action and throw `ConfirmRequiredError`. Pass `confirm: true` to execute.
 
 Read tools default to the user token (`xoxp`). `post_message`, `reply_in_thread`, `update_message`, `delete_message`, `schedule_message`, and `smart_send` accept a `send_as` field: `"user"` (default) uses `SLACK_USER_TOKEN`; `"bot"` uses `SLACK_BOT_TOKEN`. The default is `"user"` because the bot app is often not installed in the target workspace.
 

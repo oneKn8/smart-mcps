@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { defineTool, guardDestructive } from "smart-mcp-core";
+import { defineTool, guardDestructive, ValidationError } from "smart-mcp-core";
 import type { SlackContext } from "../context.js";
 import { mapChannel, type SlimChannel } from "../channel-mapper.js";
 import { mapMessage, type SlimMessage } from "../message-mapper.js";
@@ -232,6 +232,52 @@ export const open_dm = defineTool<OpenDmInput, OpenDmOutput, SlackContext>({
   handler: async (input, context) => {
     const resp = await context.client.openDm({ users: input.users });
     return { channel_id: resp.channel.id };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// mark_read
+// ---------------------------------------------------------------------------
+
+const markReadInputSchema = z.object({
+  channel: z.string().min(1),
+  // Mark read up to this message ts. Omit to mark read up to the latest message.
+  ts: z.string().optional(),
+  confirm: z.boolean().optional().default(false),
+});
+
+type MarkReadInput = z.infer<typeof markReadInputSchema>;
+
+type MarkReadOutput = { ok: true; channel: string; ts: string };
+
+export const mark_read = defineTool<MarkReadInput, MarkReadOutput, SlackContext>({
+  name: "mark_read",
+  description: "Mark a channel or DM read up to a message (write — confirm-gated).",
+  // Cast required: ZodDefault on confirm widens the schema input type.
+  inputSchema: markReadInputSchema as unknown as z.ZodType<MarkReadInput>,
+  handler: async (input, context) => {
+    let ts = input.ts;
+    if (ts === undefined) {
+      // Resolve the latest message ts so "mark this DM read" needs no ts.
+      const resp = await context.client.getHistory({
+        channel: input.channel,
+        limit: 1,
+      });
+      const latest = resp.messages[0];
+      const resolved = latest !== undefined ? mapMessage(latest).ts : "";
+      if (resolved === "") {
+        throw new ValidationError(
+          `mark_read: ${input.channel} has no messages to mark read.`,
+        );
+      }
+      ts = resolved;
+    }
+    guardDestructive({
+      confirm: input.confirm,
+      preview: `Mark ${input.channel} read up to ${ts}`,
+    });
+    await context.client.markConversation({ channel: input.channel, ts });
+    return { ok: true, channel: input.channel, ts };
   },
 });
 

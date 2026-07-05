@@ -244,3 +244,30 @@ describe("SlackClient.scheduleMessage", () => {
     expect(seenAuth).toBe(`Bearer ${USER_TOKEN}`);
   });
 });
+
+describe("SlackClient.getPermalink", () => {
+  it("GETs chat.getPermalink with channel + message_ts and the user token", async () => {
+    let seenUrl: string | null = null;
+    let seenAuth: string | null = null;
+    server.use(
+      http.get("https://slack.com/api/chat.getPermalink", ({ request }) => {
+        seenUrl = request.url;
+        seenAuth = request.headers.get("authorization");
+        return HttpResponse.json({
+          ok: true,
+          permalink: "https://x.slack.com/archives/C001/p111",
+          channel: "C001",
+        });
+      }),
+    );
+    const client = new SlackClient();
+    const result = await client.getPermalink({
+      channel: "C001",
+      message_ts: "111.222",
+    });
+    expect(seenAuth).toBe(`Bearer ${USER_TOKEN}`);
+    expect(seenUrl).toContain("channel=C001");
+    expect(seenUrl).toContain("message_ts=111.222");
+    expect(result.permalink).toBe("https://x.slack.com/archives/C001/p111");
+  });
+});

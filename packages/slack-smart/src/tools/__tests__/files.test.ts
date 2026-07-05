@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { ConfirmRequiredError, ValidationError } from "smart-mcp-core";
-import { list_files, file_info, upload_file } from "../files.js";
+import { list_files, file_info, upload_file, read_file } from "../files.js";
 
 // ---------------------------------------------------------------------------
 // Fake client factory
@@ -13,6 +13,7 @@ type FakeClient = {
   uploadBytes: ReturnType<typeof vi.fn>;
   completeUpload: ReturnType<typeof vi.fn>;
   fetchRemoteFile: ReturnType<typeof vi.fn>;
+  downloadFile: ReturnType<typeof vi.fn>;
 };
 
 function makeClient(): FakeClient {
@@ -23,6 +24,7 @@ function makeClient(): FakeClient {
     uploadBytes: vi.fn(),
     completeUpload: vi.fn(),
     fetchRemoteFile: vi.fn(),
+    downloadFile: vi.fn(),
   };
 }
 
@@ -133,6 +135,8 @@ describe("file_info — slim mapping", () => {
         name: "notes.txt",
         size: 512,
         mimetype: "text/plain",
+        url_private_download:
+          "https://files.slack.com/files-pri/T1-F002/download/notes.txt",
         unwanted: "drop me",
       },
     });
@@ -144,7 +148,96 @@ describe("file_info — slim mapping", () => {
     expect(result["id"]).toBe("F002");
     expect(result["name"]).toBe("notes.txt");
     expect(result["size"]).toBe(512);
+    // url_private_download is surfaced so a caller can fetch the bytes itself.
+    expect(result["url_private_download"]).toBe(
+      "https://files.slack.com/files-pri/T1-F002/download/notes.txt",
+    );
     expect(result).not.toHaveProperty("unwanted");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// read_file — content decoding + schema defaults
+// ---------------------------------------------------------------------------
+
+describe("read_file — schema defaults", () => {
+  it("defaults max_bytes to 1_000_000", () => {
+    const parsed = parse(read_file, { file: "F1" }) as { max_bytes: number };
+    expect(parsed.max_bytes).toBe(1_000_000);
+  });
+});
+
+describe("read_file — handler", () => {
+  let client: FakeClient;
+
+  beforeEach(() => {
+    client = makeClient();
+  });
+
+  it("returns UTF-8 text inline for a text mimetype and marks it untrusted", async () => {
+    client.downloadFile.mockResolvedValue({
+      file: { id: "F1", name: "notes.txt", mimetype: "text/plain", filetype: "text" },
+      bytes: new TextEncoder().encode("hello world"),
+    });
+    const input = parse(read_file, { file: "F1" });
+    const result = (await read_file.handler(input, ctx(client))) as {
+      id: string;
+      encoding: string;
+      content: string;
+      size: number;
+      mimetype?: string;
+      note: string;
+    };
+    expect(result.encoding).toBe("text");
+    expect(result.content).toBe("hello world");
+    expect(result.size).toBe(11);
+    expect(result.id).toBe("F1");
+    expect(result.mimetype).toBe("text/plain");
+    expect(result.note.toLowerCase()).toContain("untrusted");
+  });
+
+  it("base64-encodes a binary mimetype", async () => {
+    client.downloadFile.mockResolvedValue({
+      file: { id: "F2", name: "pixel.png", mimetype: "image/png", filetype: "png" },
+      bytes: new Uint8Array([1, 2, 3]),
+    });
+    const input = parse(read_file, { file: "F2" });
+    const result = (await read_file.handler(input, ctx(client))) as {
+      encoding: string;
+      content: string;
+      size: number;
+    };
+    expect(result.encoding).toBe("base64");
+    expect(result.content).toBe(Buffer.from([1, 2, 3]).toString("base64"));
+    expect(result.size).toBe(3);
+  });
+
+  it("treats a JSON application mimetype as text", async () => {
+    client.downloadFile.mockResolvedValue({
+      file: { id: "F3", name: "data.json", mimetype: "application/json" },
+      bytes: new TextEncoder().encode('{"ok":true}'),
+    });
+    const input = parse(read_file, { file: "F3" });
+    const result = (await read_file.handler(input, ctx(client))) as {
+      encoding: string;
+      content: string;
+    };
+    expect(result.encoding).toBe("text");
+    expect(result.content).toBe('{"ok":true}');
+  });
+
+  it("passes the resolved max_bytes through to the client", async () => {
+    client.downloadFile.mockResolvedValue({
+      file: { id: "F4", mimetype: "text/plain" },
+      bytes: new TextEncoder().encode("x"),
+    });
+    const input = parse(read_file, { file: "F4", max_bytes: 500 });
+    await read_file.handler(input, ctx(client));
+    const [args] = client.downloadFile.mock.calls[0] as [
+      { file: string; maxBytes: number },
+    ];
+    expect(args.file).toBe("F4");
+    expect(args.maxBytes).toBe(500);
   });
 });
 
@@ -419,7 +512,7 @@ describe("upload_file — content_url confirm gate", () => {
     expect(client.getUploadUrl).not.toHaveBeenCalled();
   });
 
-  it("preview shows filename and 'from URL' (size unknown before fetch)", async () => {
+  it("preview shows filename and the source host (size unknown before fetch)", async () => {
     const input = parse(upload_file, {
       content_url: "http://files.test/a.png",
       filename: "a.png",
@@ -432,7 +525,7 @@ describe("upload_file — content_url confirm gate", () => {
       if (err instanceof ConfirmRequiredError) preview = err.preview;
     }
     expect(preview).toContain("a.png");
-    expect(preview).toContain("from URL");
+    expect(preview).toContain("from files.test");
     expect(preview).toContain("C010");
   });
 });

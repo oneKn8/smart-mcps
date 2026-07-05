@@ -5,9 +5,35 @@ import {
   NotFoundError,
   RateLimitError,
   UpstreamError,
+  ValidationError,
 } from "smart-mcp-core";
 import { fetchRemoteFile } from "./safe-fetch.js";
 import type { FetchRemoteFileOptions } from "./safe-fetch.js";
+
+/**
+ * A file's private download URL is where we attach the user's Bearer token, so
+ * it MUST be a Slack-owned host. Never let a poisoned files.info response point
+ * our token at an arbitrary server. Throws ValidationError otherwise.
+ */
+function assertSlackFileHost(rawUrl: string): void {
+  let u: URL;
+  try {
+    u = new URL(rawUrl);
+  } catch {
+    throw new ValidationError(`Slack file URL is not a valid URL: ${rawUrl}`);
+  }
+  if (u.protocol !== "https:") {
+    throw new ValidationError(
+      `Slack file URL must use https, got "${u.protocol}"`,
+    );
+  }
+  const host = u.hostname.toLowerCase();
+  if (host !== "slack.com" && !host.endsWith(".slack.com")) {
+    throw new ValidationError(
+      `Refusing to fetch a Slack file from a non-Slack host ("${host}").`,
+    );
+  }
+}
 
 export type SlackCreds = {
   SLACK_USER_TOKEN: string;
@@ -294,6 +320,16 @@ export class SlackClient {
   // Conversations (write)
   // ---------------------------------------------------------------------------
 
+  async markConversation(args: { channel: string; ts: string }): Promise<{
+    ok: true;
+  }> {
+    return this.slackCall<SlackEnvelope>(
+      "conversations.mark",
+      { channel: args.channel, ts: args.ts },
+      { token: "user", http: "POST" },
+    ) as Promise<{ ok: true }>;
+  }
+
   async inviteToChannel(args: { channel: string; users: string }): Promise<{
     ok: true;
     channel: unknown;
@@ -409,6 +445,21 @@ export class SlackClient {
       scheduled_message_id: string;
       post_at: number;
     }>;
+  }
+
+  // Read: turn a (channel, ts) into a shareable archive link. GET, user token,
+  // no special scope.
+  async getPermalink(args: {
+    channel: string;
+    message_ts: string;
+  }): Promise<{ ok: true; permalink: string; channel: string }> {
+    return this.slackCall<
+      SlackEnvelope & { permalink: string; channel: string }
+    >(
+      "chat.getPermalink",
+      { channel: args.channel, message_ts: args.message_ts },
+      { token: "user", http: "GET" },
+    ) as Promise<{ ok: true; permalink: string; channel: string }>;
   }
 
   // ---------------------------------------------------------------------------
@@ -681,6 +732,85 @@ export class SlackClient {
       "files.info",
       { file: args.file },
     ) as Promise<{ ok: true; file: unknown }>;
+  }
+
+  // Download a file's raw bytes. files.info gives the token-authed
+  // url_private_download; we GET it with the USER Bearer token (only ever to a
+  // Slack host — see assertSlackFileHost), capped at maxBytes. Returns the raw
+  // files.info object alongside the bytes so the caller owns the slim mapping.
+  async downloadFile(args: { file: string; maxBytes: number }): Promise<{
+    file: Record<string, unknown>;
+    bytes: Uint8Array;
+  }> {
+    const infoResp = await this.getFileInfo({ file: args.file });
+    const f = (infoResp.file ?? {}) as Record<string, unknown>;
+    const url =
+      typeof f["url_private_download"] === "string"
+        ? (f["url_private_download"] as string)
+        : typeof f["url_private"] === "string"
+          ? (f["url_private"] as string)
+          : undefined;
+    if (url === undefined) {
+      throw new NotFoundError(
+        "Slack file has no downloadable URL (it may be an externally hosted file).",
+        { detail: f },
+      );
+    }
+    assertSlackFileHost(url);
+
+    const token = this.tokenFor("user");
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 30_000);
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        headers: { Authorization: `Bearer ${token}` },
+        signal: controller.signal,
+      });
+    } catch (err) {
+      clearTimeout(timer);
+      if (err instanceof Error && err.name === "AbortError") {
+        throw new UpstreamError("Slack file download timed out");
+      }
+      throw new UpstreamError(
+        `Slack file download failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    try {
+      if (!res.ok) {
+        throw new UpstreamError(
+          `Slack file download returned HTTP ${res.status}`,
+        );
+      }
+      // Slack answers an unauthorized file GET with a 200 HTML sign-in page
+      // rather than the bytes; surface that as an auth error, not markup.
+      const ctype = (res.headers.get("content-type") ?? "").toLowerCase();
+      const expected =
+        typeof f["mimetype"] === "string" ? (f["mimetype"] as string) : "";
+      if (ctype.includes("text/html") && !expected.includes("html")) {
+        throw new AuthError(
+          "Slack returned an HTML page instead of file bytes — the user token likely lacks files:read or cannot access this file.",
+        );
+      }
+      const declared = res.headers.get("content-length");
+      if (declared !== null) {
+        const n = Number(declared);
+        if (Number.isFinite(n) && n > args.maxBytes) {
+          throw new ValidationError(
+            `Slack file is ${n} bytes, over the ${args.maxBytes}-byte limit; raise max_bytes (hard cap 10 MB).`,
+          );
+        }
+      }
+      const buf = new Uint8Array(await res.arrayBuffer());
+      if (buf.length > args.maxBytes) {
+        throw new ValidationError(
+          `Slack file is ${buf.length} bytes, over the ${args.maxBytes}-byte limit; raise max_bytes (hard cap 10 MB).`,
+        );
+      }
+      return { file: f, bytes: buf };
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   async getUploadUrl(args: {
