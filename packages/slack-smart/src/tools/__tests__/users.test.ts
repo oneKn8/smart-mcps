@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { z } from "zod";
-import { AmbiguousMatchError } from "smart-mcp-core";
+import { AmbiguousMatchError, ConfirmRequiredError } from "smart-mcp-core";
 import {
   list_users,
   user_info,
@@ -8,6 +8,8 @@ import {
   lookup_by_email,
   user_presence,
   resolve_user,
+  set_status,
+  set_presence,
 } from "../users.js";
 
 // ---------------------------------------------------------------------------
@@ -20,6 +22,8 @@ type FakeClient = {
   getUserProfile: ReturnType<typeof vi.fn>;
   lookupByEmail: ReturnType<typeof vi.fn>;
   getPresence: ReturnType<typeof vi.fn>;
+  setProfile: ReturnType<typeof vi.fn>;
+  setPresence: ReturnType<typeof vi.fn>;
 };
 
 function makeClient(): FakeClient {
@@ -29,6 +33,8 @@ function makeClient(): FakeClient {
     getUserProfile: vi.fn(),
     lookupByEmail: vi.fn(),
     getPresence: vi.fn(),
+    setProfile: vi.fn(),
+    setPresence: vi.fn(),
   };
 }
 
@@ -386,5 +392,72 @@ describe("resolve_user — handler", () => {
     >[0];
     await resolve_user.handler(parsed, ctx(client));
     expect(client.listUsers).toHaveBeenCalledWith({ limit: 200 });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// set_status / set_presence — confirm gate + happy path
+// ---------------------------------------------------------------------------
+
+describe("set_status", () => {
+  it("throws ConfirmRequiredError without confirm and does not write", async () => {
+    const client = makeClient();
+    const parsed = set_status.inputSchema.parse({
+      status_text: "heads down",
+    }) as Parameters<typeof set_status.handler>[0];
+    await expect(set_status.handler(parsed, ctx(client))).rejects.toThrow(
+      ConfirmRequiredError,
+    );
+    expect(client.setProfile).not.toHaveBeenCalled();
+  });
+
+  it("sets the profile status with confirm:true", async () => {
+    const client = makeClient();
+    client.setProfile.mockResolvedValue({ ok: true, profile: {} });
+    const parsed = set_status.inputSchema.parse({
+      status_text: "heads down",
+      status_emoji: ":no_entry:",
+      status_expiration: 1893456000,
+      confirm: true,
+    }) as Parameters<typeof set_status.handler>[0];
+    const result = (await set_status.handler(parsed, ctx(client))) as {
+      ok: boolean;
+    };
+    expect(client.setProfile).toHaveBeenCalledWith({
+      profile: {
+        status_text: "heads down",
+        status_emoji: ":no_entry:",
+        status_expiration: 1893456000,
+      },
+    });
+    expect(result.ok).toBe(true);
+  });
+});
+
+describe("set_presence", () => {
+  it("throws ConfirmRequiredError without confirm and does not write", async () => {
+    const client = makeClient();
+    const parsed = set_presence.inputSchema.parse({
+      presence: "away",
+    }) as Parameters<typeof set_presence.handler>[0];
+    await expect(set_presence.handler(parsed, ctx(client))).rejects.toThrow(
+      ConfirmRequiredError,
+    );
+    expect(client.setPresence).not.toHaveBeenCalled();
+  });
+
+  it("sets presence with confirm:true", async () => {
+    const client = makeClient();
+    client.setPresence.mockResolvedValue({ ok: true });
+    const parsed = set_presence.inputSchema.parse({
+      presence: "away",
+      confirm: true,
+    }) as Parameters<typeof set_presence.handler>[0];
+    const result = (await set_presence.handler(parsed, ctx(client))) as {
+      ok: boolean;
+      presence: string;
+    };
+    expect(client.setPresence).toHaveBeenCalledWith({ presence: "away" });
+    expect(result).toEqual({ ok: true, presence: "away" });
   });
 });

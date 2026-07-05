@@ -24,6 +24,8 @@ oauth_config:
       - users:read
       - users:read.email
       - users.profile:read
+      - users.profile:write
+      - users:write
       - reactions:read
       - reactions:write
       - chat:write
@@ -41,6 +43,8 @@ oauth_config:
       - groups:write.invites
       - canvases:read
       - canvases:write
+      - bookmarks:read
+      - bookmarks:write
 settings:
   org_deploy_enabled: false
   socket_mode_enabled: false

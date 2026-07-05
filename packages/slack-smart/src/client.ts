@@ -330,6 +330,33 @@ export class SlackClient {
     ) as Promise<{ ok: true }>;
   }
 
+  async joinChannel(args: { channel: string }): Promise<{
+    ok: true;
+    channel: unknown;
+  }> {
+    return this.slackCall<SlackEnvelope & { channel: unknown }>(
+      "conversations.join",
+      { channel: args.channel },
+      { token: "user", http: "POST" },
+    ) as Promise<{ ok: true; channel: unknown }>;
+  }
+
+  async leaveChannel(args: { channel: string }): Promise<{ ok: true }> {
+    return this.slackCall<SlackEnvelope>(
+      "conversations.leave",
+      { channel: args.channel },
+      { token: "user", http: "POST" },
+    ) as Promise<{ ok: true }>;
+  }
+
+  async archiveChannel(args: { channel: string }): Promise<{ ok: true }> {
+    return this.slackCall<SlackEnvelope>(
+      "conversations.archive",
+      { channel: args.channel },
+      { token: "user", http: "POST" },
+    ) as Promise<{ ok: true }>;
+  }
+
   async inviteToChannel(args: { channel: string; users: string }): Promise<{
     ok: true;
     channel: unknown;
@@ -460,6 +487,53 @@ export class SlackClient {
       { channel: args.channel, message_ts: args.message_ts },
       { token: "user", http: "GET" },
     ) as Promise<{ ok: true; permalink: string; channel: string }>;
+  }
+
+  async listScheduledMessages(args: {
+    channel?: string;
+    oldest?: string;
+    latest?: string;
+    limit?: number;
+    cursor?: string;
+  }): Promise<{
+    ok: true;
+    scheduled_messages: unknown[];
+    response_metadata?: { next_cursor?: string };
+  }> {
+    return this.slackCall<
+      SlackEnvelope & {
+        scheduled_messages: unknown[];
+        response_metadata?: { next_cursor?: string };
+      }
+    >(
+      "chat.scheduledMessages.list",
+      {
+        ...(args.channel !== undefined ? { channel: args.channel } : {}),
+        ...(args.oldest !== undefined ? { oldest: args.oldest } : {}),
+        ...(args.latest !== undefined ? { latest: args.latest } : {}),
+        ...(args.limit !== undefined ? { limit: args.limit } : {}),
+        ...(args.cursor !== undefined ? { cursor: args.cursor } : {}),
+      },
+      { token: "user", http: "GET" },
+    ) as Promise<{
+      ok: true;
+      scheduled_messages: unknown[];
+      response_metadata?: { next_cursor?: string };
+    }>;
+  }
+
+  async deleteScheduledMessage(args: {
+    channel: string;
+    scheduled_message_id: string;
+  }): Promise<{ ok: true }> {
+    return this.slackCall<SlackEnvelope>(
+      "chat.deleteScheduledMessage",
+      {
+        channel: args.channel,
+        scheduled_message_id: args.scheduled_message_id,
+      },
+      { token: "user", http: "POST" },
+    ) as Promise<{ ok: true }>;
   }
 
   // ---------------------------------------------------------------------------
@@ -687,6 +761,29 @@ export class SlackClient {
     }>;
   }
 
+  // Set the authenticated user's profile (used for status). Scope
+  // users.profile:write.
+  async setProfile(args: {
+    profile: Record<string, unknown>;
+  }): Promise<{ ok: true; profile: unknown }> {
+    return this.slackCall<SlackEnvelope & { profile: unknown }>(
+      "users.profile.set",
+      { profile: args.profile },
+      { token: "user", http: "POST" },
+    ) as Promise<{ ok: true; profile: unknown }>;
+  }
+
+  // Set the authenticated user's presence: "auto" or "away". Scope users:write.
+  async setPresence(args: {
+    presence: "auto" | "away";
+  }): Promise<{ ok: true }> {
+    return this.slackCall<SlackEnvelope>(
+      "users.setPresence",
+      { presence: args.presence },
+      { token: "user", http: "POST" },
+    ) as Promise<{ ok: true }>;
+  }
+
   // ---------------------------------------------------------------------------
   // Files (user token, scopes files:read / files:write)
   // ---------------------------------------------------------------------------
@@ -878,6 +975,14 @@ export class SlackClient {
     return fetchRemoteFile(url, opts);
   }
 
+  async deleteFile(args: { file: string }): Promise<{ ok: true }> {
+    return this.slackCall<SlackEnvelope>(
+      "files.delete",
+      { file: args.file },
+      { token: "user", http: "POST" },
+    ) as Promise<{ ok: true }>;
+  }
+
   // ---------------------------------------------------------------------------
   // Pins (user token, scopes pins:read / pins:write)
   // ---------------------------------------------------------------------------
@@ -1067,6 +1172,72 @@ export class SlackClient {
     return this.slackCall<SlackEnvelope>(
       "canvases.edit",
       { canvas_id: args.canvas_id, changes: args.changes },
+      { token: "user", http: "POST" },
+    ) as Promise<{ ok: true }>;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Bookmarks (user token, scopes bookmarks:read / bookmarks:write)
+  // ---------------------------------------------------------------------------
+
+  async listBookmarks(args: { channel_id: string }): Promise<{
+    ok: true;
+    bookmarks: unknown[];
+  }> {
+    return this.slackCall<SlackEnvelope & { bookmarks: unknown[] }>(
+      "bookmarks.list",
+      { channel_id: args.channel_id },
+      { token: "user", http: "GET" },
+    ) as Promise<{ ok: true; bookmarks: unknown[] }>;
+  }
+
+  async addBookmark(args: {
+    channel_id: string;
+    title: string;
+    type: string;
+    link?: string;
+    emoji?: string;
+  }): Promise<{ ok: true; bookmark: unknown }> {
+    return this.slackCall<SlackEnvelope & { bookmark: unknown }>(
+      "bookmarks.add",
+      {
+        channel_id: args.channel_id,
+        title: args.title,
+        type: args.type,
+        ...(args.link !== undefined ? { link: args.link } : {}),
+        ...(args.emoji !== undefined ? { emoji: args.emoji } : {}),
+      },
+      { token: "user", http: "POST" },
+    ) as Promise<{ ok: true; bookmark: unknown }>;
+  }
+
+  async editBookmark(args: {
+    channel_id: string;
+    bookmark_id: string;
+    title?: string;
+    link?: string;
+    emoji?: string;
+  }): Promise<{ ok: true; bookmark: unknown }> {
+    return this.slackCall<SlackEnvelope & { bookmark: unknown }>(
+      "bookmarks.edit",
+      {
+        channel_id: args.channel_id,
+        bookmark_id: args.bookmark_id,
+        ...(args.title !== undefined ? { title: args.title } : {}),
+        ...(args.link !== undefined ? { link: args.link } : {}),
+        ...(args.emoji !== undefined ? { emoji: args.emoji } : {}),
+      },
+      { token: "user", http: "POST" },
+    ) as Promise<{ ok: true; bookmark: unknown }>;
+  }
+
+  async removeBookmark(args: {
+    channel_id: string;
+    bookmark_id: string;
+  }): Promise<{ ok: true }> {
+    return this.slackCall<SlackEnvelope>(
+      "bookmarks.remove",
+      { channel_id: args.channel_id, bookmark_id: args.bookmark_id },
       { token: "user", http: "POST" },
     ) as Promise<{ ok: true }>;
   }

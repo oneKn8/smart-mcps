@@ -9,6 +9,10 @@ import {
   channel_members,
   open_dm,
   mark_read,
+  get_message,
+  join_channel,
+  leave_channel,
+  archive_channel,
   invite_to_channel,
   set_channel_purpose,
   set_channel_topic,
@@ -21,6 +25,8 @@ import {
   delete_message,
   schedule_message,
   get_permalink,
+  list_scheduled,
+  cancel_scheduled,
 } from "./messages.js";
 import { search_messages, search_files } from "./search.js";
 import { add_reaction, remove_reaction, get_reactions } from "./reactions.js";
@@ -31,8 +37,22 @@ import {
   lookup_by_email,
   user_presence,
   resolve_user,
+  set_status,
+  set_presence,
 } from "./users.js";
-import { list_files, file_info, upload_file, read_file } from "./files.js";
+import {
+  list_files,
+  file_info,
+  upload_file,
+  read_file,
+  delete_file,
+} from "./files.js";
+import {
+  list_bookmarks,
+  add_bookmark,
+  edit_bookmark,
+  remove_bookmark,
+} from "./bookmarks.js";
 import { list_pins, pin_message, unpin_message } from "./pins.js";
 import { dnd_status, set_snooze, end_snooze } from "./dnd.js";
 import { list_usergroups, team_info, list_emoji } from "./misc.js";
@@ -46,12 +66,13 @@ import {
 import { create_canvas, update_canvas } from "./canvas.js";
 
 // identity (1)
-// conversations (11)
-// messages (6)
+// conversations (15)
+// messages (8)
 // search (2)
 // reactions (3)
-// users (6)
-// files (4)
+// users (8)
+// files (5)
+// bookmarks (4)
 // pins (3)
 // dnd (3)
 // misc (3)
@@ -66,6 +87,10 @@ export const tools: ToolDefinition<unknown, unknown, SlackContext>[] = [
   channel_members as unknown as ToolDefinition<unknown, unknown, SlackContext>,
   open_dm as unknown as ToolDefinition<unknown, unknown, SlackContext>,
   mark_read as unknown as ToolDefinition<unknown, unknown, SlackContext>,
+  get_message as unknown as ToolDefinition<unknown, unknown, SlackContext>,
+  join_channel as unknown as ToolDefinition<unknown, unknown, SlackContext>,
+  leave_channel as unknown as ToolDefinition<unknown, unknown, SlackContext>,
+  archive_channel as unknown as ToolDefinition<unknown, unknown, SlackContext>,
   invite_to_channel as unknown as ToolDefinition<unknown, unknown, SlackContext>,
   set_channel_purpose as unknown as ToolDefinition<unknown, unknown, SlackContext>,
   set_channel_topic as unknown as ToolDefinition<unknown, unknown, SlackContext>,
@@ -76,6 +101,8 @@ export const tools: ToolDefinition<unknown, unknown, SlackContext>[] = [
   delete_message as unknown as ToolDefinition<unknown, unknown, SlackContext>,
   schedule_message as unknown as ToolDefinition<unknown, unknown, SlackContext>,
   get_permalink as unknown as ToolDefinition<unknown, unknown, SlackContext>,
+  list_scheduled as unknown as ToolDefinition<unknown, unknown, SlackContext>,
+  cancel_scheduled as unknown as ToolDefinition<unknown, unknown, SlackContext>,
   search_messages as unknown as ToolDefinition<unknown, unknown, SlackContext>,
   search_files as unknown as ToolDefinition<unknown, unknown, SlackContext>,
   add_reaction as unknown as ToolDefinition<unknown, unknown, SlackContext>,
@@ -87,10 +114,18 @@ export const tools: ToolDefinition<unknown, unknown, SlackContext>[] = [
   lookup_by_email as unknown as ToolDefinition<unknown, unknown, SlackContext>,
   user_presence as unknown as ToolDefinition<unknown, unknown, SlackContext>,
   resolve_user as unknown as ToolDefinition<unknown, unknown, SlackContext>,
+  set_status as unknown as ToolDefinition<unknown, unknown, SlackContext>,
+  set_presence as unknown as ToolDefinition<unknown, unknown, SlackContext>,
   list_files as unknown as ToolDefinition<unknown, unknown, SlackContext>,
   file_info as unknown as ToolDefinition<unknown, unknown, SlackContext>,
   upload_file as unknown as ToolDefinition<unknown, unknown, SlackContext>,
   read_file as unknown as ToolDefinition<unknown, unknown, SlackContext>,
+  delete_file as unknown as ToolDefinition<unknown, unknown, SlackContext>,
+  // bookmarks (4)
+  list_bookmarks as unknown as ToolDefinition<unknown, unknown, SlackContext>,
+  add_bookmark as unknown as ToolDefinition<unknown, unknown, SlackContext>,
+  edit_bookmark as unknown as ToolDefinition<unknown, unknown, SlackContext>,
+  remove_bookmark as unknown as ToolDefinition<unknown, unknown, SlackContext>,
   // pins (3)
   list_pins as unknown as ToolDefinition<unknown, unknown, SlackContext>,
   pin_message as unknown as ToolDefinition<unknown, unknown, SlackContext>,

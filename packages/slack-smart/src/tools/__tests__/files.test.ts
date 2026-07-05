@@ -1,6 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { ConfirmRequiredError, ValidationError } from "smart-mcp-core";
-import { list_files, file_info, upload_file, read_file } from "../files.js";
+import {
+  list_files,
+  file_info,
+  upload_file,
+  read_file,
+  delete_file,
+} from "../files.js";
 
 // ---------------------------------------------------------------------------
 // Fake client factory
@@ -14,6 +20,7 @@ type FakeClient = {
   completeUpload: ReturnType<typeof vi.fn>;
   fetchRemoteFile: ReturnType<typeof vi.fn>;
   downloadFile: ReturnType<typeof vi.fn>;
+  deleteFile: ReturnType<typeof vi.fn>;
 };
 
 function makeClient(): FakeClient {
@@ -25,6 +32,7 @@ function makeClient(): FakeClient {
     completeUpload: vi.fn(),
     fetchRemoteFile: vi.fn(),
     downloadFile: vi.fn(),
+    deleteFile: vi.fn(),
   };
 }
 
@@ -238,6 +246,37 @@ describe("read_file — handler", () => {
     ];
     expect(args.file).toBe("F4");
     expect(args.maxBytes).toBe(500);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// delete_file — confirm gate + happy path
+// ---------------------------------------------------------------------------
+
+describe("delete_file", () => {
+  let client: FakeClient;
+
+  beforeEach(() => {
+    client = makeClient();
+  });
+
+  it("throws ConfirmRequiredError without confirm and does not delete", async () => {
+    const input = parse(delete_file, { file: "F1" });
+    await expect(delete_file.handler(input, ctx(client))).rejects.toThrow(
+      ConfirmRequiredError,
+    );
+    expect(client.deleteFile).not.toHaveBeenCalled();
+  });
+
+  it("deletes the file with confirm:true", async () => {
+    client.deleteFile.mockResolvedValue({ ok: true });
+    const input = parse(delete_file, { file: "F1", confirm: true });
+    const result = (await delete_file.handler(input, ctx(client))) as {
+      ok: boolean;
+      file: string;
+    };
+    expect(client.deleteFile).toHaveBeenCalledWith({ file: "F1" });
+    expect(result).toEqual({ ok: true, file: "F1" });
   });
 });
 

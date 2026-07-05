@@ -374,3 +374,33 @@ export const read_file = defineTool<ReadFileInput, ReadFileOutput, SlackContext>
     return out;
   },
 });
+
+// ---------------------------------------------------------------------------
+// delete_file
+// ---------------------------------------------------------------------------
+
+const deleteFileInputSchema = z.object({
+  file: z.string().min(1),
+  confirm: z.boolean().optional().default(false),
+});
+
+type DeleteFileInput = z.infer<typeof deleteFileInputSchema>;
+
+export const delete_file = defineTool<
+  DeleteFileInput,
+  { ok: true; file: string },
+  SlackContext
+>({
+  name: "delete_file",
+  description: "Delete a file you own by ID (write — confirm-gated).",
+  // Cast required: ZodDefault on confirm widens schema input type.
+  inputSchema: deleteFileInputSchema as unknown as z.ZodType<DeleteFileInput>,
+  handler: async (input, context) => {
+    guardDestructive({
+      confirm: input.confirm,
+      preview: `Delete file ${input.file} (only succeeds for files you own)`,
+    });
+    await context.client.deleteFile({ file: input.file });
+    return { ok: true, file: input.file };
+  },
+});

@@ -7,6 +7,8 @@ import {
   delete_message,
   schedule_message,
   get_permalink,
+  list_scheduled,
+  cancel_scheduled,
 } from "../messages.js";
 
 // ---------------------------------------------------------------------------
@@ -19,6 +21,8 @@ type FakeClient = {
   deleteMessage: ReturnType<typeof vi.fn>;
   scheduleMessage: ReturnType<typeof vi.fn>;
   getPermalink: ReturnType<typeof vi.fn>;
+  listScheduledMessages: ReturnType<typeof vi.fn>;
+  deleteScheduledMessage: ReturnType<typeof vi.fn>;
 };
 
 function makeClient(): FakeClient {
@@ -28,6 +32,8 @@ function makeClient(): FakeClient {
     deleteMessage: vi.fn(),
     scheduleMessage: vi.fn(),
     getPermalink: vi.fn(),
+    listScheduledMessages: vi.fn(),
+    deleteScheduledMessage: vi.fn(),
   };
 }
 
@@ -549,5 +555,82 @@ describe("get_permalink", () => {
       permalink: "https://x.slack.com/archives/C001/p111",
       channel: "C001",
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// list_scheduled (read-only)
+// ---------------------------------------------------------------------------
+
+describe("list_scheduled", () => {
+  it("slims scheduled messages and passes cursor through", async () => {
+    const client = makeClient();
+    client.listScheduledMessages.mockResolvedValue({
+      ok: true,
+      scheduled_messages: [
+        {
+          id: "Q1",
+          channel_id: "C001",
+          post_at: 1893456000,
+          date_created: 1893450000,
+          text: "later",
+          extra: "drop",
+        },
+      ],
+      response_metadata: { next_cursor: "CUR2" },
+    });
+    const input = parse(list_scheduled, { channel: "C001" });
+    const result = (await list_scheduled.handler(input, ctx(client))) as {
+      scheduled_messages: Array<Record<string, unknown>>;
+      count: number;
+      next_cursor?: string;
+    };
+    expect(result.count).toBe(1);
+    expect(result.next_cursor).toBe("CUR2");
+    expect(result.scheduled_messages[0]).toEqual({
+      id: "Q1",
+      channel_id: "C001",
+      post_at: 1893456000,
+      date_created: 1893450000,
+      text: "later",
+    });
+    expect(result.scheduled_messages[0]).not.toHaveProperty("extra");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cancel_scheduled — confirm gate + happy path
+// ---------------------------------------------------------------------------
+
+describe("cancel_scheduled", () => {
+  it("throws ConfirmRequiredError without confirm and does not cancel", async () => {
+    const client = makeClient();
+    const input = parse(cancel_scheduled, {
+      channel: "C001",
+      scheduled_message_id: "Q1",
+    });
+    await expect(cancel_scheduled.handler(input, ctx(client))).rejects.toThrow(
+      ConfirmRequiredError,
+    );
+    expect(client.deleteScheduledMessage).not.toHaveBeenCalled();
+  });
+
+  it("cancels the scheduled message with confirm:true", async () => {
+    const client = makeClient();
+    client.deleteScheduledMessage.mockResolvedValue({ ok: true });
+    const input = parse(cancel_scheduled, {
+      channel: "C001",
+      scheduled_message_id: "Q1",
+      confirm: true,
+    });
+    const result = (await cancel_scheduled.handler(input, ctx(client))) as {
+      ok: boolean;
+      scheduled_message_id: string;
+    };
+    expect(client.deleteScheduledMessage).toHaveBeenCalledWith({
+      channel: "C001",
+      scheduled_message_id: "Q1",
+    });
+    expect(result).toEqual({ ok: true, scheduled_message_id: "Q1" });
   });
 });

@@ -419,3 +419,114 @@ export const create_channel = defineTool<
     return mapChannel(resp.channel as Record<string, unknown>);
   },
 });
+
+// ---------------------------------------------------------------------------
+// get_message (read-only)
+// ---------------------------------------------------------------------------
+
+const getMessageInputSchema = z.object({
+  channel: z.string().min(1),
+  ts: z.string().min(1),
+});
+
+type GetMessageInput = z.infer<typeof getMessageInputSchema>;
+
+export const get_message = defineTool<GetMessageInput, SlimMessage, SlackContext>({
+  name: "get_message",
+  description: "Get a single message by channel and timestamp.",
+  inputSchema: getMessageInputSchema,
+  handler: async (input, context) => {
+    const resp = await context.client.getHistory({
+      channel: input.channel,
+      latest: input.ts,
+      oldest: input.ts,
+      inclusive: true,
+      limit: 1,
+    });
+    const first = resp.messages[0];
+    if (first === undefined) {
+      throw new ValidationError(
+        `get_message: no message at ts ${input.ts} in ${input.channel}`,
+      );
+    }
+    return mapMessage(first);
+  },
+});
+
+// ---------------------------------------------------------------------------
+// join_channel
+// ---------------------------------------------------------------------------
+
+const joinChannelInputSchema = z.object({ channel: z.string().min(1) });
+
+type JoinChannelInput = z.infer<typeof joinChannelInputSchema>;
+
+export const join_channel = defineTool<JoinChannelInput, SlimChannel, SlackContext>({
+  name: "join_channel",
+  description: "Join a public channel by ID.",
+  inputSchema: joinChannelInputSchema,
+  handler: async (input, context) => {
+    const resp = await context.client.joinChannel({ channel: input.channel });
+    return mapChannel(resp.channel as Record<string, unknown>);
+  },
+});
+
+// ---------------------------------------------------------------------------
+// leave_channel
+// ---------------------------------------------------------------------------
+
+const leaveChannelInputSchema = z.object({
+  channel: z.string().min(1),
+  confirm: z.boolean().optional().default(false),
+});
+
+type LeaveChannelInput = z.infer<typeof leaveChannelInputSchema>;
+
+export const leave_channel = defineTool<
+  LeaveChannelInput,
+  { ok: true; channel: string },
+  SlackContext
+>({
+  name: "leave_channel",
+  description: "Leave a channel by ID (write — confirm-gated).",
+  // Cast required: ZodDefault on confirm widens schema input type.
+  inputSchema: leaveChannelInputSchema as unknown as z.ZodType<LeaveChannelInput>,
+  handler: async (input, context) => {
+    guardDestructive({
+      confirm: input.confirm,
+      preview: `Leave ${input.channel}`,
+    });
+    await context.client.leaveChannel({ channel: input.channel });
+    return { ok: true, channel: input.channel };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// archive_channel
+// ---------------------------------------------------------------------------
+
+const archiveChannelInputSchema = z.object({
+  channel: z.string().min(1),
+  confirm: z.boolean().optional().default(false),
+});
+
+type ArchiveChannelInput = z.infer<typeof archiveChannelInputSchema>;
+
+export const archive_channel = defineTool<
+  ArchiveChannelInput,
+  { ok: true; channel: string },
+  SlackContext
+>({
+  name: "archive_channel",
+  description: "Archive a channel by ID (write — confirm-gated).",
+  // Cast required: ZodDefault on confirm widens schema input type.
+  inputSchema: archiveChannelInputSchema as unknown as z.ZodType<ArchiveChannelInput>,
+  handler: async (input, context) => {
+    guardDestructive({
+      confirm: input.confirm,
+      preview: `Archive ${input.channel} (hides it for everyone)`,
+    });
+    await context.client.archiveChannel({ channel: input.channel });
+    return { ok: true, channel: input.channel };
+  },
+});

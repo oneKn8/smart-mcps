@@ -351,3 +351,102 @@ export const get_permalink = defineTool<
     return { permalink: resp.permalink, channel: resp.channel };
   },
 });
+
+// ---------------------------------------------------------------------------
+// list_scheduled (read-only)
+// ---------------------------------------------------------------------------
+
+const listScheduledInputSchema = z.object({
+  channel: z.string().optional(),
+  limit: z.number().int().min(1).max(200).optional().default(100),
+  cursor: z.string().optional(),
+});
+
+type ListScheduledInput = z.infer<typeof listScheduledInputSchema>;
+
+type SlimScheduled = {
+  id: string;
+  channel_id?: string;
+  post_at?: number;
+  date_created?: number;
+  text?: string;
+};
+
+type ListScheduledOutput = {
+  scheduled_messages: SlimScheduled[];
+  count: number;
+  next_cursor?: string;
+};
+
+function slimScheduled(raw: unknown): SlimScheduled {
+  const o = raw as Record<string, unknown>;
+  const id = typeof o["id"] === "string" ? o["id"] : String(o["id"] ?? "");
+  return {
+    id,
+    ...(typeof o["channel_id"] === "string" ? { channel_id: o["channel_id"] } : {}),
+    ...(typeof o["post_at"] === "number" ? { post_at: o["post_at"] } : {}),
+    ...(typeof o["date_created"] === "number"
+      ? { date_created: o["date_created"] }
+      : {}),
+    ...(typeof o["text"] === "string" ? { text: o["text"] } : {}),
+  };
+}
+
+export const list_scheduled = defineTool<
+  ListScheduledInput,
+  ListScheduledOutput,
+  SlackContext
+>({
+  name: "list_scheduled",
+  description: "List pending scheduled messages.",
+  // Cast required: ZodDefault on limit widens schema input type.
+  inputSchema: listScheduledInputSchema as unknown as z.ZodType<ListScheduledInput>,
+  handler: async (input, context) => {
+    const resp = await context.client.listScheduledMessages({
+      ...(input.channel !== undefined ? { channel: input.channel } : {}),
+      limit: input.limit,
+      ...(input.cursor !== undefined ? { cursor: input.cursor } : {}),
+    });
+    const scheduled_messages = resp.scheduled_messages.map(slimScheduled);
+    const next = resp.response_metadata?.next_cursor;
+    return {
+      scheduled_messages,
+      count: scheduled_messages.length,
+      ...(next !== undefined && next !== "" ? { next_cursor: next } : {}),
+    };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// cancel_scheduled
+// ---------------------------------------------------------------------------
+
+const cancelScheduledInputSchema = z.object({
+  channel: z.string().min(1),
+  scheduled_message_id: z.string().min(1),
+  confirm: z.boolean().optional().default(false),
+});
+
+type CancelScheduledInput = z.infer<typeof cancelScheduledInputSchema>;
+
+export const cancel_scheduled = defineTool<
+  CancelScheduledInput,
+  { ok: true; scheduled_message_id: string },
+  SlackContext
+>({
+  name: "cancel_scheduled",
+  description: "Cancel a pending scheduled message (write — confirm-gated).",
+  // Cast required: ZodDefault on confirm widens schema input type.
+  inputSchema: cancelScheduledInputSchema as unknown as z.ZodType<CancelScheduledInput>,
+  handler: async (input, context) => {
+    guardDestructive({
+      confirm: input.confirm,
+      preview: `Cancel scheduled message ${input.scheduled_message_id} in ${input.channel}`,
+    });
+    await context.client.deleteScheduledMessage({
+      channel: input.channel,
+      scheduled_message_id: input.scheduled_message_id,
+    });
+    return { ok: true, scheduled_message_id: input.scheduled_message_id };
+  },
+});

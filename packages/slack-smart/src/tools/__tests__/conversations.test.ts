@@ -9,6 +9,10 @@ import {
   channel_members,
   open_dm,
   mark_read,
+  get_message,
+  join_channel,
+  leave_channel,
+  archive_channel,
   invite_to_channel,
   set_channel_purpose,
   set_channel_topic,
@@ -27,6 +31,9 @@ type FakeClient = {
   getMembers: ReturnType<typeof vi.fn>;
   openDm: ReturnType<typeof vi.fn>;
   markConversation: ReturnType<typeof vi.fn>;
+  joinChannel: ReturnType<typeof vi.fn>;
+  leaveChannel: ReturnType<typeof vi.fn>;
+  archiveChannel: ReturnType<typeof vi.fn>;
   inviteToChannel: ReturnType<typeof vi.fn>;
   setChannelPurpose: ReturnType<typeof vi.fn>;
   setChannelTopic: ReturnType<typeof vi.fn>;
@@ -42,6 +49,9 @@ function makeClient(): FakeClient {
     getMembers: vi.fn(),
     openDm: vi.fn(),
     markConversation: vi.fn(),
+    joinChannel: vi.fn(),
+    leaveChannel: vi.fn(),
+    archiveChannel: vi.fn(),
     inviteToChannel: vi.fn(),
     setChannelPurpose: vi.fn(),
     setChannelTopic: vi.fn(),
@@ -654,5 +664,134 @@ describe("mark_read", () => {
       ValidationError,
     );
     expect(client.markConversation).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// get_message
+// ---------------------------------------------------------------------------
+
+describe("get_message", () => {
+  let client: FakeClient;
+
+  beforeEach(() => {
+    client = makeClient();
+  });
+
+  it("fetches the single message at (channel, ts)", async () => {
+    client.getHistory.mockResolvedValue({
+      ok: true,
+      messages: [{ ts: "111.222", text: "hi there", user: "U1" }],
+    });
+    const parsed = get_message.inputSchema.parse({
+      channel: "C001",
+      ts: "111.222",
+    }) as Parameters<typeof get_message.handler>[0];
+    const result = (await get_message.handler(parsed, ctx(client))) as {
+      ts: string;
+      text: string;
+    };
+    const [args] = client.getHistory.mock.calls[0] as [
+      { channel: string; latest: string; oldest: string; inclusive: boolean; limit: number },
+    ];
+    expect(args).toEqual({
+      channel: "C001",
+      latest: "111.222",
+      oldest: "111.222",
+      inclusive: true,
+      limit: 1,
+    });
+    expect(result.text).toBe("hi there");
+  });
+
+  it("throws ValidationError when no message exists at the ts", async () => {
+    client.getHistory.mockResolvedValue({ ok: true, messages: [] });
+    const parsed = get_message.inputSchema.parse({
+      channel: "C001",
+      ts: "000.000",
+    }) as Parameters<typeof get_message.handler>[0];
+    await expect(get_message.handler(parsed, ctx(client))).rejects.toThrow(
+      ValidationError,
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// join_channel / leave_channel / archive_channel
+// ---------------------------------------------------------------------------
+
+describe("join_channel", () => {
+  it("joins and returns the slimmed channel (no confirm required)", async () => {
+    const client = makeClient();
+    client.joinChannel.mockResolvedValue({
+      ok: true,
+      channel: { id: "C001", name: "general", is_private: false, is_im: false, is_mpim: false, is_archived: false },
+    });
+    const parsed = join_channel.inputSchema.parse({
+      channel: "C001",
+    }) as Parameters<typeof join_channel.handler>[0];
+    const result = (await join_channel.handler(parsed, ctx(client))) as {
+      id: string;
+      name: string;
+    };
+    expect(client.joinChannel).toHaveBeenCalledWith({ channel: "C001" });
+    expect(result.id).toBe("C001");
+    expect(result.name).toBe("general");
+  });
+});
+
+describe("leave_channel", () => {
+  it("throws ConfirmRequiredError without confirm and does not leave", async () => {
+    const client = makeClient();
+    const parsed = leave_channel.inputSchema.parse({
+      channel: "C001",
+    }) as Parameters<typeof leave_channel.handler>[0];
+    await expect(leave_channel.handler(parsed, ctx(client))).rejects.toThrow(
+      ConfirmRequiredError,
+    );
+    expect(client.leaveChannel).not.toHaveBeenCalled();
+  });
+
+  it("leaves with confirm:true", async () => {
+    const client = makeClient();
+    client.leaveChannel.mockResolvedValue({ ok: true });
+    const parsed = leave_channel.inputSchema.parse({
+      channel: "C001",
+      confirm: true,
+    }) as Parameters<typeof leave_channel.handler>[0];
+    const result = (await leave_channel.handler(parsed, ctx(client))) as {
+      ok: boolean;
+      channel: string;
+    };
+    expect(client.leaveChannel).toHaveBeenCalledWith({ channel: "C001" });
+    expect(result).toEqual({ ok: true, channel: "C001" });
+  });
+});
+
+describe("archive_channel", () => {
+  it("throws ConfirmRequiredError without confirm and does not archive", async () => {
+    const client = makeClient();
+    const parsed = archive_channel.inputSchema.parse({
+      channel: "C001",
+    }) as Parameters<typeof archive_channel.handler>[0];
+    await expect(archive_channel.handler(parsed, ctx(client))).rejects.toThrow(
+      ConfirmRequiredError,
+    );
+    expect(client.archiveChannel).not.toHaveBeenCalled();
+  });
+
+  it("archives with confirm:true", async () => {
+    const client = makeClient();
+    client.archiveChannel.mockResolvedValue({ ok: true });
+    const parsed = archive_channel.inputSchema.parse({
+      channel: "C001",
+      confirm: true,
+    }) as Parameters<typeof archive_channel.handler>[0];
+    const result = (await archive_channel.handler(parsed, ctx(client))) as {
+      ok: boolean;
+      channel: string;
+    };
+    expect(client.archiveChannel).toHaveBeenCalledWith({ channel: "C001" });
+    expect(result).toEqual({ ok: true, channel: "C001" });
   });
 });

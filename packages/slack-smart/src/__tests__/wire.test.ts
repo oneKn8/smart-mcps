@@ -2,24 +2,34 @@ import { describe, it, expect } from "vitest";
 import { tools } from "../tools/index.js";
 
 const EXPECTED_TOOL_NAMES = [
+  "add_bookmark",
   "add_reaction",
+  "archive_channel",
+  "cancel_scheduled",
   "catch_me_up",
   "channel_history",
   "channel_info",
   "channel_members",
   "create_canvas",
   "create_channel",
+  "delete_file",
   "delete_message",
   "dnd_status",
+  "edit_bookmark",
   "end_snooze",
   "file_info",
+  "get_message",
   "get_permalink",
   "get_reactions",
   "invite_to_channel",
+  "join_channel",
+  "leave_channel",
+  "list_bookmarks",
   "list_channels",
   "list_emoji",
   "list_files",
   "list_pins",
+  "list_scheduled",
   "list_usergroups",
   "list_users",
   "lookup_by_email",
@@ -29,6 +39,7 @@ const EXPECTED_TOOL_NAMES = [
   "pin_message",
   "post_message",
   "read_file",
+  "remove_bookmark",
   "remove_reaction",
   "reply_in_thread",
   "resolve_user",
@@ -37,7 +48,9 @@ const EXPECTED_TOOL_NAMES = [
   "search_messages",
   "set_channel_purpose",
   "set_channel_topic",
+  "set_presence",
   "set_snooze",
+  "set_status",
   "smart_send",
   "team_info",
   "thread_catchup",
@@ -54,12 +67,29 @@ const EXPECTED_TOOL_NAMES = [
 ];
 
 describe("slack-smart tool wiring", () => {
-  it("exports the exact set of 49 tool names (sorted)", () => {
+  it("exports the exact set of 62 tool names (sorted)", () => {
     expect(tools.map((t) => t.name).sort()).toEqual(EXPECTED_TOOL_NAMES);
   });
 
   it("exports the expected number of tools", () => {
-    expect(tools).toHaveLength(49);
+    expect(tools).toHaveLength(62);
+  });
+
+  it("tool names include the 4 bookmark tools", () => {
+    const names = tools.map((t) => t.name);
+    expect(names).toContain("list_bookmarks");
+    expect(names).toContain("add_bookmark");
+    expect(names).toContain("edit_bookmark");
+    expect(names).toContain("remove_bookmark");
+  });
+
+  it("tool names include the channel lifecycle + status/presence tools", () => {
+    const names = tools.map((t) => t.name);
+    expect(names).toContain("join_channel");
+    expect(names).toContain("leave_channel");
+    expect(names).toContain("archive_channel");
+    expect(names).toContain("set_status");
+    expect(names).toContain("set_presence");
   });
 
   it("tool names include the 4 channel-management write tools", () => {

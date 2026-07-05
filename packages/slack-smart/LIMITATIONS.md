@@ -10,6 +10,16 @@ Running log of limitations / rough edges found in `slack-smart` while using it d
 
 ---
 
+## 2026-07-05 (later) — SCOPE EXPANSION: 13 more tools (49 -> 62)
+
+Santo chose to reinstall the token with more scopes so these stop being revisited. All TDD'd (452 pkg tests green, tsc clean); OAuth scopes verified against the live docs.slack.dev method pages before adding to `slack-app-manifest.yaml`.
+- **No new scope** (work after deploy, no reinstall needed): `get_message`, `delete_file`, `join_channel`, `leave_channel`, `archive_channel`, `list_scheduled`, `cancel_scheduled`. Live-verified `get_message` + `list_scheduled` against real Slack.
+- **NEW scopes (the reinstall delta):** `set_status` (users.profile:write), `set_presence` (users:write), `list_bookmarks` (bookmarks:read), `add/edit/remove_bookmark` (bookmarks:write). Live-confirmed `list_bookmarks` returns `missing_scope` PRE-reinstall, proving the wiring is right and ONLY the reinstall unblocks it.
+- **Reinstall steps:** api.slack.com/apps -> the slack-smart app -> re-apply the updated manifest scopes (or add the 4 by hand) -> Reinstall to Workspace -> copy the new `xoxp-` token into `~/.config/smart-mcps/.env`. Then deploy to santo-ops + `/mcp` reconnect.
+- **Still NOT buildable in-package** (documented so they stop being re-attempted): drafts (Slack has no Web API for drafts), reminders (Slack deprecated the reminders API for apps).
+
+---
+
 ## 2026-07-05 — RESOLVED (shipped in-source)
 
 ### read_file added — a file's CONTENT is now readable (closes the 2026-07-01 gap below)

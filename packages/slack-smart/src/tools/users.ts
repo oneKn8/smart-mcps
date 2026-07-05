@@ -1,5 +1,10 @@
 import { z } from "zod";
-import { defineTool, resolveOne, AmbiguousMatchError } from "smart-mcp-core";
+import {
+  defineTool,
+  resolveOne,
+  guardDestructive,
+  AmbiguousMatchError,
+} from "smart-mcp-core";
 import type { SlackContext } from "../context.js";
 import { mapUser, type SlimUser } from "../user-mapper.js";
 import { nullableString, nullableBoolean, asObject } from "../null-helpers.js";
@@ -194,6 +199,72 @@ export const resolve_user = defineTool<ResolveUserInput, SlimUser, SlackContext>
       (u) => u.display_name ?? u.real_name ?? u.name,
       { threshold: 0.9 },
     );
+  },
+});
+
+// ---------------------------------------------------------------------------
+// set_status (write — confirm-gated, scope users.profile:write)
+// ---------------------------------------------------------------------------
+
+const setStatusInputSchema = z.object({
+  status_text: z.string().max(100).optional().default(""),
+  status_emoji: z.string().optional().default(""),
+  // Unix seconds when the status auto-clears; 0 = never. Empty text+emoji clears.
+  status_expiration: z.number().int().min(0).optional().default(0),
+  confirm: z.boolean().optional().default(false),
+});
+
+type SetStatusInput = z.infer<typeof setStatusInputSchema>;
+
+export const set_status = defineTool<SetStatusInput, { ok: true }, SlackContext>({
+  name: "set_status",
+  description: "Set your Slack status text/emoji (write — confirm-gated).",
+  // Cast required: ZodDefault widens the schema input type.
+  inputSchema: setStatusInputSchema as unknown as z.ZodType<SetStatusInput>,
+  handler: async (input, context) => {
+    const label = input.status_text || input.status_emoji || "(cleared)";
+    guardDestructive({
+      confirm: input.confirm,
+      preview: `Set your status to ${label}`,
+    });
+    await context.client.setProfile({
+      profile: {
+        status_text: input.status_text,
+        status_emoji: input.status_emoji,
+        status_expiration: input.status_expiration,
+      },
+    });
+    return { ok: true };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// set_presence (write — confirm-gated, scope users:write)
+// ---------------------------------------------------------------------------
+
+const setPresenceInputSchema = z.object({
+  presence: z.enum(["auto", "away"]),
+  confirm: z.boolean().optional().default(false),
+});
+
+type SetPresenceInput = z.infer<typeof setPresenceInputSchema>;
+
+export const set_presence = defineTool<
+  SetPresenceInput,
+  { ok: true; presence: string },
+  SlackContext
+>({
+  name: "set_presence",
+  description: "Set your presence to auto or away (write — confirm-gated).",
+  // Cast required: ZodDefault on confirm widens the schema input type.
+  inputSchema: setPresenceInputSchema as unknown as z.ZodType<SetPresenceInput>,
+  handler: async (input, context) => {
+    guardDestructive({
+      confirm: input.confirm,
+      preview: `Set your presence to ${input.presence}`,
+    });
+    await context.client.setPresence({ presence: input.presence });
+    return { ok: true, presence: input.presence };
   },
 });
 

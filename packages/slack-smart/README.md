@@ -16,7 +16,7 @@ Under **OAuth & Permissions**, add the following scopes:
 
 **User token scopes (xoxp) — required:**
 
-`search:read`, `channels:history`, `groups:history`, `im:history`, `mpim:history`, `channels:read`, `groups:read`, `im:read`, `mpim:read`, `im:write`, `mpim:write`, `channels:write`, `groups:write`, `channels:write.invites`, `groups:write.invites`, `users:read`, `users:read.email`, `users.profile:read`, `reactions:read`, `reactions:write`, `chat:write`, `files:read`, `files:write`, `pins:read`, `pins:write`, `dnd:read`, `dnd:write`, `usergroups:read`, `team:read`, `emoji:read`, `canvases:read`, `canvases:write`
+`search:read`, `channels:history`, `groups:history`, `im:history`, `mpim:history`, `channels:read`, `groups:read`, `im:read`, `mpim:read`, `im:write`, `mpim:write`, `channels:write`, `groups:write`, `channels:write.invites`, `groups:write.invites`, `users:read`, `users:read.email`, `users.profile:read`, `users.profile:write`, `users:write`, `reactions:read`, `reactions:write`, `chat:write`, `files:read`, `files:write`, `pins:read`, `pins:write`, `dnd:read`, `dnd:write`, `usergroups:read`, `team:read`, `emoji:read`, `canvases:read`, `canvases:write`, `bookmarks:read`, `bookmarks:write`
 
 Posting as a bot (`send_as: "bot"`) is an optional add-on and is **not** in the manifest. To enable it, add `SLACK_BOT_TOKEN` plus the bot's `chat:write` scope manually; otherwise every tool runs as you on the user token.
 
@@ -45,7 +45,7 @@ npm run build
 
 The installer auto-discovers `packages/*/dist/server.js` and registers `slack-smart` in Claude Code (`~/.claude.json`), Cursor (`~/.cursor/mcp.json`), and prints a Codex snippet. After registration, restart your MCP client. Tools appear under the `slack-smart` namespace.
 
-## Tools (49)
+## Tools (62)
 
 Write tools are confirm-gated: they throw a `ConfirmRequiredError` with a human-readable preview unless `confirm: true` is passed. This prevents accidental writes.
 
@@ -55,7 +55,7 @@ Write tools are confirm-gated: they throw a `ConfirmRequiredError` with a human-
 |---|---|
 | `whoami` | Return the authenticated user's id, name, and team info. |
 
-### Conversations (11)
+### Conversations (15)
 
 | Name | Description |
 |---|---|
@@ -65,15 +65,19 @@ Write tools are confirm-gated: they throw a `ConfirmRequiredError` with a human-
 | `channel_info` | Get metadata for a single channel by ID. |
 | `channel_members` | List members of a channel. |
 | `open_dm` | Open a DM or group DM and return the conversation ID. |
+| `get_message` | Get a single message by channel and timestamp. |
 | `mark_read` | Mark a channel or DM read up to a message (write — confirm-gated). |
+| `join_channel` | Join a public channel by ID. |
+| `leave_channel` | Leave a channel by ID (write — confirm-gated). |
+| `archive_channel` | Archive a channel by ID (write — confirm-gated). |
 | `invite_to_channel` | Invite users (comma-separated IDs) to a channel (write — confirm-gated). |
 | `set_channel_purpose` | Set a channel's purpose/description (write — confirm-gated). |
 | `set_channel_topic` | Set a channel's topic (write — confirm-gated). |
 | `create_channel` | Create a public or private channel (write — confirm-gated). |
 
-### Messages (6)
+### Messages (8)
 
-The five sends are write — confirm-gated; `get_permalink` is read-only.
+The sends and `cancel_scheduled` are write — confirm-gated; `get_permalink` and `list_scheduled` are read-only.
 
 | Name | Description |
 |---|---|
@@ -83,6 +87,8 @@ The five sends are write — confirm-gated; `get_permalink` is read-only.
 | `delete_message` | Delete a message by channel and timestamp. |
 | `schedule_message` | Schedule a message to be sent at a future unix timestamp. |
 | `get_permalink` | Get a shareable link to a message by channel and timestamp. |
+| `list_scheduled` | List pending scheduled messages. |
+| `cancel_scheduled` | Cancel a pending scheduled message (write — confirm-gated). |
 
 ### Search (2, read-only)
 
@@ -99,7 +105,9 @@ The five sends are write — confirm-gated; `get_permalink` is read-only.
 | `remove_reaction` | Remove an emoji reaction from a message (write — confirm-gated). |
 | `get_reactions` | Get all reactions on a message. |
 
-### Users (6, read-only)
+### Users (8)
+
+The first six are read-only; `set_status` and `set_presence` are write — confirm-gated.
 
 | Name | Description |
 |---|---|
@@ -109,8 +117,10 @@ The five sends are write — confirm-gated; `get_permalink` is read-only.
 | `lookup_by_email` | Find a user by email address. |
 | `user_presence` | Get the presence status of a user. |
 | `resolve_user` | Resolve a display name or real name to a user ID. |
+| `set_status` | Set your Slack status text/emoji (write — confirm-gated). |
+| `set_presence` | Set your presence to auto or away (write — confirm-gated). |
 
-### Files (4)
+### Files (5)
 
 | Name | Description |
 |---|---|
@@ -118,6 +128,16 @@ The five sends are write — confirm-gated; `get_permalink` is read-only.
 | `file_info` | Get metadata for a single file by ID. |
 | `read_file` | Read a file's content by ID (text inline, binary base64). |
 | `upload_file` | Upload a file from a path, base64, or URL to Slack (write — confirm-gated). |
+| `delete_file` | Delete a file you own by ID (write — confirm-gated). |
+
+### Bookmarks (4)
+
+| Name | Description |
+|---|---|
+| `list_bookmarks` | List a channel's bookmarks. |
+| `add_bookmark` | Add a bookmark to a channel (write — confirm-gated). |
+| `edit_bookmark` | Edit a channel bookmark (write — confirm-gated). |
+| `remove_bookmark` | Remove a channel bookmark (write — confirm-gated). |
 
 ### Pins (3)
 
@@ -162,7 +182,7 @@ The five sends are write — confirm-gated; `get_permalink` is read-only.
 
 ## Safety
 
-Write tools (`post_message`, `reply_in_thread`, `update_message`, `delete_message`, `schedule_message`, `mark_read`, `add_reaction`, `remove_reaction`, `upload_file`, `pin_message`, `unpin_message`, `set_snooze`, `end_snooze`, `smart_send`, `invite_to_channel`, `set_channel_purpose`, `set_channel_topic`, `create_channel`, `create_canvas`, `update_canvas`) all call `guardDestructive` before touching the API. Without `confirm: true` they return a preview of the action and throw `ConfirmRequiredError`. Pass `confirm: true` to execute.
+Write tools (`post_message`, `reply_in_thread`, `update_message`, `delete_message`, `schedule_message`, `cancel_scheduled`, `mark_read`, `leave_channel`, `archive_channel`, `add_reaction`, `remove_reaction`, `upload_file`, `delete_file`, `pin_message`, `unpin_message`, `set_snooze`, `end_snooze`, `set_status`, `set_presence`, `add_bookmark`, `edit_bookmark`, `remove_bookmark`, `smart_send`, `invite_to_channel`, `set_channel_purpose`, `set_channel_topic`, `create_channel`, `create_canvas`, `update_canvas`) all call `guardDestructive` before touching the API. `join_channel` is additive and not gated. Without `confirm: true` they return a preview of the action and throw `ConfirmRequiredError`. Pass `confirm: true` to execute.
 
 Read tools default to the user token (`xoxp`). `post_message`, `reply_in_thread`, `update_message`, `delete_message`, `schedule_message`, and `smart_send` accept a `send_as` field: `"user"` (default) uses `SLACK_USER_TOKEN`; `"bot"` uses `SLACK_BOT_TOKEN`. The default is `"user"` because the bot app is often not installed in the target workspace.
 
