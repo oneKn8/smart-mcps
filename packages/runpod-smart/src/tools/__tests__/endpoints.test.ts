@@ -224,6 +224,24 @@ describe("createEndpoint — metadata + schema", () => {
     ).toThrow();
   });
 
+  it("enforces upstream bounds on idle_timeout (1..3600) and scaler_value (>=1)", () => {
+    // Mirrors EndpointCreateInput: idleTimeout 1..3600, scalerValue min 1.
+    const base = { template_id: "tpl_xyz" };
+    expect(() => createEndpoint.inputSchema.parse({ ...base, idle_timeout: 0 })).toThrow();
+    expect(() => createEndpoint.inputSchema.parse({ ...base, idle_timeout: 3601 })).toThrow();
+    expect(() => createEndpoint.inputSchema.parse({ ...base, scaler_value: 0 })).toThrow();
+    expect(() =>
+      createEndpoint.inputSchema.parse({ ...base, idle_timeout: 5, scaler_value: 1 }),
+    ).not.toThrow();
+    // update_endpoint shares the same bounds.
+    expect(() =>
+      updateEndpoint.inputSchema.parse({ endpoint_id: "ep_1", idle_timeout: 0 }),
+    ).toThrow();
+    expect(() =>
+      updateEndpoint.inputSchema.parse({ endpoint_id: "ep_1", scaler_value: 0 }),
+    ).toThrow();
+  });
+
   it("defaults confirm to false when omitted", () => {
     const parsed = createEndpoint.inputSchema.parse({
       template_id: "tpl_xyz",
