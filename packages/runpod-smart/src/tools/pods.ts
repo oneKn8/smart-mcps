@@ -221,3 +221,129 @@ export const launchPod = defineTool<LaunchPodInput, LaunchPodOutput, RunpodConte
     return { ...slim, connect_hint };
   },
 });
+
+// =============================================================================
+// update_pod
+// =============================================================================
+
+const updatePodInputSchema = z.object({
+  pod_id: podIdSchema,
+  name: z.string().min(1).optional(),
+  image: z.string().min(1).optional(),
+  container_disk_gb: z.number().int().min(5).max(2000).optional(),
+  volume_gb: z.number().int().min(0).max(10000).optional(),
+  volume_mount_path: z.string().min(1).optional(),
+  ports: z.array(z.string()).optional(),
+  env: z.record(z.string(), z.string()).optional(),
+  container_registry_auth_id: z.string().min(1).optional(),
+  locked: z.boolean().optional(),
+  confirm: z.boolean().optional().default(false),
+});
+
+type UpdatePodInput = z.infer<typeof updatePodInputSchema>;
+
+export const updatePod = defineTool<UpdatePodInput, SlimPod, RunpodContext>({
+  name: "update_pod",
+  description: "Update a pod's config (image, disk, env, ports).",
+  // Cast required: `confirm` uses `.optional().default(false)`, so the schema's
+  // input type (with `| undefined`) is wider than the resolved output type the
+  // handler receives. z.ZodType<Input> is invariant, so the cast is needed.
+  inputSchema: updatePodInputSchema as unknown as z.ZodType<UpdatePodInput>,
+  handler: async (input, context) => {
+    // Build the PATCH body and the changed-field list together so the preview
+    // reflects exactly what will be sent. Only fields the caller provided are
+    // included (omit undefined) — mirrors launch_pod's conditional body build.
+    const body: Record<string, unknown> = {};
+    const changed: string[] = [];
+    if (input.name !== undefined) {
+      body.name = input.name;
+      changed.push("name");
+    }
+    if (input.image !== undefined) {
+      body.imageName = input.image;
+      changed.push("image");
+    }
+    if (input.container_disk_gb !== undefined) {
+      body.containerDiskInGb = input.container_disk_gb;
+      changed.push("container_disk_gb");
+    }
+    if (input.volume_gb !== undefined) {
+      body.volumeInGb = input.volume_gb;
+      changed.push("volume_gb");
+    }
+    if (input.volume_mount_path !== undefined) {
+      body.volumeMountPath = input.volume_mount_path;
+      changed.push("volume_mount_path");
+    }
+    if (input.ports !== undefined) {
+      body.ports = input.ports;
+      changed.push("ports");
+    }
+    if (input.env !== undefined) {
+      body.env = input.env;
+      changed.push("env");
+    }
+    if (input.container_registry_auth_id !== undefined) {
+      body.containerRegistryAuthId = input.container_registry_auth_id;
+      changed.push("container_registry_auth_id");
+    }
+    if (input.locked !== undefined) {
+      body.locked = input.locked;
+      changed.push("locked");
+    }
+
+    const preview = `Will update pod ${input.pod_id} (${changed.join(", ")})`;
+    guardDestructive({ confirm: input.confirm, preview });
+
+    const updated = await context.client.updatePod(input.pod_id, body);
+    return mapPod(updated as Record<string, unknown>);
+  },
+});
+
+// =============================================================================
+// restart_pod
+// =============================================================================
+
+type RestartPodOutput = {
+  pod_id: string;
+  restarted: true;
+};
+
+export const restartPod = defineTool<PodActionInput, RestartPodOutput, RunpodContext>({
+  name: "restart_pod",
+  description: "Restart a running pod.",
+  inputSchema: podActionInputSchema as unknown as z.ZodType<PodActionInput>,
+  handler: async (input, context) => {
+    const current = await context.client.getPod(input.pod_id);
+    const cost = renderCost(current as Record<string, unknown>);
+    const preview = `Will restart pod ${input.pod_id} (${cost})`;
+    guardDestructive({ confirm: input.confirm, preview });
+
+    await context.client.restartPod(input.pod_id);
+    return { pod_id: input.pod_id, restarted: true };
+  },
+});
+
+// =============================================================================
+// reset_pod
+// =============================================================================
+
+type ResetPodOutput = {
+  pod_id: string;
+  reset: true;
+};
+
+export const resetPod = defineTool<PodActionInput, ResetPodOutput, RunpodContext>({
+  name: "reset_pod",
+  description: "Reset a pod to a clean state.",
+  inputSchema: podActionInputSchema as unknown as z.ZodType<PodActionInput>,
+  handler: async (input, context) => {
+    const current = await context.client.getPod(input.pod_id);
+    const cost = renderCost(current as Record<string, unknown>);
+    const preview = `Will reset pod ${input.pod_id} (${cost})`;
+    guardDestructive({ confirm: input.confirm, preview });
+
+    await context.client.resetPod(input.pod_id);
+    return { pod_id: input.pod_id, reset: true };
+  },
+});

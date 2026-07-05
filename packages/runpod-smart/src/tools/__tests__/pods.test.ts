@@ -8,6 +8,9 @@ import {
   stopPod,
   terminatePod,
   launchPod,
+  updatePod,
+  restartPod,
+  resetPod,
 } from "../pods.js";
 
 type FakeClient = {
@@ -1110,5 +1113,432 @@ describe("launchPod — output shape", () => {
     )) as { connect_hint: string };
     expect(result.connect_hint).toContain("pod_new");
     expect(result.connect_hint).toContain("runpodctl exec --pod pod_new bash");
+  });
+});
+
+// =============================================================================
+// update_pod / restart_pod / reset_pod — shared fake client
+// =============================================================================
+
+type FakePodExtClient = {
+  getPod: ReturnType<typeof vi.fn>;
+  updatePod: ReturnType<typeof vi.fn>;
+  restartPod: ReturnType<typeof vi.fn>;
+  resetPod: ReturnType<typeof vi.fn>;
+};
+
+function makePodExtClient(
+  overrides: Partial<FakePodExtClient> = {},
+): FakePodExtClient {
+  const samplePod = {
+    id: "pod_abc",
+    name: "training-rig",
+    image: "runpod/pytorch:2.1.0",
+    desiredStatus: "RUNNING",
+    costPerHr: 0.74,
+    adjustedCostPerHr: 0.69,
+    gpu: { displayName: "RTX 4090" },
+    gpuCount: 1,
+    lastStartedAt: "2026-04-26T18:00:00.000Z",
+  };
+  return {
+    getPod: vi.fn().mockResolvedValue(samplePod),
+    updatePod: vi.fn().mockResolvedValue({ ...samplePod, name: "renamed" }),
+    restartPod: vi.fn().mockResolvedValue(undefined),
+    resetPod: vi.fn().mockResolvedValue(undefined),
+    ...overrides,
+  };
+}
+
+// =============================================================================
+// update_pod
+// =============================================================================
+
+describe("updatePod — metadata + schema", () => {
+  it("has correct name and description", () => {
+    expect(updatePod.name).toBe("update_pod");
+    expect(updatePod.description).toBe(
+      "Update a pod's config (image, disk, env, ports).",
+    );
+    expect(updatePod.inputSchema).toBeInstanceOf(z.ZodType);
+  });
+
+  it("rejects empty pod_id", () => {
+    expect(() =>
+      updatePod.inputSchema.parse({ pod_id: "", confirm: true }),
+    ).toThrow();
+  });
+
+  it("rejects container_disk_gb below min (5)", () => {
+    expect(() =>
+      updatePod.inputSchema.parse({ pod_id: "pod_abc", container_disk_gb: 4 }),
+    ).toThrow();
+  });
+
+  it("defaults confirm to false when omitted", () => {
+    const parsed = updatePod.inputSchema.parse({ pod_id: "pod_abc" }) as {
+      confirm: boolean;
+    };
+    expect(parsed.confirm).toBe(false);
+  });
+});
+
+describe("updatePod — confirm gate", () => {
+  it("throws ConfirmRequiredError when confirm is false (default)", async () => {
+    const client = makePodExtClient();
+    await expect(
+      updatePod.handler(
+        updatePod.inputSchema.parse({ pod_id: "pod_abc", name: "renamed" }),
+        { client: client as unknown as never },
+      ),
+    ).rejects.toBeInstanceOf(ConfirmRequiredError);
+    expect(client.updatePod).not.toHaveBeenCalled();
+  });
+
+  it("preview lists pod_id and the changed field names (snake_case)", async () => {
+    const client = makePodExtClient();
+    try {
+      await updatePod.handler(
+        updatePod.inputSchema.parse({
+          pod_id: "pod_abc",
+          name: "renamed",
+          image: "runpod/pytorch:2.2.0",
+          container_disk_gb: 80,
+        }),
+        { client: client as unknown as never },
+      );
+      throw new Error("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(ConfirmRequiredError);
+      const preview = (err as ConfirmRequiredError).preview;
+      expect(preview).toMatch(/update/i);
+      expect(preview).toContain("pod_abc");
+      expect(preview).toContain("name");
+      expect(preview).toContain("image");
+      expect(preview).toContain("container_disk_gb");
+    }
+  });
+});
+
+describe("updatePod — body mapping (snake → camel)", () => {
+  it("maps all provided fields to camelCase wire shape", async () => {
+    const client = makePodExtClient();
+    await updatePod.handler(
+      updatePod.inputSchema.parse({
+        pod_id: "pod_abc",
+        name: "renamed",
+        image: "runpod/pytorch:2.2.0",
+        container_disk_gb: 80,
+        volume_gb: 100,
+        volume_mount_path: "/data",
+        ports: ["8888/http", "22/tcp"],
+        env: { FOO: "bar" },
+        container_registry_auth_id: "cra_xyz",
+        locked: true,
+        confirm: true,
+      }),
+      { client: client as unknown as never },
+    );
+    expect(client.updatePod).toHaveBeenCalledTimes(1);
+    expect(client.updatePod).toHaveBeenCalledWith("pod_abc", {
+      name: "renamed",
+      imageName: "runpod/pytorch:2.2.0",
+      containerDiskInGb: 80,
+      volumeInGb: 100,
+      volumeMountPath: "/data",
+      ports: ["8888/http", "22/tcp"],
+      env: { FOO: "bar" },
+      containerRegistryAuthId: "cra_xyz",
+      locked: true,
+    });
+  });
+
+  it("omits undefined fields — only provided keys are in the body", async () => {
+    const client = makePodExtClient();
+    await updatePod.handler(
+      updatePod.inputSchema.parse({
+        pod_id: "pod_abc",
+        name: "renamed",
+        confirm: true,
+      }),
+      { client: client as unknown as never },
+    );
+    const body = client.updatePod.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(body).toEqual({ name: "renamed" });
+    expect(body).not.toHaveProperty("imageName");
+    expect(body).not.toHaveProperty("volumeInGb");
+    expect(body).not.toHaveProperty("pod_id");
+    expect(body).not.toHaveProperty("confirm");
+  });
+});
+
+describe("updatePod — output shape", () => {
+  it("returns slim shape via mapPod (only listed keys)", async () => {
+    const client = makePodExtClient();
+    const result = (await updatePod.handler(
+      updatePod.inputSchema.parse({
+        pod_id: "pod_abc",
+        name: "renamed",
+        confirm: true,
+      }),
+      { client: client as unknown as never },
+    )) as Record<string, unknown>;
+    const keys = Object.keys(result).sort();
+    expect(keys).toEqual(
+      [
+        "id",
+        "name",
+        "status",
+        "image",
+        "gpu",
+        "costPerHr",
+        "adjustedCostPerHr",
+        "lastStartedAt",
+      ].sort(),
+    );
+    expect(result).not.toHaveProperty("desiredStatus");
+    expect(result).not.toHaveProperty("gpuCount");
+  });
+
+  it("propagates NotFoundError from updatePod", async () => {
+    const client = makePodExtClient({
+      updatePod: vi.fn().mockRejectedValue(
+        new NotFoundError("Pod not found: pod_abc"),
+      ),
+    });
+    await expect(
+      updatePod.handler(
+        updatePod.inputSchema.parse({
+          pod_id: "pod_abc",
+          name: "renamed",
+          confirm: true,
+        }),
+        { client: client as unknown as never },
+      ),
+    ).rejects.toBeInstanceOf(NotFoundError);
+  });
+});
+
+// =============================================================================
+// restart_pod
+// =============================================================================
+
+describe("restartPod — metadata + schema", () => {
+  it("has correct name and description", () => {
+    expect(restartPod.name).toBe("restart_pod");
+    expect(restartPod.description).toBe("Restart a running pod.");
+    expect(restartPod.inputSchema).toBeInstanceOf(z.ZodType);
+  });
+
+  it("rejects empty pod_id", () => {
+    expect(() =>
+      restartPod.inputSchema.parse({ pod_id: "", confirm: true }),
+    ).toThrow();
+  });
+
+  it("defaults confirm to false when omitted", () => {
+    const parsed = restartPod.inputSchema.parse({ pod_id: "pod_abc" }) as {
+      confirm: boolean;
+    };
+    expect(parsed.confirm).toBe(false);
+  });
+});
+
+describe("restartPod — confirm gate", () => {
+  it("throws ConfirmRequiredError when confirm is false", async () => {
+    const client = makePodExtClient();
+    await expect(
+      restartPod.handler(
+        restartPod.inputSchema.parse({ pod_id: "pod_abc" }),
+        { client: client as unknown as never },
+      ),
+    ).rejects.toBeInstanceOf(ConfirmRequiredError);
+    expect(client.restartPod).not.toHaveBeenCalled();
+  });
+
+  it("preview contains pod_id, 'restart', and cost-per-hr", async () => {
+    const client = makePodExtClient();
+    try {
+      await restartPod.handler(
+        restartPod.inputSchema.parse({ pod_id: "pod_abc" }),
+        { client: client as unknown as never },
+      );
+      throw new Error("should have thrown");
+    } catch (err) {
+      const preview = (err as ConfirmRequiredError).preview;
+      expect(preview).toContain("pod_abc");
+      expect(preview).toMatch(/restart/i);
+      expect(preview).toMatch(/0\.74/);
+    }
+  });
+
+  it("calls getPod first to build the preview", async () => {
+    const client = makePodExtClient();
+    try {
+      await restartPod.handler(
+        restartPod.inputSchema.parse({ pod_id: "pod_abc" }),
+        { client: client as unknown as never },
+      );
+    } catch {
+      // expected: confirm gate throws
+    }
+    expect(client.getPod).toHaveBeenCalledWith("pod_abc");
+    expect(client.restartPod).not.toHaveBeenCalled();
+  });
+
+  it("renders ~$?/hr when costPerHr is missing", async () => {
+    const client = makePodExtClient({
+      getPod: vi.fn().mockResolvedValue({
+        id: "pod_abc",
+        desiredStatus: "RUNNING",
+      }),
+    });
+    try {
+      await restartPod.handler(
+        restartPod.inputSchema.parse({ pod_id: "pod_abc" }),
+        { client: client as unknown as never },
+      );
+      throw new Error("should have thrown");
+    } catch (err) {
+      expect((err as ConfirmRequiredError).preview).toContain("~$?/hr");
+    }
+  });
+});
+
+describe("restartPod — past confirm gate", () => {
+  it("with confirm: true calls client.restartPod and returns confirmation object", async () => {
+    const client = makePodExtClient();
+    const result = (await restartPod.handler(
+      restartPod.inputSchema.parse({ pod_id: "pod_abc", confirm: true }),
+      { client: client as unknown as never },
+    )) as { pod_id: string; restarted: boolean };
+    expect(client.restartPod).toHaveBeenCalledWith("pod_abc");
+    expect(result).toEqual({ pod_id: "pod_abc", restarted: true });
+  });
+
+  it("propagates NotFoundError from restartPod", async () => {
+    const client = makePodExtClient({
+      restartPod: vi.fn().mockRejectedValue(
+        new NotFoundError("Pod not found: pod_abc"),
+      ),
+    });
+    await expect(
+      restartPod.handler(
+        restartPod.inputSchema.parse({ pod_id: "pod_abc", confirm: true }),
+        { client: client as unknown as never },
+      ),
+    ).rejects.toBeInstanceOf(NotFoundError);
+  });
+});
+
+// =============================================================================
+// reset_pod
+// =============================================================================
+
+describe("resetPod — metadata + schema", () => {
+  it("has correct name and description", () => {
+    expect(resetPod.name).toBe("reset_pod");
+    expect(resetPod.description).toBe("Reset a pod to a clean state.");
+    expect(resetPod.inputSchema).toBeInstanceOf(z.ZodType);
+  });
+
+  it("rejects empty pod_id", () => {
+    expect(() =>
+      resetPod.inputSchema.parse({ pod_id: "", confirm: true }),
+    ).toThrow();
+  });
+
+  it("defaults confirm to false when omitted", () => {
+    const parsed = resetPod.inputSchema.parse({ pod_id: "pod_abc" }) as {
+      confirm: boolean;
+    };
+    expect(parsed.confirm).toBe(false);
+  });
+});
+
+describe("resetPod — confirm gate", () => {
+  it("throws ConfirmRequiredError when confirm is false", async () => {
+    const client = makePodExtClient();
+    await expect(
+      resetPod.handler(
+        resetPod.inputSchema.parse({ pod_id: "pod_abc" }),
+        { client: client as unknown as never },
+      ),
+    ).rejects.toBeInstanceOf(ConfirmRequiredError);
+    expect(client.resetPod).not.toHaveBeenCalled();
+  });
+
+  it("preview contains pod_id, 'reset', and cost-per-hr", async () => {
+    const client = makePodExtClient();
+    try {
+      await resetPod.handler(
+        resetPod.inputSchema.parse({ pod_id: "pod_abc" }),
+        { client: client as unknown as never },
+      );
+      throw new Error("should have thrown");
+    } catch (err) {
+      const preview = (err as ConfirmRequiredError).preview;
+      expect(preview).toContain("pod_abc");
+      expect(preview).toMatch(/reset/i);
+      expect(preview).toMatch(/0\.74/);
+    }
+  });
+
+  it("calls getPod first to build the preview", async () => {
+    const client = makePodExtClient();
+    try {
+      await resetPod.handler(
+        resetPod.inputSchema.parse({ pod_id: "pod_abc" }),
+        { client: client as unknown as never },
+      );
+    } catch {
+      // expected
+    }
+    expect(client.getPod).toHaveBeenCalledWith("pod_abc");
+    expect(client.resetPod).not.toHaveBeenCalled();
+  });
+
+  it("renders ~$?/hr when costPerHr is missing", async () => {
+    const client = makePodExtClient({
+      getPod: vi.fn().mockResolvedValue({
+        id: "pod_abc",
+        desiredStatus: "RUNNING",
+      }),
+    });
+    try {
+      await resetPod.handler(
+        resetPod.inputSchema.parse({ pod_id: "pod_abc" }),
+        { client: client as unknown as never },
+      );
+      throw new Error("should have thrown");
+    } catch (err) {
+      expect((err as ConfirmRequiredError).preview).toContain("~$?/hr");
+    }
+  });
+});
+
+describe("resetPod — past confirm gate", () => {
+  it("with confirm: true calls client.resetPod and returns confirmation object", async () => {
+    const client = makePodExtClient();
+    const result = (await resetPod.handler(
+      resetPod.inputSchema.parse({ pod_id: "pod_abc", confirm: true }),
+      { client: client as unknown as never },
+    )) as { pod_id: string; reset: boolean };
+    expect(client.resetPod).toHaveBeenCalledWith("pod_abc");
+    expect(result).toEqual({ pod_id: "pod_abc", reset: true });
+  });
+
+  it("propagates NotFoundError from resetPod", async () => {
+    const client = makePodExtClient({
+      resetPod: vi.fn().mockRejectedValue(
+        new NotFoundError("Pod not found: pod_abc"),
+      ),
+    });
+    await expect(
+      resetPod.handler(
+        resetPod.inputSchema.parse({ pod_id: "pod_abc", confirm: true }),
+        { client: client as unknown as never },
+      ),
+    ).rejects.toBeInstanceOf(NotFoundError);
   });
 });
