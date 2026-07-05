@@ -899,3 +899,396 @@ describe("RunpodClient.getBillingNetworkVolumes", () => {
     expect(calls).toBe(4);
   });
 });
+
+// =============================================================================
+// Full-surface client methods (Phase 10)
+// =============================================================================
+
+function withKey(): RunpodClient {
+  process.env.RUNPOD_API_KEY = "test_key";
+  return new RunpodClient();
+}
+
+describe("RunpodClient — pod mutation", () => {
+  it("updatePod PATCHes /pods/{id} with body", async () => {
+    let seenMethod = "";
+    let seenBody: unknown = null;
+    let seenUrl = "";
+    server.use(
+      http.patch("https://rest.runpod.io/v1/pods/pod_abc", async ({ request }) => {
+        seenMethod = request.method;
+        seenBody = await request.json();
+        seenUrl = request.url;
+        return HttpResponse.json({ id: "pod_abc", name: "renamed" });
+      }),
+    );
+    const client = withKey();
+    const res = await client.updatePod("pod_abc", { name: "renamed" });
+    expect(seenMethod).toBe("PATCH");
+    expect(seenBody).toEqual({ name: "renamed" });
+    expect(seenUrl).toContain("/pods/pod_abc");
+    expect(res.id).toBe("pod_abc");
+  });
+
+  it("updatePod maps 404 to NotFoundError with pod id", async () => {
+    server.use(
+      http.patch("https://rest.runpod.io/v1/pods/missing", () =>
+        HttpResponse.json({ error: "no" }, { status: 404 }),
+      ),
+    );
+    const client = withKey();
+    await expect(client.updatePod("missing", { name: "x" })).rejects.toThrowError(
+      /Pod not found: missing/,
+    );
+  });
+
+  it("restartPod POSTs /pods/{id}/restart and resolves undefined on 204", async () => {
+    let seen = "";
+    server.use(
+      http.post("https://rest.runpod.io/v1/pods/pod_abc/restart", ({ request }) => {
+        seen = request.method;
+        return new HttpResponse(null, { status: 204 });
+      }),
+    );
+    const client = withKey();
+    await expect(client.restartPod("pod_abc")).resolves.toBeUndefined();
+    expect(seen).toBe("POST");
+  });
+
+  it("resetPod POSTs /pods/{id}/reset", async () => {
+    let hit = false;
+    server.use(
+      http.post("https://rest.runpod.io/v1/pods/pod_abc/reset", () => {
+        hit = true;
+        return new HttpResponse(null, { status: 204 });
+      }),
+    );
+    const client = withKey();
+    await client.resetPod("pod_abc");
+    expect(hit).toBe(true);
+  });
+});
+
+describe("RunpodClient — templates CRUD", () => {
+  it("createTemplate POSTs /templates", async () => {
+    let body: unknown = null;
+    server.use(
+      http.post("https://rest.runpod.io/v1/templates", async ({ request }) => {
+        body = await request.json();
+        return HttpResponse.json({ id: "tpl_new", name: "t" });
+      }),
+    );
+    const client = withKey();
+    const res = await client.createTemplate({ name: "t", imageName: "img" });
+    expect(body).toEqual({ name: "t", imageName: "img" });
+    expect(res.id).toBe("tpl_new");
+  });
+
+  it("getTemplate passes include* query params", async () => {
+    let url = "";
+    server.use(
+      http.get("https://rest.runpod.io/v1/templates/tpl_1", ({ request }) => {
+        url = request.url;
+        return HttpResponse.json({ id: "tpl_1" });
+      }),
+    );
+    const client = withKey();
+    await client.getTemplate("tpl_1", { includePublic: true, includeRunpod: false });
+    expect(url).toContain("includePublicTemplates=true");
+    expect(url).toContain("includeRunpodTemplates=false");
+  });
+
+  it("updateTemplate PATCHes and deleteTemplate DELETEs (204)", async () => {
+    server.use(
+      http.patch("https://rest.runpod.io/v1/templates/tpl_1", () =>
+        HttpResponse.json({ id: "tpl_1", name: "up" }),
+      ),
+      http.delete("https://rest.runpod.io/v1/templates/tpl_1", () =>
+        new HttpResponse(null, { status: 204 }),
+      ),
+    );
+    const client = withKey();
+    expect((await client.updateTemplate("tpl_1", { name: "up" })).name).toBe("up");
+    await expect(client.deleteTemplate("tpl_1")).resolves.toBeUndefined();
+  });
+
+  it("getTemplate maps 404 to NotFoundError naming Template", async () => {
+    server.use(
+      http.get("https://rest.runpod.io/v1/templates/nope", () =>
+        HttpResponse.json({}, { status: 404 }),
+      ),
+    );
+    const client = withKey();
+    await expect(client.getTemplate("nope")).rejects.toThrowError(/Template not found: nope/);
+  });
+});
+
+describe("RunpodClient — endpoints CRUD", () => {
+  it("createEndpoint POSTs /endpoints with body", async () => {
+    let body: unknown = null;
+    server.use(
+      http.post("https://rest.runpod.io/v1/endpoints", async ({ request }) => {
+        body = await request.json();
+        return HttpResponse.json({ id: "ep_new", templateId: "tpl_1" });
+      }),
+    );
+    const client = withKey();
+    const res = await client.createEndpoint({ templateId: "tpl_1" });
+    expect(body).toEqual({ templateId: "tpl_1" });
+    expect(res.id).toBe("ep_new");
+  });
+
+  it("getEndpoint passes includeTemplate/includeWorkers", async () => {
+    let url = "";
+    server.use(
+      http.get("https://rest.runpod.io/v1/endpoints/ep_1", ({ request }) => {
+        url = request.url;
+        return HttpResponse.json({ id: "ep_1" });
+      }),
+    );
+    const client = withKey();
+    await client.getEndpoint("ep_1", { includeWorkers: true });
+    expect(url).toContain("includeWorkers=true");
+  });
+
+  it("updateEndpoint PATCHes; deleteEndpoint DELETEs; 404 names Endpoint", async () => {
+    server.use(
+      http.patch("https://rest.runpod.io/v1/endpoints/ep_1", () =>
+        HttpResponse.json({ id: "ep_1", workersMax: 5 }),
+      ),
+      http.delete("https://rest.runpod.io/v1/endpoints/ep_1", () =>
+        new HttpResponse(null, { status: 204 }),
+      ),
+      http.get("https://rest.runpod.io/v1/endpoints/gone", () =>
+        HttpResponse.json({}, { status: 404 }),
+      ),
+    );
+    const client = withKey();
+    expect((await client.updateEndpoint("ep_1", { workersMax: 5 })).workersMax).toBe(5);
+    await expect(client.deleteEndpoint("ep_1")).resolves.toBeUndefined();
+    await expect(client.getEndpoint("gone")).rejects.toThrowError(/Endpoint not found: gone/);
+  });
+});
+
+describe("RunpodClient — network volumes CRUD", () => {
+  it("listNetworkVolumes wraps the bare array as {networkVolumes}", async () => {
+    server.use(
+      http.get("https://rest.runpod.io/v1/networkvolumes", () =>
+        HttpResponse.json([{ id: "nv_1", name: "data", size: 100, dataCenterId: "EU-RO-1" }]),
+      ),
+    );
+    const client = withKey();
+    const res = await client.listNetworkVolumes();
+    expect(res.networkVolumes).toHaveLength(1);
+    expect(res.networkVolumes[0]!.id).toBe("nv_1");
+  });
+
+  it("createNetworkVolume POSTs the create body", async () => {
+    let body: unknown = null;
+    server.use(
+      http.post("https://rest.runpod.io/v1/networkvolumes", async ({ request }) => {
+        body = await request.json();
+        return HttpResponse.json({ id: "nv_new", name: "d", size: 50, dataCenterId: "EU-RO-1" });
+      }),
+    );
+    const client = withKey();
+    await client.createNetworkVolume({ name: "d", size: 50, dataCenterId: "EU-RO-1" });
+    expect(body).toEqual({ name: "d", size: 50, dataCenterId: "EU-RO-1" });
+  });
+
+  it("get/update/delete network volume, 404 names Network volume", async () => {
+    server.use(
+      http.get("https://rest.runpod.io/v1/networkvolumes/nv_1", () =>
+        HttpResponse.json({ id: "nv_1", size: 100 }),
+      ),
+      http.patch("https://rest.runpod.io/v1/networkvolumes/nv_1", () =>
+        HttpResponse.json({ id: "nv_1", size: 200 }),
+      ),
+      http.delete("https://rest.runpod.io/v1/networkvolumes/nv_1", () =>
+        new HttpResponse(null, { status: 204 }),
+      ),
+      http.get("https://rest.runpod.io/v1/networkvolumes/gone", () =>
+        HttpResponse.json({}, { status: 404 }),
+      ),
+    );
+    const client = withKey();
+    expect((await client.getNetworkVolume("nv_1")).size).toBe(100);
+    expect((await client.updateNetworkVolume("nv_1", { size: 200 })).size).toBe(200);
+    await expect(client.deleteNetworkVolume("nv_1")).resolves.toBeUndefined();
+    await expect(client.getNetworkVolume("gone")).rejects.toThrowError(
+      /Network volume not found: gone/,
+    );
+  });
+});
+
+describe("RunpodClient — registry auth", () => {
+  it("listRegistryAuths wraps bare array; response never carries password", async () => {
+    server.use(
+      http.get("https://rest.runpod.io/v1/containerregistryauth", () =>
+        HttpResponse.json([{ id: "cra_1", name: "dockerhub" }]),
+      ),
+    );
+    const client = withKey();
+    const res = await client.listRegistryAuths();
+    expect(res.registryAuths[0]).toEqual({ id: "cra_1", name: "dockerhub" });
+  });
+
+  it("createRegistryAuth forwards name/username/password in the body only", async () => {
+    let body: Record<string, unknown> = {};
+    server.use(
+      http.post("https://rest.runpod.io/v1/containerregistryauth", async ({ request }) => {
+        body = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json({ id: "cra_new", name: "dockerhub" });
+      }),
+    );
+    const client = withKey();
+    const res = await client.createRegistryAuth({
+      name: "dockerhub",
+      username: "me",
+      password: "s3cret",
+    });
+    expect(body.password).toBe("s3cret");
+    // Upstream response omits the secret; client returns it as-is.
+    expect(Object.keys(res).sort()).toEqual(["id", "name"]);
+  });
+
+  it("get + delete registry auth; 404 names Registry auth", async () => {
+    server.use(
+      http.get("https://rest.runpod.io/v1/containerregistryauth/cra_1", () =>
+        HttpResponse.json({ id: "cra_1", name: "ghcr" }),
+      ),
+      http.delete("https://rest.runpod.io/v1/containerregistryauth/cra_1", () =>
+        new HttpResponse(null, { status: 204 }),
+      ),
+      http.get("https://rest.runpod.io/v1/containerregistryauth/gone", () =>
+        HttpResponse.json({}, { status: 404 }),
+      ),
+    );
+    const client = withKey();
+    expect((await client.getRegistryAuth("cra_1")).name).toBe("ghcr");
+    await expect(client.deleteRegistryAuth("cra_1")).resolves.toBeUndefined();
+    await expect(client.getRegistryAuth("gone")).rejects.toThrowError(
+      /Registry auth not found: gone/,
+    );
+  });
+});
+
+describe("RunpodClient — serverless inference", () => {
+  it("runEndpoint POSTs to api.runpod.ai/v2/{id}/run with {input}", async () => {
+    let body: unknown = null;
+    let url = "";
+    server.use(
+      http.post("https://api.runpod.ai/v2/ep_1/run", async ({ request }) => {
+        body = await request.json();
+        url = request.url;
+        return HttpResponse.json({ id: "job_1", status: "IN_QUEUE" });
+      }),
+    );
+    const client = withKey();
+    const res = await client.runEndpoint("ep_1", { prompt: "hi" });
+    expect(url).toContain("api.runpod.ai/v2/ep_1/run");
+    expect(body).toEqual({ input: { prompt: "hi" } });
+    expect(res.status).toBe("IN_QUEUE");
+  });
+
+  it("runEndpointSync hits /runsync and merges webhook extra", async () => {
+    let body: unknown = null;
+    server.use(
+      http.post("https://api.runpod.ai/v2/ep_1/runsync", async ({ request }) => {
+        body = await request.json();
+        return HttpResponse.json({ id: "job_1", status: "COMPLETED", output: { ok: true } });
+      }),
+    );
+    const client = withKey();
+    const res = await client.runEndpointSync("ep_1", { a: 1 }, { webhook: "https://h" });
+    expect(body).toEqual({ input: { a: 1 }, webhook: "https://h" });
+    expect(res.status).toBe("COMPLETED");
+  });
+
+  it("getJobStatus, cancelJob, endpointHealth, purgeQueue hit the right paths", async () => {
+    server.use(
+      http.get("https://api.runpod.ai/v2/ep_1/status/job_1", () =>
+        HttpResponse.json({ id: "job_1", status: "COMPLETED" }),
+      ),
+      http.post("https://api.runpod.ai/v2/ep_1/cancel/job_1", () =>
+        HttpResponse.json({ id: "job_1", status: "CANCELLED" }),
+      ),
+      http.get("https://api.runpod.ai/v2/ep_1/health", () =>
+        HttpResponse.json({ jobs: { inQueue: 2 }, workers: { idle: 1 } }),
+      ),
+      http.post("https://api.runpod.ai/v2/ep_1/purge-queue", () =>
+        HttpResponse.json({ removed: 3, status: "completed" }),
+      ),
+    );
+    const client = withKey();
+    expect((await client.getJobStatus("ep_1", "job_1")).status).toBe("COMPLETED");
+    expect((await client.cancelJob("ep_1", "job_1")).status).toBe("CANCELLED");
+    expect((await client.endpointHealth("ep_1")).jobs).toEqual({ inQueue: 2 });
+    expect((await client.purgeQueue("ep_1")).removed).toBe(3);
+  });
+
+  it("inference 404 maps to NotFoundError naming Endpoint", async () => {
+    server.use(
+      http.get("https://api.runpod.ai/v2/gone/health", () =>
+        HttpResponse.json({}, { status: 404 }),
+      ),
+    );
+    const client = withKey();
+    await expect(client.endpointHealth("gone")).rejects.toThrowError(
+      /Endpoint not found: gone/,
+    );
+  });
+});
+
+describe("RunpodClient — GraphQL", () => {
+  it("listGpuTypes returns data.gpuTypes", async () => {
+    let body: { query?: string } = {};
+    server.use(
+      http.post("https://api.runpod.io/graphql", async ({ request }) => {
+        body = (await request.json()) as { query?: string };
+        return HttpResponse.json({
+          data: {
+            gpuTypes: [
+              { id: "NVIDIA H100 80GB HBM3", displayName: "H100", memoryInGb: 80, secureCloud: true },
+            ],
+          },
+        });
+      }),
+    );
+    const client = withKey();
+    const res = await client.listGpuTypes();
+    expect(body.query).toContain("gpuTypes");
+    expect(res.gpuTypes[0]!.displayName).toBe("H100");
+  });
+
+  it("getBalance returns data.myself", async () => {
+    server.use(
+      http.post("https://api.runpod.io/graphql", () =>
+        HttpResponse.json({ data: { myself: { clientBalance: 100, currentSpendPerHr: 0.5 } } }),
+      ),
+    );
+    const client = withKey();
+    const res = await client.getBalance();
+    expect(res.clientBalance).toBe(100);
+  });
+
+  it("GraphQL errors array throws UpstreamError for generic messages", async () => {
+    server.use(
+      http.post("https://api.runpod.io/graphql", () =>
+        HttpResponse.json({ errors: [{ message: "field boom does not exist" }] }),
+      ),
+    );
+    const client = withKey();
+    await expect(client.listGpuTypes()).rejects.toThrowError(/GraphQL error: field boom/);
+  });
+
+  it("GraphQL auth-shaped errors throw AuthError", async () => {
+    server.use(
+      http.post("https://api.runpod.io/graphql", () =>
+        HttpResponse.json({ errors: [{ message: "Unauthorized" }] }),
+      ),
+    );
+    const client = withKey();
+    await expect(client.getBalance()).rejects.toBeInstanceOf(AuthError);
+  });
+});

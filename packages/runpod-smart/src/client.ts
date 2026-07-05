@@ -1,4 +1,19 @@
-import { loadCreds, fetchJson, AuthError, NotFoundError } from "smart-mcp-core";
+import {
+  loadCreds,
+  fetchJson,
+  AuthError,
+  NotFoundError,
+  UpstreamError,
+} from "smart-mcp-core";
+
+// Runpod exposes three separate hosts, all authenticated with the same
+// `Authorization: Bearer ${RUNPOD_API_KEY}`:
+//   - REST:      pod/template/endpoint/volume/registry management + billing
+//   - INFERENCE: serverless job submission + status (api.runpod.ai/v2/{id}/...)
+//   - GRAPHQL:   the only surface exposing GPU pricing + account balance
+const REST_BASE = "https://rest.runpod.io/v1";
+const INFERENCE_BASE = "https://api.runpod.ai/v2";
+const GRAPHQL_URL = "https://api.runpod.io/graphql";
 
 export type RunpodCreds = {
   RUNPOD_API_KEY: string;
@@ -12,6 +27,7 @@ type RunpodCredsRecord = Record<"RUNPOD_API_KEY" | "RUNPOD_DEFAULT_GPU", string>
 // type open so the tool layer can construct the precise wire shape without
 // the client having to mirror every field.
 export type PodCreateBody = Record<string, unknown>;
+export type PodUpdateBody = Record<string, unknown>;
 
 // Pod shape mirrors a useful subset of fields documented in the Runpod
 // OpenAPI spec (https://rest.runpod.io/v1/openapi.json). The wire payload may
@@ -51,8 +67,16 @@ export type Template = Record<string, unknown> & {
   category?: string;
 };
 
+export type TemplateBody = Record<string, unknown>;
+
 export interface ListTemplatesResponse {
   templates: Template[];
+}
+
+export interface GetTemplateOptions {
+  includePublic?: boolean;
+  includeRunpod?: boolean;
+  includeEndpointBound?: boolean;
 }
 
 // Endpoint shape mirrors a useful subset of fields documented in the Runpod
@@ -70,8 +94,104 @@ export type Endpoint = Record<string, unknown> & {
   createdAt?: string;
 };
 
+export type EndpointBody = Record<string, unknown>;
+
 export interface ListEndpointsResponse {
   endpoints: Endpoint[];
+}
+
+export interface GetEndpointOptions {
+  includeTemplate?: boolean;
+  includeWorkers?: boolean;
+}
+
+// Network volume shape per Runpod OpenAPI (NetworkVolume schema).
+export type NetworkVolume = Record<string, unknown> & {
+  id: string;
+  name?: string;
+  size?: number;
+  dataCenterId?: string;
+};
+
+export interface ListNetworkVolumesResponse {
+  networkVolumes: NetworkVolume[];
+}
+
+export interface NetworkVolumeCreateBody {
+  name: string;
+  size: number;
+  dataCenterId: string;
+}
+
+export interface NetworkVolumeUpdateBody {
+  name?: string;
+  size?: number;
+}
+
+// Container registry auth. The upstream response deliberately returns only
+// `{ id, name }` — the username/password are write-only and never echoed.
+export type RegistryAuth = Record<string, unknown> & {
+  id: string;
+  name?: string;
+};
+
+export interface ListRegistryAuthsResponse {
+  registryAuths: RegistryAuth[];
+}
+
+export interface RegistryAuthCreateBody {
+  name: string;
+  username: string;
+  password: string;
+}
+
+// Serverless inference job status (api.runpod.ai/v2/{id}/...). Shapes come
+// from the Runpod serverless docs, not the REST OpenAPI spec.
+export type JobStatus = Record<string, unknown> & {
+  id?: string;
+  status?: string;
+  output?: unknown;
+  delayTime?: number;
+  executionTime?: number;
+};
+
+export type EndpointHealth = Record<string, unknown> & {
+  jobs?: Record<string, number>;
+  workers?: Record<string, number>;
+};
+
+export interface PurgeQueueResult {
+  removed?: number;
+  status?: string;
+}
+
+export interface RunExtra {
+  webhook?: string;
+}
+
+// GraphQL-only shapes: pricing + balance.
+export interface GpuTypeLowestPrice {
+  minimumBidPrice?: number | null;
+  uninterruptablePrice?: number | null;
+}
+
+export interface GpuType {
+  id: string;
+  displayName?: string;
+  memoryInGb?: number;
+  secureCloud?: boolean;
+  communityCloud?: boolean;
+  securePrice?: number | null;
+  communityPrice?: number | null;
+  lowestPrice?: GpuTypeLowestPrice | null;
+}
+
+export interface Balance {
+  id?: string;
+  clientBalance?: number;
+  currentSpendPerHr?: number;
+  spendLimit?: number;
+  minBalance?: number;
 }
 
 // Billing record shape per Runpod OpenAPI (BillingRecords, NetworkVolumeBillingRecords).
@@ -132,6 +252,40 @@ export class RunpodClient {
     return this.creds.RUNPOD_DEFAULT_GPU;
   }
 
+  private get token(): string {
+    return this.creds.RUNPOD_API_KEY;
+  }
+
+  // Wraps an AuthError with a credential-name-bearing message. Non-auth errors
+  // pass through unchanged. Used by list/create methods that have no id.
+  private wrapAuth(err: unknown): unknown {
+    if (err instanceof AuthError) {
+      return new AuthError("Runpod rejected the API key. Check RUNPOD_API_KEY.", {
+        detail: err.detail,
+        cause: err,
+      });
+    }
+    return err;
+  }
+
+  // Wraps fetchJson errors from single-resource endpoints: 404 →
+  // NotFoundError("<Kind> not found: <id>"), 401/403 → AuthError hinting at
+  // RUNPOD_API_KEY. All other errors pass through unchanged.
+  private mapResourceError(err: unknown, kind: string, id: string): unknown {
+    if (err instanceof NotFoundError) {
+      return new NotFoundError(`${kind} not found: ${id}`, {
+        detail: err.detail,
+        cause: err,
+      });
+    }
+    return this.wrapAuth(err);
+  }
+
+  // Back-compat shim for the original pod-specific mapper.
+  private mapPodError(err: unknown, podId: string): unknown {
+    return this.mapResourceError(err, "Pod", podId);
+  }
+
   // ---------- Pod listing ----------
 
   async listPods(opts: ListPodsOptions = {}): Promise<ListPodsResponse> {
@@ -142,22 +296,13 @@ export class RunpodClient {
     try {
       // Runpod's GET /pods returns a bare array; we wrap to {pods} for
       // ergonomic downstream consumption.
-      const body = await fetchJson<Pod[]>(
-        "https://rest.runpod.io/v1/pods",
-        {
-          token: this.creds.RUNPOD_API_KEY,
-          searchParams,
-        },
-      );
+      const body = await fetchJson<Pod[]>(`${REST_BASE}/pods`, {
+        token: this.token,
+        searchParams,
+      });
       return { pods: body };
     } catch (err) {
-      if (err instanceof AuthError) {
-        throw new AuthError(
-          "Runpod rejected the API key. Check RUNPOD_API_KEY.",
-          { detail: err.detail, cause: err },
-        );
-      }
-      throw err;
+      throw this.wrapAuth(err);
     }
   }
 
@@ -167,19 +312,12 @@ export class RunpodClient {
     try {
       // Runpod's GET /templates returns a bare array; wrap to {templates}
       // for consistency with listPods/listEndpoints.
-      const body = await fetchJson<Template[]>(
-        "https://rest.runpod.io/v1/templates",
-        { token: this.creds.RUNPOD_API_KEY },
-      );
+      const body = await fetchJson<Template[]>(`${REST_BASE}/templates`, {
+        token: this.token,
+      });
       return { templates: body };
     } catch (err) {
-      if (err instanceof AuthError) {
-        throw new AuthError(
-          "Runpod rejected the API key. Check RUNPOD_API_KEY.",
-          { detail: err.detail, cause: err },
-        );
-      }
-      throw err;
+      throw this.wrapAuth(err);
     }
   }
 
@@ -187,19 +325,12 @@ export class RunpodClient {
     try {
       // Runpod's GET /endpoints returns a bare array; wrap to {endpoints}
       // for consistency with listPods/listTemplates.
-      const body = await fetchJson<Endpoint[]>(
-        "https://rest.runpod.io/v1/endpoints",
-        { token: this.creds.RUNPOD_API_KEY },
-      );
+      const body = await fetchJson<Endpoint[]>(`${REST_BASE}/endpoints`, {
+        token: this.token,
+      });
       return { endpoints: body };
     } catch (err) {
-      if (err instanceof AuthError) {
-        throw new AuthError(
-          "Runpod rejected the API key. Check RUNPOD_API_KEY.",
-          { detail: err.detail, cause: err },
-        );
-      }
-      throw err;
+      throw this.wrapAuth(err);
     }
   }
 
@@ -210,28 +341,19 @@ export class RunpodClient {
   // methods. `from`/`to` map to `startTime`/`endTime` query params.
 
   async getBillingPods(window: BillingWindow = {}): Promise<BillingPodsResponse> {
-    return this.fetchBilling(
-      "https://rest.runpod.io/v1/billing/pods",
-      window,
-    );
+    return this.fetchBilling(`${REST_BASE}/billing/pods`, window);
   }
 
   async getBillingEndpoints(
     window: BillingWindow = {},
   ): Promise<BillingEndpointsResponse> {
-    return this.fetchBilling(
-      "https://rest.runpod.io/v1/billing/endpoints",
-      window,
-    );
+    return this.fetchBilling(`${REST_BASE}/billing/endpoints`, window);
   }
 
   async getBillingNetworkVolumes(
     window: BillingWindow = {},
   ): Promise<BillingNetworkVolumesResponse> {
-    return this.fetchBilling(
-      "https://rest.runpod.io/v1/billing/networkvolumes",
-      window,
-    );
+    return this.fetchBilling(`${REST_BASE}/billing/networkvolumes`, window);
   }
 
   private async fetchBilling(
@@ -244,108 +366,440 @@ export class RunpodClient {
     };
     try {
       const body = await fetchJson<BillingRecord[]>(url, {
-        token: this.creds.RUNPOD_API_KEY,
+        token: this.token,
         searchParams,
       });
       return { records: body };
     } catch (err) {
-      if (err instanceof AuthError) {
-        throw new AuthError(
-          "Runpod rejected the API key. Check RUNPOD_API_KEY.",
-          { detail: err.detail, cause: err },
-        );
-      }
-      throw err;
+      throw this.wrapAuth(err);
     }
   }
 
-  // ---------- Pod creation ----------
+  // ---------- Pod creation + mutation ----------
 
   async createPod(body: PodCreateBody): Promise<Pod> {
     try {
-      return await fetchJson<Pod>("https://rest.runpod.io/v1/pods", {
+      return await fetchJson<Pod>(`${REST_BASE}/pods`, {
         method: "POST",
-        token: this.creds.RUNPOD_API_KEY,
+        token: this.token,
         body,
       });
     } catch (err) {
-      if (err instanceof AuthError) {
-        throw new AuthError(
-          "Runpod rejected the API key. Check RUNPOD_API_KEY.",
-          { detail: err.detail, cause: err },
-        );
-      }
-      throw err;
+      throw this.wrapAuth(err);
+    }
+  }
+
+  async updatePod(podId: string, body: PodUpdateBody): Promise<Pod> {
+    const url = `${REST_BASE}/pods/${encodeURIComponent(podId)}`;
+    try {
+      return await fetchJson<Pod>(url, {
+        method: "PATCH",
+        token: this.token,
+        body,
+      });
+    } catch (err) {
+      throw this.mapPodError(err, podId);
     }
   }
 
   // ---------- Single-pod operations ----------
 
   async getPod(podId: string): Promise<Pod> {
-    const url = `https://rest.runpod.io/v1/pods/${encodeURIComponent(podId)}`;
+    const url = `${REST_BASE}/pods/${encodeURIComponent(podId)}`;
     try {
-      return await fetchJson<Pod>(url, {
-        token: this.creds.RUNPOD_API_KEY,
-      });
+      return await fetchJson<Pod>(url, { token: this.token });
     } catch (err) {
       throw this.mapPodError(err, podId);
     }
   }
 
   async startPod(podId: string): Promise<Pod> {
-    const url = `https://rest.runpod.io/v1/pods/${encodeURIComponent(podId)}/start`;
+    const url = `${REST_BASE}/pods/${encodeURIComponent(podId)}/start`;
     try {
-      return await fetchJson<Pod>(url, {
-        method: "POST",
-        token: this.creds.RUNPOD_API_KEY,
-      });
+      return await fetchJson<Pod>(url, { method: "POST", token: this.token });
     } catch (err) {
       throw this.mapPodError(err, podId);
     }
   }
 
   async stopPod(podId: string): Promise<Pod> {
-    const url = `https://rest.runpod.io/v1/pods/${encodeURIComponent(podId)}/stop`;
+    const url = `${REST_BASE}/pods/${encodeURIComponent(podId)}/stop`;
     try {
-      return await fetchJson<Pod>(url, {
-        method: "POST",
-        token: this.creds.RUNPOD_API_KEY,
-      });
+      return await fetchJson<Pod>(url, { method: "POST", token: this.token });
+    } catch (err) {
+      throw this.mapPodError(err, podId);
+    }
+  }
+
+  async restartPod(podId: string): Promise<void> {
+    const url = `${REST_BASE}/pods/${encodeURIComponent(podId)}/restart`;
+    try {
+      await fetchJson<unknown>(url, { method: "POST", token: this.token });
+    } catch (err) {
+      throw this.mapPodError(err, podId);
+    }
+  }
+
+  async resetPod(podId: string): Promise<void> {
+    const url = `${REST_BASE}/pods/${encodeURIComponent(podId)}/reset`;
+    try {
+      await fetchJson<unknown>(url, { method: "POST", token: this.token });
     } catch (err) {
       throw this.mapPodError(err, podId);
     }
   }
 
   async terminatePod(podId: string): Promise<void> {
-    const url = `https://rest.runpod.io/v1/pods/${encodeURIComponent(podId)}`;
+    const url = `${REST_BASE}/pods/${encodeURIComponent(podId)}`;
     try {
       // Runpod returns 204 No Content on successful delete; fetchJson maps
       // 204 to `undefined`. We explicitly drop the body either way.
-      await fetchJson<unknown>(url, {
-        method: "DELETE",
-        token: this.creds.RUNPOD_API_KEY,
-      });
+      await fetchJson<unknown>(url, { method: "DELETE", token: this.token });
     } catch (err) {
       throw this.mapPodError(err, podId);
     }
   }
 
-  // Wraps fetchJson errors raised by single-pod endpoints into our public
-  // contract: 404 → NotFoundError("Pod not found: <id>"), 401/403 → AuthError
-  // hinting at RUNPOD_API_KEY. All other errors pass through unchanged.
-  private mapPodError(err: unknown, podId: string): unknown {
-    if (err instanceof NotFoundError) {
-      return new NotFoundError(`Pod not found: ${podId}`, {
-        detail: err.detail,
-        cause: err,
+  // ---------- Templates CRUD ----------
+
+  async createTemplate(body: TemplateBody): Promise<Template> {
+    try {
+      return await fetchJson<Template>(`${REST_BASE}/templates`, {
+        method: "POST",
+        token: this.token,
+        body,
+      });
+    } catch (err) {
+      throw this.wrapAuth(err);
+    }
+  }
+
+  async getTemplate(
+    templateId: string,
+    opts: GetTemplateOptions = {},
+  ): Promise<Template> {
+    const url = `${REST_BASE}/templates/${encodeURIComponent(templateId)}`;
+    const searchParams: Record<string, boolean | undefined> = {
+      includePublicTemplates: opts.includePublic,
+      includeRunpodTemplates: opts.includeRunpod,
+      includeEndpointBoundTemplates: opts.includeEndpointBound,
+    };
+    try {
+      return await fetchJson<Template>(url, { token: this.token, searchParams });
+    } catch (err) {
+      throw this.mapResourceError(err, "Template", templateId);
+    }
+  }
+
+  async updateTemplate(templateId: string, body: TemplateBody): Promise<Template> {
+    const url = `${REST_BASE}/templates/${encodeURIComponent(templateId)}`;
+    try {
+      return await fetchJson<Template>(url, {
+        method: "PATCH",
+        token: this.token,
+        body,
+      });
+    } catch (err) {
+      throw this.mapResourceError(err, "Template", templateId);
+    }
+  }
+
+  async deleteTemplate(templateId: string): Promise<void> {
+    const url = `${REST_BASE}/templates/${encodeURIComponent(templateId)}`;
+    try {
+      await fetchJson<unknown>(url, { method: "DELETE", token: this.token });
+    } catch (err) {
+      throw this.mapResourceError(err, "Template", templateId);
+    }
+  }
+
+  // ---------- Endpoints CRUD ----------
+
+  async createEndpoint(body: EndpointBody): Promise<Endpoint> {
+    try {
+      return await fetchJson<Endpoint>(`${REST_BASE}/endpoints`, {
+        method: "POST",
+        token: this.token,
+        body,
+      });
+    } catch (err) {
+      throw this.wrapAuth(err);
+    }
+  }
+
+  async getEndpoint(
+    endpointId: string,
+    opts: GetEndpointOptions = {},
+  ): Promise<Endpoint> {
+    const url = `${REST_BASE}/endpoints/${encodeURIComponent(endpointId)}`;
+    const searchParams: Record<string, boolean | undefined> = {
+      includeTemplate: opts.includeTemplate,
+      includeWorkers: opts.includeWorkers,
+    };
+    try {
+      return await fetchJson<Endpoint>(url, { token: this.token, searchParams });
+    } catch (err) {
+      throw this.mapResourceError(err, "Endpoint", endpointId);
+    }
+  }
+
+  async updateEndpoint(endpointId: string, body: EndpointBody): Promise<Endpoint> {
+    const url = `${REST_BASE}/endpoints/${encodeURIComponent(endpointId)}`;
+    try {
+      return await fetchJson<Endpoint>(url, {
+        method: "PATCH",
+        token: this.token,
+        body,
+      });
+    } catch (err) {
+      throw this.mapResourceError(err, "Endpoint", endpointId);
+    }
+  }
+
+  async deleteEndpoint(endpointId: string): Promise<void> {
+    const url = `${REST_BASE}/endpoints/${encodeURIComponent(endpointId)}`;
+    try {
+      await fetchJson<unknown>(url, { method: "DELETE", token: this.token });
+    } catch (err) {
+      throw this.mapResourceError(err, "Endpoint", endpointId);
+    }
+  }
+
+  // ---------- Network volumes CRUD ----------
+
+  async listNetworkVolumes(): Promise<ListNetworkVolumesResponse> {
+    try {
+      const body = await fetchJson<NetworkVolume[]>(`${REST_BASE}/networkvolumes`, {
+        token: this.token,
+      });
+      return { networkVolumes: body };
+    } catch (err) {
+      throw this.wrapAuth(err);
+    }
+  }
+
+  async createNetworkVolume(body: NetworkVolumeCreateBody): Promise<NetworkVolume> {
+    try {
+      return await fetchJson<NetworkVolume>(`${REST_BASE}/networkvolumes`, {
+        method: "POST",
+        token: this.token,
+        body,
+      });
+    } catch (err) {
+      throw this.wrapAuth(err);
+    }
+  }
+
+  async getNetworkVolume(volumeId: string): Promise<NetworkVolume> {
+    const url = `${REST_BASE}/networkvolumes/${encodeURIComponent(volumeId)}`;
+    try {
+      return await fetchJson<NetworkVolume>(url, { token: this.token });
+    } catch (err) {
+      throw this.mapResourceError(err, "Network volume", volumeId);
+    }
+  }
+
+  async updateNetworkVolume(
+    volumeId: string,
+    body: NetworkVolumeUpdateBody,
+  ): Promise<NetworkVolume> {
+    const url = `${REST_BASE}/networkvolumes/${encodeURIComponent(volumeId)}`;
+    try {
+      return await fetchJson<NetworkVolume>(url, {
+        method: "PATCH",
+        token: this.token,
+        body,
+      });
+    } catch (err) {
+      throw this.mapResourceError(err, "Network volume", volumeId);
+    }
+  }
+
+  async deleteNetworkVolume(volumeId: string): Promise<void> {
+    const url = `${REST_BASE}/networkvolumes/${encodeURIComponent(volumeId)}`;
+    try {
+      await fetchJson<unknown>(url, { method: "DELETE", token: this.token });
+    } catch (err) {
+      throw this.mapResourceError(err, "Network volume", volumeId);
+    }
+  }
+
+  // ---------- Container registry auth ----------
+
+  async listRegistryAuths(): Promise<ListRegistryAuthsResponse> {
+    try {
+      const body = await fetchJson<RegistryAuth[]>(
+        `${REST_BASE}/containerregistryauth`,
+        { token: this.token },
+      );
+      return { registryAuths: body };
+    } catch (err) {
+      throw this.wrapAuth(err);
+    }
+  }
+
+  async createRegistryAuth(body: RegistryAuthCreateBody): Promise<RegistryAuth> {
+    try {
+      return await fetchJson<RegistryAuth>(`${REST_BASE}/containerregistryauth`, {
+        method: "POST",
+        token: this.token,
+        body,
+      });
+    } catch (err) {
+      throw this.wrapAuth(err);
+    }
+  }
+
+  async getRegistryAuth(authId: string): Promise<RegistryAuth> {
+    const url = `${REST_BASE}/containerregistryauth/${encodeURIComponent(authId)}`;
+    try {
+      return await fetchJson<RegistryAuth>(url, { token: this.token });
+    } catch (err) {
+      throw this.mapResourceError(err, "Registry auth", authId);
+    }
+  }
+
+  async deleteRegistryAuth(authId: string): Promise<void> {
+    const url = `${REST_BASE}/containerregistryauth/${encodeURIComponent(authId)}`;
+    try {
+      await fetchJson<unknown>(url, { method: "DELETE", token: this.token });
+    } catch (err) {
+      throw this.mapResourceError(err, "Registry auth", authId);
+    }
+  }
+
+  // ---------- Serverless inference (INFERENCE_BASE) ----------
+
+  async runEndpoint(
+    endpointId: string,
+    input: unknown,
+    extra: RunExtra = {},
+  ): Promise<JobStatus> {
+    const url = `${INFERENCE_BASE}/${encodeURIComponent(endpointId)}/run`;
+    try {
+      return await fetchJson<JobStatus>(url, {
+        method: "POST",
+        token: this.token,
+        body: { input, ...extra },
+      });
+    } catch (err) {
+      throw this.mapResourceError(err, "Endpoint", endpointId);
+    }
+  }
+
+  async runEndpointSync(
+    endpointId: string,
+    input: unknown,
+    extra: RunExtra = {},
+  ): Promise<JobStatus> {
+    const url = `${INFERENCE_BASE}/${encodeURIComponent(endpointId)}/runsync`;
+    try {
+      return await fetchJson<JobStatus>(url, {
+        method: "POST",
+        token: this.token,
+        body: { input, ...extra },
+        // Sync runs block until the job finishes (or the endpoint hands back
+        // an IN_PROGRESS handle). Give it more headroom than the 30s default.
+        timeoutMs: 120_000,
+      });
+    } catch (err) {
+      throw this.mapResourceError(err, "Endpoint", endpointId);
+    }
+  }
+
+  async getJobStatus(endpointId: string, jobId: string): Promise<JobStatus> {
+    const url = `${INFERENCE_BASE}/${encodeURIComponent(endpointId)}/status/${encodeURIComponent(jobId)}`;
+    try {
+      return await fetchJson<JobStatus>(url, { token: this.token });
+    } catch (err) {
+      throw this.mapResourceError(err, "Endpoint", endpointId);
+    }
+  }
+
+  async cancelJob(endpointId: string, jobId: string): Promise<JobStatus> {
+    const url = `${INFERENCE_BASE}/${encodeURIComponent(endpointId)}/cancel/${encodeURIComponent(jobId)}`;
+    try {
+      return await fetchJson<JobStatus>(url, { method: "POST", token: this.token });
+    } catch (err) {
+      throw this.mapResourceError(err, "Endpoint", endpointId);
+    }
+  }
+
+  async endpointHealth(endpointId: string): Promise<EndpointHealth> {
+    const url = `${INFERENCE_BASE}/${encodeURIComponent(endpointId)}/health`;
+    try {
+      return await fetchJson<EndpointHealth>(url, { token: this.token });
+    } catch (err) {
+      throw this.mapResourceError(err, "Endpoint", endpointId);
+    }
+  }
+
+  async purgeQueue(endpointId: string): Promise<PurgeQueueResult> {
+    const url = `${INFERENCE_BASE}/${encodeURIComponent(endpointId)}/purge-queue`;
+    try {
+      return await fetchJson<PurgeQueueResult>(url, {
+        method: "POST",
+        token: this.token,
+      });
+    } catch (err) {
+      throw this.mapResourceError(err, "Endpoint", endpointId);
+    }
+  }
+
+  // ---------- GraphQL (pricing + balance) ----------
+  //
+  // The GraphQL endpoint returns HTTP 200 even for query errors, with the
+  // failures under `body.errors`. fetchJson only throws on non-2xx, so we
+  // inspect `errors` ourselves and raise AuthError (key problems) or
+  // UpstreamError (everything else).
+
+  private async graphql<T>(
+    query: string,
+    variables?: Record<string, unknown>,
+  ): Promise<T> {
+    let body: { data?: T; errors?: Array<{ message?: string }> };
+    try {
+      body = await fetchJson<{ data?: T; errors?: Array<{ message?: string }> }>(
+        GRAPHQL_URL,
+        {
+          method: "POST",
+          token: this.token,
+          body: { query, variables },
+        },
+      );
+    } catch (err) {
+      throw this.wrapAuth(err);
+    }
+    if (body.errors && body.errors.length > 0) {
+      const msg =
+        body.errors
+          .map((e) => e.message)
+          .filter((m): m is string => typeof m === "string")
+          .join("; ") || "GraphQL error";
+      if (/unauthor|not authenticated|invalid.*key|forbidden/i.test(msg)) {
+        throw new AuthError(
+          "Runpod GraphQL rejected the API key. Check RUNPOD_API_KEY.",
+          { detail: body.errors },
+        );
+      }
+      throw new UpstreamError(`Runpod GraphQL error: ${msg}`, {
+        detail: body.errors,
       });
     }
-    if (err instanceof AuthError) {
-      return new AuthError(
-        "Runpod rejected the API key. Check RUNPOD_API_KEY.",
-        { detail: err.detail, cause: err },
-      );
-    }
-    return err;
+    return body.data as T;
+  }
+
+  async listGpuTypes(): Promise<{ gpuTypes: GpuType[] }> {
+    const query =
+      "query { gpuTypes { id displayName memoryInGb secureCloud communityCloud securePrice communityPrice lowestPrice(input:{gpuCount:1}) { minimumBidPrice uninterruptablePrice } } }";
+    const data = await this.graphql<{ gpuTypes: GpuType[] | null }>(query);
+    return { gpuTypes: data.gpuTypes ?? [] };
+  }
+
+  async getBalance(): Promise<Balance> {
+    const query =
+      "query { myself { id clientBalance currentSpendPerHr spendLimit minBalance } }";
+    const data = await this.graphql<{ myself: Balance | null }>(query);
+    return data.myself ?? {};
   }
 }
