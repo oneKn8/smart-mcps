@@ -5,7 +5,7 @@ import { buildContext, type RunpodContext } from "./context.js";
 
 await createMcpServer<RunpodContext>({
   name: "runpod-smart",
-  version: "0.1.0",
+  version: "0.2.0",
   tools,
   context: buildContext(),
 });

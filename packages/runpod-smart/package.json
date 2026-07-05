@@ -1,8 +1,8 @@
 {
   "name": "runpod-smart",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
-  "description": "Smart MCP for Runpod pods, templates, endpoints, billing, and ops shortcuts.",
+  "description": "Smart MCP for Runpod pods, templates, endpoints, volumes, registry auth, serverless inference, GPU pricing, and ops shortcuts.",
   "type": "module",
   "main": "dist/server.js",
   "bin": { "runpod-smart": "dist/server.js" },
