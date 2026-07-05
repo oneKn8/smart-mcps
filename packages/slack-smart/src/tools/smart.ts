@@ -7,7 +7,12 @@ import {
 } from "smart-mcp-core";
 import type { SlackContext } from "../context.js";
 import { mapChannel } from "../channel-mapper.js";
-import { mapMessage, type SlimMessage } from "../message-mapper.js";
+import {
+  mapMessage,
+  slimMessageFiles,
+  type SlimMessage,
+  type SlimMessageFile,
+} from "../message-mapper.js";
 import { mapUser } from "../user-mapper.js";
 import { asObject } from "../null-helpers.js";
 
@@ -71,53 +76,75 @@ export const catch_me_up = defineTool<CatchMeUpInput, CatchMeUpOutput, SlackCont
       mapChannel(c as Record<string, unknown>),
     );
 
-    // For each DM, fetch recent history since cutoff
+    // For each DM, fetch recent history since cutoff. A single DM whose history
+    // call fails (e.g. a stale/restricted channel returning channel_not_found)
+    // must NOT sink the whole digest — catch per-DM and note how many we skipped.
     const dmSummaries: DmSummary[] = [];
+    let skipped = 0;
     await Promise.all(
       dmChannels.map(async (dm) => {
-        const histResp = await context.client.getHistory({
-          channel: dm.id,
-          limit: input.dm_message_limit,
-          oldest: String(cutoff),
-        });
-        const messages = histResp.messages.map(mapMessage);
-        if (messages.length === 0) return;
-        const entry: DmSummary = {
-          channel_id: dm.id,
-          latest: messages,
-          message_count: messages.length,
-        };
-        if (dm.name !== null) entry.name = dm.name;
-        dmSummaries.push(entry);
+        try {
+          const histResp = await context.client.getHistory({
+            channel: dm.id,
+            limit: input.dm_message_limit,
+            oldest: String(cutoff),
+          });
+          const messages = histResp.messages.map(mapMessage);
+          if (messages.length === 0) return;
+          const entry: DmSummary = {
+            channel_id: dm.id,
+            latest: messages,
+            message_count: messages.length,
+          };
+          if (dm.name !== null) entry.name = dm.name;
+          dmSummaries.push(entry);
+        } catch {
+          skipped += 1;
+        }
       }),
     );
+    if (skipped > 0) {
+      notes.push(
+        `${skipped} DM(s) could not be read (archived or restricted) and were skipped.`,
+      );
+    }
 
-    // Mentions
+    // Mentions. Isolated from the DM digest: a search failure (missing scope,
+    // or search being unavailable on free workspaces) must not discard the DMs
+    // already assembled above — degrade to DMs-only with a note.
     const mentions: MentionMatch[] = [];
     if (input.include_mentions) {
-      const searchResp = await context.client.searchMessages({
-        query: "@" + me.user,
-        count: 20,
-        sort: "timestamp",
-        sort_dir: "desc",
-      });
-      for (const raw of searchResp.messages.matches) {
-        const obj = asObject(raw);
-        const ts = asString(obj["ts"]) ?? "";
-        const text = asString(obj["text"]) ?? "";
-        const chanObj = asObject(obj["channel"]);
-        const channel_id = asString(chanObj["id"]);
-        const channel_name = asString(chanObj["name"]);
-        const permalink = asString(obj["permalink"]);
-        const match: MentionMatch = { ts, text };
-        if (channel_id !== undefined) match.channel_id = channel_id;
-        if (channel_name !== undefined) match.channel_name = channel_name;
-        if (permalink !== undefined) match.permalink = permalink;
-        mentions.push(match);
+      try {
+        const searchResp = await context.client.searchMessages({
+          query: "@" + me.user,
+          count: 20,
+          sort: "timestamp",
+          sort_dir: "desc",
+        });
+        for (const raw of searchResp.messages.matches) {
+          const obj = asObject(raw);
+          const ts = asString(obj["ts"]) ?? "";
+          // Honor since_hours for mentions too (the standalone `mentions` tool
+          // does); otherwise search returns the newest N regardless of age.
+          if (ts !== "" && parseFloat(ts) < cutoff) continue;
+          const text = asString(obj["text"]) ?? "";
+          const chanObj = asObject(obj["channel"]);
+          const channel_id = asString(chanObj["id"]);
+          const channel_name = asString(chanObj["name"]);
+          const permalink = asString(obj["permalink"]);
+          const match: MentionMatch = { ts, text };
+          if (channel_id !== undefined) match.channel_id = channel_id;
+          if (channel_name !== undefined) match.channel_name = channel_name;
+          if (permalink !== undefined) match.permalink = permalink;
+          mentions.push(match);
+        }
+        notes.push(
+          "Mention detection uses search.messages which is approximate; very recent messages may be missing.",
+        );
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        notes.push(`Mention search unavailable (${msg}); showing DMs only.`);
       }
-      notes.push(
-        "Mention detection uses search.messages which is approximate; very recent messages may be missing.",
-      );
     }
 
     return {
@@ -240,18 +267,28 @@ export const unread_digest = defineTool<UnreadDigestInput, UnreadDigestOutput, S
     );
 
     const dms: DmDigestEntry[] = [];
+    let skipped = 0;
     await Promise.all(
       dmChannels.map(async (dm) => {
-        const histResp = await context.client.getHistory({
-          channel: dm.id,
-          limit: input.dm_message_limit,
-        });
-        const latest = histResp.messages.map(mapMessage);
-        const entry: DmDigestEntry = { channel_id: dm.id, latest };
-        if (dm.name !== null) entry.name = dm.name;
-        dms.push(entry);
+        try {
+          const histResp = await context.client.getHistory({
+            channel: dm.id,
+            limit: input.dm_message_limit,
+          });
+          const latest = histResp.messages.map(mapMessage);
+          const entry: DmDigestEntry = { channel_id: dm.id, latest };
+          if (dm.name !== null) entry.name = dm.name;
+          dms.push(entry);
+        } catch {
+          skipped += 1;
+        }
       }),
     );
+    if (skipped > 0) {
+      notes.push(
+        `${skipped} DM(s) could not be read (archived or restricted) and were skipped.`,
+      );
+    }
 
     return { dms, dm_count: dms.length, notes };
   },
@@ -274,6 +311,7 @@ type ThreadMessage = {
   author: string | null;
   text: string;
   ts: string;
+  files?: SlimMessageFile[];
 };
 
 type ThreadCatchupOutput = {
@@ -309,7 +347,10 @@ export const thread_catchup = defineTool<ThreadCatchupInput, ThreadCatchupOutput
         const author = asString(obj["user"]) ?? null;
         const text = asString(obj["text"]) ?? "";
         const ts = asString(obj["ts"]) ?? "";
-        allMessages.push({ author, text, ts });
+        const files = slimMessageFiles(raw);
+        const msg: ThreadMessage = { author, text, ts };
+        if (files !== undefined) msg.files = files;
+        allMessages.push(msg);
       }
 
       if (truncated) break;

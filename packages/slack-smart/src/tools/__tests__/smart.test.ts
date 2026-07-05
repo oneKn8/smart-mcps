@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   AmbiguousMatchError,
+  AuthError,
   ConfirmRequiredError,
+  NotFoundError,
   ValidationError,
 } from "smart-mcp-core";
 import {
@@ -173,7 +175,9 @@ describe("catch_me_up — handler", () => {
       messages: {
         matches: [
           {
-            ts: "1748510000.000001",
+            // Recent relative to the fake clock so it survives the since_hours
+            // window that catch_me_up now applies to mentions.
+            ts: String(FAKE_NOW_S - 3600),
             text: "hey @alice",
             channel: { id: "C001", name: "general" },
             permalink: "https://slack.com/archives/C001/p123",
@@ -214,6 +218,117 @@ describe("catch_me_up — handler", () => {
 
     expect(result.mentions).toHaveLength(0);
     expect(client.searchMessages).not.toHaveBeenCalled();
+  });
+
+  it("skips a DM whose history fetch fails instead of failing the whole call", async () => {
+    client.authTest.mockResolvedValue({
+      ok: true,
+      user: "alice",
+      user_id: "U001",
+      team: "T",
+      team_id: "T001",
+      url: "https://example.slack.com",
+    });
+    client.listChannels.mockResolvedValue({
+      ok: true,
+      channels: [
+        { id: "D001", name: "", is_im: true, is_mpim: false, is_private: true, is_archived: false },
+        { id: "DEAD", name: "", is_im: true, is_mpim: false, is_private: true, is_archived: false },
+      ],
+    });
+    // One DM's history call blows up (mirrors a real channel_not_found on a
+    // stale/restricted DM); the digest must survive and return the healthy one.
+    client.getHistory.mockImplementation((args: { channel: string }) => {
+      if (args.channel === "DEAD") {
+        return Promise.reject(new NotFoundError("Slack: channel_not_found"));
+      }
+      return Promise.resolve({
+        ok: true,
+        messages: [{ ts: "1748510000.000001", text: "hi", user: "U999" }],
+      });
+    });
+    client.searchMessages.mockResolvedValue({
+      ok: true,
+      messages: { matches: [], total: 0 },
+    });
+
+    const input = parse(catch_me_up, { include_mentions: false });
+    const result = (await catch_me_up.handler(input, ctx(client))) as {
+      dms: Array<{ channel_id: string }>;
+      notes: string[];
+    };
+
+    expect(result.dms).toHaveLength(1);
+    expect(result.dms[0]?.channel_id).toBe("D001");
+    expect(result.notes.some((n) => /skip/i.test(n))).toBe(true);
+  });
+
+  it("still returns the DM digest when the mention search fails", async () => {
+    client.authTest.mockResolvedValue({
+      ok: true,
+      user: "alice",
+      user_id: "U001",
+      team: "T",
+      team_id: "T001",
+      url: "https://example.slack.com",
+    });
+    client.listChannels.mockResolvedValue({
+      ok: true,
+      channels: [
+        { id: "D001", name: "", is_im: true, is_mpim: false, is_private: true, is_archived: false },
+      ],
+    });
+    client.getHistory.mockResolvedValue({
+      ok: true,
+      messages: [{ ts: "1748510000.000001", text: "hi", user: "U999" }],
+    });
+    // Search blows up (e.g. missing scope / free-tier workspace) — the DMs we
+    // already assembled must survive as a partial result.
+    client.searchMessages.mockRejectedValue(
+      new AuthError("Slack missing_scope: search:read"),
+    );
+
+    const input = parse(catch_me_up, { include_mentions: true });
+    const result = (await catch_me_up.handler(input, ctx(client))) as {
+      dms: Array<{ channel_id: string }>;
+      mentions: unknown[];
+      notes: string[];
+    };
+
+    expect(result.dms).toHaveLength(1);
+    expect(result.mentions).toHaveLength(0);
+    expect(result.notes.some((n) => /unavailable/i.test(n))).toBe(true);
+  });
+
+  it("filters mentions older than since_hours (matches the standalone mentions tool)", async () => {
+    client.authTest.mockResolvedValue({
+      ok: true,
+      user: "alice",
+      user_id: "U001",
+      team: "T",
+      team_id: "T001",
+      url: "https://example.slack.com",
+    });
+    client.listChannels.mockResolvedValue({ ok: true, channels: [] });
+    const recentTs = String(FAKE_NOW_S - 1800); // 30 min ago
+    const oldTs = String(FAKE_NOW_S - 7200); // 2 h ago, outside a 1h window
+    client.searchMessages.mockResolvedValue({
+      ok: true,
+      messages: {
+        matches: [
+          { ts: recentTs, text: "recent @alice", channel: { id: "C1", name: "general" } },
+          { ts: oldTs, text: "old @alice", channel: { id: "C1", name: "general" } },
+        ],
+        total: 2,
+      },
+    });
+
+    const input = parse(catch_me_up, { since_hours: 1 });
+    const result = (await catch_me_up.handler(input, ctx(client))) as {
+      mentions: Array<{ text: string }>;
+    };
+    expect(result.mentions).toHaveLength(1);
+    expect(result.mentions[0]?.text).toBe("recent @alice");
   });
 });
 
@@ -387,6 +502,36 @@ describe("unread_digest — handler", () => {
 
     const [args] = client.getHistory.mock.calls[0] as [{ channel: string; limit: number }[]];
     expect(args.limit).toBe(7);
+  });
+
+  it("skips a DM whose history fetch fails and notes it", async () => {
+    client.listChannels.mockResolvedValue({
+      ok: true,
+      channels: [
+        { id: "D001", name: "", is_im: true, is_mpim: false, is_private: true, is_archived: false },
+        { id: "DEAD", name: "", is_im: true, is_mpim: false, is_private: true, is_archived: false },
+      ],
+    });
+    client.getHistory.mockImplementation((args: { channel: string }) => {
+      if (args.channel === "DEAD") {
+        return Promise.reject(new NotFoundError("Slack: channel_not_found"));
+      }
+      return Promise.resolve({
+        ok: true,
+        messages: [{ ts: "1748510000.000001", text: "m", user: "U001" }],
+      });
+    });
+
+    const input = parse(unread_digest, {});
+    const result = (await unread_digest.handler(input, ctx(client))) as {
+      dms: Array<{ channel_id: string }>;
+      dm_count: number;
+      notes: string[];
+    };
+
+    expect(result.dms).toHaveLength(1);
+    expect(result.dm_count).toBe(1);
+    expect(result.notes.some((n) => /skip/i.test(n))).toBe(true);
   });
 });
 
