@@ -22,11 +22,11 @@ server bootstrap).
 | `sheets-smart` | 16 | 103 | Google Sheets v4 + Drive v3 |
 | `weather-smart` | 14 | 250 | Open-Meteo + NWS: forecasts, alerts, air quality, activity windows |
 | `vercel-smart` | 7 | 135 | Vercel ops |
-| `drive-smart` | 7 | 13 | Local-disk scanner (filesystem + OS-mounted Drive): largest, duplicates, stats, cleanup |
+| `drive-smart` | 7 | 135 | Local-disk scanner (filesystem + OS-mounted Drive), network-mount-safe: scan, roots, search, largest, duplicates, stats, plan_cleanup |
 | `flow-smart` | 6 | 57 | Cross-app orchestrator: Gmail -> Tasks, Task -> Calendar, review/brief/digest Docs, inbox watcher |
-| **Total** | **380** | **3,515** | 14 MCP servers |
+| **Total** | **380** | **3,637** | 14 MCP servers |
 | `smart-mcp-core` | — | 84 | Shared infra (auth, http, errors, confirm, server bootstrap) |
-| **Monorepo** | **380** | **3,599** | 14 servers + core |
+| **Monorepo** | **380** | **3,721** | 14 servers + core |
 
 Each package's own `README.md` documents its individual tools and setup.
 
