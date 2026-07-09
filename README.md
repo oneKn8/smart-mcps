@@ -1,6 +1,8 @@
 # smart-mcps
 
-Personal MCP server toolbelt. **13 servers**, **309 tools**, **3,066 tests** — all
+[![CI](https://github.com/oneKn8/smart-mcps/actions/workflows/ci.yml/badge.svg)](https://github.com/oneKn8/smart-mcps/actions/workflows/ci.yml)
+
+Personal MCP server toolbelt. **14 servers**, **380 tools**, **3,599 tests** — all
 built on the shared `smart-mcp-core` package (auth, http, errors, confirm, fuzzy,
 server bootstrap).
 
@@ -8,6 +10,7 @@ server bootstrap).
 
 | Server | Tools | Tests | Scope |
 |--------|------:|------:|-------|
+| `hetzner-smart` | 71 | 533 | Hetzner Cloud: servers, volumes, networks, firewalls, load balancers, floating + primary IPs, certificates, images, catalog + pricing, async action polling, deploy/cost/cleanup shortcuts |
 | `calendar-smart` | 44 | 601 | Google Calendar API v3 |
 | `email-smart` | 53 | 473 | Multi-account Gmail: send, inbox read, bulk modify, labels, drafts, unsubscribe, plus filters, settings (vacation/forwarding/imap/pop/signatures/delegates), and permanent delete |
 | `slack-smart` | 46 | 310 | Slack messaging, search, channels, canvases |
@@ -21,9 +24,9 @@ server bootstrap).
 | `vercel-smart` | 7 | 135 | Vercel ops |
 | `drive-smart` | 7 | 13 | Local-disk scanner (filesystem + OS-mounted Drive): largest, duplicates, stats, cleanup |
 | `flow-smart` | 6 | 57 | Cross-app orchestrator: Gmail -> Tasks, Task -> Calendar, review/brief/digest Docs, inbox watcher |
-| **Total** | **309** | **2,982** | 13 MCP servers |
+| **Total** | **380** | **3,515** | 14 MCP servers |
 | `smart-mcp-core` | — | 84 | Shared infra (auth, http, errors, confirm, server bootstrap) |
-| **Monorepo** | **309** | **3,066** | 13 servers + core |
+| **Monorepo** | **380** | **3,599** | 14 servers + core |
 
 Each package's own `README.md` documents its individual tools and setup.
 
@@ -33,8 +36,6 @@ manager is the separate `gdrive-smart`.
 ## Planned
 
 - `gsc-smart` — Google Search Console
-- `ga-smart` — Google Analytics 4
-- `hetzner-smart` — Hetzner Cloud
 - `coolify-smart` — self-hosted Coolify
 
 ## Build all
