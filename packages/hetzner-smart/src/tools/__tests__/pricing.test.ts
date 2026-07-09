@@ -61,12 +61,35 @@ const pricingFixture = {
   ],
 };
 
+// Authoritative orderability per location. nbg1: cx22(1) + cx32(2) + ccx13(5);
+// fsn1: cx22(1) + cax11(3). cx11(4, deprecated) is orderable nowhere.
+const datacentersList = [
+  {
+    id: 1,
+    name: "nbg1-dc3",
+    location: { id: 2, name: "nbg1", city: "Nuremberg", country: "DE" },
+    server_types: { supported: [1, 2, 4, 5], available: [1, 2, 5] },
+  },
+  {
+    id: 2,
+    name: "fsn1-dc14",
+    location: { id: 1, name: "fsn1", city: "Falkenstein", country: "DE" },
+    server_types: { supported: [1, 3], available: [1, 3] },
+  },
+];
+
 type FakeClient = Record<string, ReturnType<typeof vi.fn>>;
 
 function makeClient(overrides: Partial<FakeClient> = {}): FakeClient {
   return {
     getAllPages: vi.fn((path: string) =>
-      Promise.resolve(path === "/server_types" ? serverTypesList : []),
+      Promise.resolve(
+        path === "/server_types"
+          ? serverTypesList
+          : path === "/datacenters"
+            ? datacentersList
+            : [],
+      ),
     ),
     getPricing: vi.fn().mockResolvedValue(pricingFixture),
     ...overrides,
@@ -146,6 +169,36 @@ describe("cheapestServerType — handler", () => {
       makeCtx(),
     )) as { server_types: Array<{ name: string }> };
     expect(result.server_types.map((s) => s.name)).toEqual(["cx32", "ccx13"]);
+  });
+
+  it("excludes types not orderable in a pinned location", async () => {
+    // fsn1 is orderable for cx22 + cax11 only. cx32/ccx13 are priced only in
+    // nbg1 and NOT orderable in fsn1 -> excluded (no cheapest-location fallback).
+    const result = (await cheapestServerType.handler(
+      cheapestServerType.inputSchema.parse({ location: "fsn1" }),
+      makeCtx(),
+    )) as { server_types: Array<{ name: string; location: string | null; price_monthly_eur: number | null }> };
+    expect(result.server_types.map((s) => s.name)).toEqual(["cx22"]);
+    expect(result.server_types[0]!.location).toBe("fsn1");
+    expect(result.server_types[0]!.price_monthly_eur).toBe(4.2);
+  });
+
+  it("includes an arm type only in a location where it is orderable", async () => {
+    const result = (await cheapestServerType.handler(
+      cheapestServerType.inputSchema.parse({ arch: "arm", location: "fsn1" }),
+      makeCtx(),
+    )) as { server_types: Array<{ name: string; location: string | null }> };
+    expect(result.server_types.map((s) => s.name)).toEqual(["cax11"]);
+    expect(result.server_types[0]!.location).toBe("fsn1");
+  });
+
+  it("cross-checks /datacenters for availability", async () => {
+    const ctx = makeCtx();
+    await cheapestServerType.handler(cheapestServerType.inputSchema.parse({}), ctx);
+    expect((ctx.client as unknown as FakeClient).getAllPages).toHaveBeenCalledWith(
+      "/datacenters",
+      "datacenters",
+    );
   });
 });
 

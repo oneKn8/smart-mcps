@@ -7,6 +7,7 @@ import { nullableString } from "./null-helpers.js";
 import {
   rankServerTypes,
   priceForServerType,
+  isPairAvailable,
   roundMonthly,
 } from "./pricing-util.js";
 
@@ -78,24 +79,35 @@ export const deployServer = defineTool<
   // Cast: z.ZodType<Input> is invariant; ZodDefault's input type differs from its output type.
   inputSchema: deployServerInputSchema as unknown as z.ZodType<DeployServerInput>,
   handler: async (input, context) => {
-    // Resolve the server type: explicit wins; otherwise the cheapest match.
+    // Resolve the server type. Either way the (type, location) pair must be
+    // orderable NOW per /datacenters — Hetzner prices types in locations it
+    // won't always create in, and create there fails with an opaque 422. We
+    // gate on availability up front so the caller gets a clear error instead.
     let resolvedType = input.server_type;
     if (resolvedType === undefined) {
+      // availableOnly + pinned location -> the top match is guaranteed orderable
+      // in input.location (the location we send to createServer).
       const ranked = await rankServerTypes(context.client, {
         min_cores: input.min_cores,
         min_memory: input.min_memory,
         arch: input.arch,
         location: input.location,
+        availableOnly: true,
       });
       const top = ranked[0];
       if (!top) {
         throw new ValidationError(
-          `No Hetzner server type matches the filters (arch=${input.arch}` +
+          `No Hetzner server type is orderable in "${input.location}" for the filters (arch=${input.arch}` +
             `${input.min_cores !== undefined ? `, min_cores=${input.min_cores}` : ""}` +
             `${input.min_memory !== undefined ? `, min_memory=${input.min_memory}` : ""}).`,
         );
       }
       resolvedType = top.name;
+    } else if (!(await isPairAvailable(context.client, resolvedType, input.location))) {
+      throw new ValidationError(
+        `Server type "${resolvedType}" is not orderable in location "${input.location}". ` +
+          "Pick an available (type, location) pair via cheapest_server_type.",
+      );
     }
 
     // Optional quick firewall, created before the server so it can be attached.

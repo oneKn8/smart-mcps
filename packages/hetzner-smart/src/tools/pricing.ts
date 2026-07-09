@@ -55,12 +55,17 @@ export const cheapestServerType = defineTool<
   inputSchema:
     cheapestServerTypeInputSchema as unknown as z.ZodType<CheapestServerTypeInput>,
   handler: async (input, context) => {
+    // availableOnly cross-checks /datacenters so we never surface a (type,
+    // location) pair that is priced but not actually orderable (would 422 on
+    // create). With a pinned location only orderable types survive; without one
+    // each type resolves to its cheapest ORDERABLE location.
     const ranked = await rankServerTypes(context.client, {
       min_cores: input.min_cores,
       min_memory: input.min_memory,
       arch: input.arch,
       cpu_type: input.cpu_type,
       location: input.location,
+      availableOnly: true,
     });
     const pricing = await context.client.getPricing();
     const top = ranked.slice(0, input.limit);

@@ -42,6 +42,24 @@ const pricingFixture = {
   ],
 };
 
+// Orderability per location. Both types are orderable in nbg1 (the deploy
+// default); in fsn1 only cx22(1) is orderable — cx32(2) is priced elsewhere but
+// NOT orderable in fsn1, which is exactly the (type, location) trap we guard.
+const datacentersList = [
+  {
+    id: 1,
+    name: "nbg1-dc3",
+    location: { id: 2, name: "nbg1", city: "Nuremberg", country: "DE" },
+    server_types: { supported: [1, 2], available: [1, 2] },
+  },
+  {
+    id: 2,
+    name: "fsn1-dc14",
+    location: { id: 1, name: "fsn1", city: "Falkenstein", country: "DE" },
+    server_types: { supported: [1, 2], available: [1] },
+  },
+];
+
 const rawServer = {
   id: 42,
   name: "web-1",
@@ -72,7 +90,13 @@ type FakeClient = Record<string, ReturnType<typeof vi.fn>>;
 function makeClient(overrides: Partial<FakeClient> = {}): FakeClient {
   return {
     getAllPages: vi.fn((path: string) =>
-      Promise.resolve(path === "/server_types" ? serverTypesList : []),
+      Promise.resolve(
+        path === "/server_types"
+          ? serverTypesList
+          : path === "/datacenters"
+            ? datacentersList
+            : [],
+      ),
     ),
     createFirewall: vi.fn().mockResolvedValue({ firewall: { id: 77 }, actions: [] }),
     createServer: vi.fn().mockResolvedValue(createBody),
@@ -154,17 +178,70 @@ describe("deployServer — handler", () => {
     expect(result.monthly_cost_eur).toBe(4.59);
   });
 
-  it("uses an explicit server_type without ranking", async () => {
+  it("honors an explicit server_type once its pair is validated", async () => {
     const ctx = makeCtx();
     await deployServer.handler(
       deployServer.inputSchema.parse({ name: "web-1", server_type: "cx32" }),
       ctx,
     );
     const client = ctx.client as unknown as FakeClient;
-    expect(client.getAllPages).not.toHaveBeenCalled();
+    // The explicit choice wins over the cheaper cx22; the pair is availability-
+    // checked against /datacenters (cx32 IS orderable in nbg1) before create.
+    expect(client.getAllPages).toHaveBeenCalledWith("/datacenters", "datacenters");
     expect(client.createServer).toHaveBeenCalledWith(
       expect.objectContaining({ server_type: "cx32" }),
     );
+  });
+
+  it("rejects an explicit (type, location) pair that is not orderable", async () => {
+    const ctx = makeCtx();
+    await expect(
+      deployServer.handler(
+        deployServer.inputSchema.parse({
+          name: "web-1",
+          server_type: "cx32",
+          location: "fsn1",
+        }),
+        ctx,
+      ),
+    ).rejects.toBeInstanceOf(ValidationError);
+    const client = ctx.client as unknown as FakeClient;
+    // No side effects: neither the create nor a firewall was touched.
+    expect(client.createServer).not.toHaveBeenCalled();
+    expect(client.createFirewall).not.toHaveBeenCalled();
+  });
+
+  it("skips a type not orderable in the target location when picking cheapest", async () => {
+    // nbg1 orderable = [2] (cx32 only). cx22 is cheaper but unorderable here, so
+    // the resolver must fall through to cx32 rather than surface a doomed pair.
+    const nbg1OnlyCx32 = [
+      {
+        id: 1,
+        name: "nbg1-dc3",
+        location: { id: 2, name: "nbg1" },
+        server_types: { supported: [1, 2], available: [2] },
+      },
+    ];
+    const ctx = makeCtx({
+      getAllPages: vi.fn((path: string) =>
+        Promise.resolve(
+          path === "/server_types"
+            ? serverTypesList
+            : path === "/datacenters"
+              ? nbg1OnlyCx32
+              : [],
+        ),
+      ),
+    });
+    const result = (await deployServer.handler(
+      deployServer.inputSchema.parse({ name: "web-1" }),
+      ctx,
+    )) as Record<string, unknown>;
+    const client = ctx.client as unknown as FakeClient;
+    expect(client.createServer).toHaveBeenCalledWith(
+      expect.objectContaining({ server_type: "cx32" }),
+    );
+    expect(result.server_type).toBe("cx32");
   });
 
   it("creates a quick firewall and attaches it", async () => {

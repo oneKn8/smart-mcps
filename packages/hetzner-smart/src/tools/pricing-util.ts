@@ -62,12 +62,25 @@ function rowToPrice(row: Record<string, unknown>): PriceRow {
 // matches it, that row wins; otherwise the cheapest-by-monthly row is returned
 // (the "cheapest-location fallback"). Null-priced rows are ignored when ranking
 // cheapest; if none carry a monthly price, the first row (or empty) is returned.
-function pickPriceRow(prices: unknown, location?: string): PriceRow {
+// When `allowed` is supplied, only rows for those (orderable) locations are ever
+// considered — this is how availability filtering constrains the price/location.
+function pickPriceRow(
+  prices: unknown,
+  location?: string,
+  allowed?: ReadonlySet<string>,
+): PriceRow {
   const empty: PriceRow = { hourly: null, monthly: null, location: null };
   if (!Array.isArray(prices)) return empty;
-  const rows = prices
+  let rows = prices
     .map(asRecord)
     .filter((r): r is Record<string, unknown> => r !== undefined);
+
+  if (allowed !== undefined) {
+    rows = rows.filter((r) => {
+      const loc = nullableString(r.location);
+      return loc !== null && allowed.has(loc);
+    });
+  }
 
   if (location !== undefined) {
     const match = rows.find((r) => r.location === location);
@@ -110,6 +123,95 @@ export interface RankFilters {
   arch?: string;
   cpu_type?: string;
   location?: string;
+  // When true, cross-check /datacenters and only keep (type, location) pairs that
+  // are actually orderable NOW. Hetzner prices a type in locations it can't always
+  // create in (create there returns 422); availability is the authoritative gate.
+  availableOnly?: boolean;
+}
+
+// A single orderable (server type name, location) pair, per /datacenters.
+export type AvailPair = { name: string; location: string };
+
+// Maps a server type NAME to the set of locations it's orderable in RIGHT NOW.
+type AvailabilityIndex = Map<string, Set<string>>;
+
+// Cross-references already-fetched /server_types (for id -> name) with a fresh
+// /datacenters read (each datacenter lists the server-type IDs `available` there)
+// to build the name -> orderable-locations index. Guards every nested/nulled key.
+async function buildAvailabilityIndex(
+  client: HetznerClient,
+  serverTypesRaw: Array<Record<string, unknown>>,
+): Promise<AvailabilityIndex> {
+  const idToName = new Map<number, string>();
+  for (const item of serverTypesRaw) {
+    const rec = asRecord(item);
+    if (!rec) continue;
+    const id = nullableNumber(rec.id);
+    const name = nullableString(rec.name);
+    if (id !== null && name !== null) idToName.set(id, name);
+  }
+
+  const datacenters = await client.getAllPages<Record<string, unknown>>(
+    "/datacenters",
+    "datacenters",
+  );
+
+  const index: AvailabilityIndex = new Map();
+  for (const dc of datacenters) {
+    const rec = asRecord(dc);
+    if (!rec) continue;
+    const location = nullableString(asRecord(rec.location)?.name);
+    if (location === null) continue;
+    const available = asRecord(rec.server_types)?.available;
+    if (!Array.isArray(available)) continue;
+    for (const rawId of available) {
+      const id = nullableNumber(rawId);
+      if (id === null) continue;
+      const name = idToName.get(id);
+      if (name === undefined) continue;
+      let locations = index.get(name);
+      if (!locations) {
+        locations = new Set<string>();
+        index.set(name, locations);
+      }
+      locations.add(location);
+    }
+  }
+  return index;
+}
+
+// Builds the flat list of orderable (type name, location) pairs from
+// /server_types + /datacenters. Types priced-but-not-orderable in a location
+// never appear. Useful for callers that want to enumerate valid pairs directly.
+export async function availablePairs(
+  client: HetznerClient,
+): Promise<AvailPair[]> {
+  const serverTypesRaw = await client.getAllPages<Record<string, unknown>>(
+    "/server_types",
+    "server_types",
+  );
+  const index = await buildAvailabilityIndex(client, serverTypesRaw);
+  const out: AvailPair[] = [];
+  for (const [name, locations] of index) {
+    for (const location of locations) out.push({ name, location });
+  }
+  return out;
+}
+
+// True when (typeName, location) is actually orderable now per /datacenters.
+// Used to reject an explicit unavailable pair BEFORE hitting the create endpoint
+// (which would otherwise fail with an opaque upstream 422).
+export async function isPairAvailable(
+  client: HetznerClient,
+  typeName: string,
+  location: string,
+): Promise<boolean> {
+  const serverTypesRaw = await client.getAllPages<Record<string, unknown>>(
+    "/server_types",
+    "server_types",
+  );
+  const index = await buildAvailabilityIndex(client, serverTypesRaw);
+  return index.get(typeName)?.has(location) ?? false;
 }
 
 function byMonthlyAsc(a: PricedType, b: PricedType): number {
@@ -130,6 +232,13 @@ export async function rankServerTypes(
     "/server_types",
     "server_types",
   );
+
+  // Optional availability gate: build type name -> orderable locations. When on,
+  // a type is dropped unless it's orderable (at the pinned location, or anywhere
+  // when none is pinned), and its price resolves only over orderable locations.
+  const availability = filters.availableOnly
+    ? await buildAvailabilityIndex(client, raw)
+    : undefined;
 
   const out: PricedType[] = [];
   for (const item of raw) {
@@ -158,9 +267,22 @@ export async function rankServerTypes(
     const cpuType = nullableString(rec.cpu_type);
     if (filters.cpu_type !== undefined && cpuType !== filters.cpu_type) continue;
 
-    const price = pickPriceRow(rec.prices, filters.location);
+    const name = typeof rec.name === "string" ? rec.name : "";
+
+    // Availability gate: drop types not orderable anywhere (or not at the pinned
+    // location); constrain price resolution to the orderable locations only.
+    let allowed: Set<string> | undefined;
+    if (availability !== undefined) {
+      allowed = availability.get(name);
+      if (allowed === undefined || allowed.size === 0) continue;
+      if (filters.location !== undefined && !allowed.has(filters.location)) {
+        continue;
+      }
+    }
+
+    const price = pickPriceRow(rec.prices, filters.location, allowed);
     out.push({
-      name: typeof rec.name === "string" ? rec.name : "",
+      name,
       cores: cores ?? 0,
       memory: memory ?? 0,
       disk: nullableNumber(rec.disk) ?? 0,

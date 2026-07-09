@@ -3,6 +3,8 @@ import {
   rankServerTypes,
   priceForServerType,
   firstPrice,
+  availablePairs,
+  isPairAvailable,
   parseNet,
   parseDecimal,
   roundMonthly,
@@ -144,6 +146,39 @@ function fakeClient(types: Array<Record<string, unknown>>): HetznerClient {
   } as unknown as HetznerClient;
 }
 
+// Datacenters carry the authoritative `available` server-type IDs per location.
+// cx22(1) is orderable in nbg1 + fsn1; cx32(2) + ccx13(5) only in nbg1; cax11(3)
+// only in fsn1; cx11(4, deprecated) appears nowhere. Note cx32 IS priced only in
+// nbg1 anyway, but old code would fall back to nbg1 for a pinned fsn1 request —
+// availability now blocks that (cx32 is genuinely unorderable in fsn1).
+const datacentersList = [
+  {
+    id: 1,
+    name: "nbg1-dc3",
+    location: { id: 2, name: "nbg1", city: "Nuremberg", country: "DE" },
+    server_types: { supported: [1, 2, 4, 5], available: [1, 2, 5] },
+  },
+  {
+    id: 2,
+    name: "fsn1-dc14",
+    location: { id: 1, name: "fsn1", city: "Falkenstein", country: "DE" },
+    server_types: { supported: [1, 3], available: [1, 3] },
+  },
+];
+
+// A client whose getAllPages serves /datacenters and /server_types separately,
+// so the availability cross-check has real datacenter data to read.
+function fakeClientAvail(
+  types: Array<Record<string, unknown>>,
+  datacenters: Array<Record<string, unknown>>,
+): HetznerClient {
+  return {
+    getAllPages: vi.fn((path: string) =>
+      Promise.resolve(path === "/datacenters" ? datacenters : types),
+    ),
+  } as unknown as HetznerClient;
+}
+
 // =============================================================================
 // parseDecimal / parseNet / rounding
 // =============================================================================
@@ -263,6 +298,123 @@ describe("rankServerTypes", () => {
     expect(noprice.price_monthly_eur).toBeNull();
     expect(noprice.price_hourly_eur).toBeNull();
     expect(noprice.location).toBeNull();
+  });
+});
+
+// =============================================================================
+// availability cross-check (availablePairs / isPairAvailable / rankServerTypes)
+// =============================================================================
+
+describe("availablePairs", () => {
+  it("maps datacenter available IDs to (name, location) pairs", async () => {
+    const client = fakeClientAvail(serverTypesList, datacentersList);
+    const pairs = await availablePairs(client);
+    const sorted = pairs
+      .map((p) => `${p.name}@${p.location}`)
+      .sort();
+    // cx11 (id 4) is priced but in no `available` list -> never appears.
+    expect(sorted).toEqual(
+      ["cax11@fsn1", "ccx13@nbg1", "cx22@fsn1", "cx22@nbg1", "cx32@nbg1"].sort(),
+    );
+    expect(client.getAllPages).toHaveBeenCalledWith("/datacenters", "datacenters");
+  });
+
+  it("ignores datacenters with missing location or available data", async () => {
+    const dirty = [
+      { id: 9, name: "broken-dc", server_types: { available: [1] } }, // no location
+      {
+        id: 10,
+        name: "nolist-dc",
+        location: { name: "hel1" },
+        server_types: { supported: [1] }, // no `available`
+      },
+      datacentersList[1], // fsn1: cx22 + cax11
+    ];
+    const pairs = await availablePairs(
+      fakeClientAvail(serverTypesList, dirty),
+    );
+    expect(pairs.map((p) => `${p.name}@${p.location}`).sort()).toEqual(
+      ["cax11@fsn1", "cx22@fsn1"].sort(),
+    );
+  });
+});
+
+describe("isPairAvailable", () => {
+  it("returns true only for orderable pairs", async () => {
+    const client = fakeClientAvail(serverTypesList, datacentersList);
+    expect(await isPairAvailable(client, "cx22", "fsn1")).toBe(true);
+    expect(await isPairAvailable(client, "cx22", "nbg1")).toBe(true);
+    // cx32 is priced only in nbg1 and orderable only in nbg1.
+    expect(await isPairAvailable(client, "cx32", "fsn1")).toBe(false);
+    // cax11 is arm, orderable only in fsn1.
+    expect(await isPairAvailable(client, "cax11", "nbg1")).toBe(false);
+    // Unknown type name is never orderable.
+    expect(await isPairAvailable(client, "nope", "nbg1")).toBe(false);
+  });
+});
+
+describe("rankServerTypes — availableOnly", () => {
+  it("excludes types not orderable at the pinned location (no priced-row fallback)", async () => {
+    const ranked = await rankServerTypes(
+      fakeClientAvail(serverTypesList, datacentersList),
+      { location: "fsn1", availableOnly: true },
+    );
+    // Only cx22 + cax11 are orderable in fsn1; cx32/ccx13 (priced nbg1) are gone,
+    // where the OLD cheapest-location fallback would have surfaced cx32@nbg1.
+    expect(ranked.map((r) => r.name)).toEqual(["cax11", "cx22"]);
+    const cx22 = ranked.find((r) => r.name === "cx22")!;
+    expect(cx22.location).toBe("fsn1");
+    expect(cx22.price_monthly_eur).toBe(4.2);
+    expect(ranked.every((r) => r.name !== "cx32")).toBe(true);
+  });
+
+  it("pins price to the requested orderable location", async () => {
+    const ranked = await rankServerTypes(
+      fakeClientAvail(serverTypesList, datacentersList),
+      { location: "nbg1", availableOnly: true },
+    );
+    // nbg1-orderable x86+arm: cx22, cx32, ccx13 (cax11 is fsn1-only).
+    expect(ranked.map((r) => r.name)).toEqual(["cx22", "cx32", "ccx13"]);
+    const cx22 = ranked.find((r) => r.name === "cx22")!;
+    expect(cx22.location).toBe("nbg1");
+    expect(cx22.price_monthly_eur).toBe(4.59); // nbg1 row, not the cheaper fsn1
+  });
+
+  it("without a location, resolves each type to its cheapest ORDERABLE location", async () => {
+    const ranked = await rankServerTypes(
+      fakeClientAvail(serverTypesList, datacentersList),
+      { availableOnly: true },
+    );
+    expect(ranked.map((r) => r.name)).toEqual(["cax11", "cx22", "cx32", "ccx13"]);
+    const cx22 = ranked.find((r) => r.name === "cx22")!;
+    expect(cx22.location).toBe("fsn1"); // orderable in both -> cheapest is fsn1
+    expect(cx22.price_monthly_eur).toBe(4.2);
+  });
+
+  it("drops a priced type that is orderable nowhere", async () => {
+    const onlyCx22 = [
+      {
+        id: 1,
+        name: "nbg1-dc3",
+        location: { name: "nbg1" },
+        server_types: { supported: [1, 2, 5], available: [1] },
+      },
+    ];
+    const ranked = await rankServerTypes(
+      fakeClientAvail(serverTypesList, onlyCx22),
+      { availableOnly: true },
+    );
+    // cx32 + ccx13 are priced (nbg1) but not in any `available` list -> excluded.
+    expect(ranked.map((r) => r.name)).toEqual(["cx22"]);
+  });
+
+  it("does not fetch datacenters when availableOnly is off", async () => {
+    const client = fakeClientAvail(serverTypesList, datacentersList);
+    await rankServerTypes(client, { arch: "x86" });
+    expect(client.getAllPages).not.toHaveBeenCalledWith(
+      "/datacenters",
+      "datacenters",
+    );
   });
 });
 
