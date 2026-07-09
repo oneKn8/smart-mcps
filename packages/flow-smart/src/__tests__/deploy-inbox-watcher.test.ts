@@ -21,9 +21,10 @@ describe("deploy_inbox_watcher", () => {
     const out = await run(deployInboxWatcherTool, {}, ctx);
 
     const as = ctx.appsScript as unknown as Record<string, ReturnType<typeof vi.fn>>;
-    expect(as.createProject).toHaveBeenCalledWith({ title: "Inbox Watcher" });
+    expect(as.createProject).toHaveBeenCalledWith("acct", { title: "Inbox Watcher" });
 
-    const [scriptId, files] = as.updateContent.mock.calls[0];
+    const [account, scriptId, files] = as.updateContent.mock.calls[0];
+    expect(account).toBe("acct");
     expect(scriptId).toBe("S1");
     const manifest = files.find((f: { name: string }) => f.name === "appsscript");
     const code = files.find((f: { name: string }) => f.name === "Code");
@@ -32,8 +33,8 @@ describe("deploy_inbox_watcher", () => {
     expect(code.type).toBe("SERVER_JS");
     expect(code.source).toContain("ScriptApp.newTrigger");
 
-    expect(as.createVersion).toHaveBeenCalledWith("S1", "inbox watcher v1");
-    expect(as.createDeployment).toHaveBeenCalledWith("S1", {
+    expect(as.createVersion).toHaveBeenCalledWith("acct", "S1", "inbox watcher v1");
+    expect(as.createDeployment).toHaveBeenCalledWith("acct", "S1", {
       versionNumber: 1,
       description: "inbox watcher",
     });

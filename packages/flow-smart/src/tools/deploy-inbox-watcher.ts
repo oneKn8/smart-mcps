@@ -77,7 +77,7 @@ export const deployInboxWatcherTool = defineTool<
 
     // Step: create the project.
     const scriptId = await progress.run("create_project", async () => {
-      const proj = await ctx.appsScript.createProject({
+      const proj = await ctx.appsScript.createProject(ctx.account, {
         title: parsed.project_title,
       });
       const id = readField(proj, "scriptId");
@@ -92,7 +92,7 @@ export const deployInboxWatcherTool = defineTool<
 
     // Step: write Code.gs + the manifest (full-overwrite; both files supplied).
     await progress.run("write_content", () =>
-      ctx.appsScript.updateContent(scriptId, [
+      ctx.appsScript.updateContent(ctx.account, scriptId, [
         { name: "appsscript", type: "JSON", source: script.manifest },
         { name: "Code", type: "SERVER_JS", source: script.code },
       ]),
@@ -102,6 +102,7 @@ export const deployInboxWatcherTool = defineTool<
     // Step: snapshot an immutable version.
     const versionNumber = await progress.run("create_version", async () => {
       const ver = await ctx.appsScript.createVersion(
+        ctx.account,
         scriptId,
         "inbox watcher v1",
       );
@@ -117,7 +118,7 @@ export const deployInboxWatcherTool = defineTool<
 
     // Step: deploy that version.
     const deploymentId = await progress.run("create_deployment", async () => {
-      const dep = await ctx.appsScript.createDeployment(scriptId, {
+      const dep = await ctx.appsScript.createDeployment(ctx.account, scriptId, {
         versionNumber,
         description: "inbox watcher",
       });

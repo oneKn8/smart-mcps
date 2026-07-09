@@ -8,12 +8,12 @@ import { EmailClient } from "email-smart/client";
 /**
  * Per-request context exposed to every flow-smart tool handler. flow-smart
  * owns no API code of its own; each tool is glue over the sibling clients
- * imported via their `./client` subpath exports. All five clients are
- * constructed against the same bound account.
+ * imported via their `./client` subpath exports.
  *
- * The four Google clients share the `(account, opts)` constructor shape;
- * EmailClient is the odd one out (multi-account, `(home?)` constructor) and
- * resolves the account per-call from its own token jar.
+ * Tasks, Docs, and Calendar share the `(account, opts)` constructor shape and
+ * bind the account at construction. AppsScriptClient and EmailClient are
+ * multi-account (`(home?)` constructor) and resolve the account per-call, so
+ * flow-smart passes its bound `account` explicitly on every apps-script/email call.
  */
 export interface FlowContext {
   tasks: TasksClient;
@@ -22,9 +22,9 @@ export interface FlowContext {
   calendar: CalendarClient;
   email: EmailClient;
   /**
-   * The resolved bound account. The four Google clients are constructed
-   * against it; `EmailClient` is multi-account and resolves the account
-   * per-call, so the email flow tools pass this value explicitly.
+   * The resolved bound account. Tasks/Docs/Calendar are constructed against
+   * it; `AppsScriptClient` and `EmailClient` are multi-account and receive it
+   * per-call, so the apps-script and email flow tools pass this value explicitly.
    */
   account: string;
 }
@@ -54,7 +54,7 @@ export function buildContext(home?: string): FlowContext {
   return {
     tasks: new TasksClient(account, googleOpts),
     docs: new DocsClient(account, googleOpts),
-    appsScript: new AppsScriptClient(account, googleOpts),
+    appsScript: new AppsScriptClient(home),
     calendar: new CalendarClient(account, googleOpts),
     email: home === undefined ? new EmailClient() : new EmailClient(home),
     account,
