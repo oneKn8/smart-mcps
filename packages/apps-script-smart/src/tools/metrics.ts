@@ -1,11 +1,14 @@
 import { z } from "zod";
 import { defineTool } from "smart-mcp-core";
 import type { AppsScriptContext } from "../context.js";
+import { resolveAccount } from "./account.js";
 import { mapMetrics, type SlimMetrics } from "../metrics-mapper.js";
 
 const granularitySchema = z.enum(["DAILY", "WEEKLY"]);
 
 const getMetricsInputSchema = z.object({
+  /** Account to act as; omit for the default identity. */
+  account: z.string().optional(),
   script_id: z.string().min(1),
   /** `DAILY` (over a 7-day period) or `WEEKLY`. Defaults to `DAILY`. */
   granularity: granularitySchema.optional().default("DAILY"),
@@ -28,7 +31,8 @@ export const getMetricsTool = defineTool<
   inputSchema: getMetricsInputSchema as unknown as z.ZodType<GetMetricsInput>,
   handler: async (input, ctx) => {
     const parsed = input as GetMetricsParsed;
-    const raw = await ctx.client.getMetrics({
+    const account = resolveAccount(parsed.account, ctx);
+    const raw = await ctx.client.getMetrics(account, {
       scriptId: parsed.script_id,
       metricsGranularity: parsed.granularity,
       ...(parsed.deployment_id !== undefined

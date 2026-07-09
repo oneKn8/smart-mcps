@@ -1,10 +1,13 @@
 import { z } from "zod";
 import { defineTool } from "smart-mcp-core";
 import type { AppsScriptContext } from "../context.js";
+import { resolveAccount } from "./account.js";
 import type { ListProcessesOpts } from "../client.js";
 import { mapProcess, type SlimProcess } from "../process-mapper.js";
 
 const listProcessesInputSchema = z.object({
+  /** Account to act as; omit for the default identity. */
+  account: z.string().optional(),
   /** When set, lists processes for ONE script; otherwise across all scripts. */
   script_id: z.string().optional(),
   deployment_id: z.string().optional(),
@@ -34,6 +37,7 @@ export const listProcessesTool = defineTool<
   description: "List script execution processes",
   inputSchema: listProcessesInputSchema,
   handler: async (input, ctx) => {
+    const account = resolveAccount(input.account, ctx);
     const opts: ListProcessesOpts = {};
     if (input.script_id !== undefined) opts.scriptId = input.script_id;
     if (input.deployment_id !== undefined) {
@@ -49,7 +53,7 @@ export const listProcessesTool = defineTool<
     if (input.page_size !== undefined) opts.pageSize = input.page_size;
     if (input.page_token !== undefined) opts.pageToken = input.page_token;
 
-    const res = await ctx.client.listProcesses(opts);
+    const res = await ctx.client.listProcesses(account, opts);
     return {
       processes: res.items.map(mapProcess),
       next_page_token: res.nextPageToken ?? null,

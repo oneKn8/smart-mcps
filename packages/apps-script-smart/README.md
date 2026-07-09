@@ -1,6 +1,6 @@
 # apps-script-smart
 
-Personal Google Apps Script MCP. Manage script projects, content, versions, deployments, and processes, plus a hard-gated `run_function` (`scripts.run`) on a single account. Reuses the `~/.santo-agent/oauth/` token jar pattern with a dedicated `<account>.script.json` token slot. Scopes: `script.projects`, `script.deployments`, `script.processes`, `script.metrics` (plus the runtime scopes a deployed script declares for `scripts.run`). Part of the [smart-mcps](../../README.md) monorepo; built on `smart-mcp-core`.
+Personal Google Apps Script MCP. Manage script projects, content, versions, deployments, and processes, plus a hard-gated `run_function` (`scripts.run`). Multi-account: every tool takes an optional `account` param and resolves per-account OAuth from `~/.santo-agent/oauth/<account>.script.json`; omit it to use the default identity. Reuses the `~/.santo-agent/oauth/` token jar pattern with a dedicated `<account>.script.json` token slot per account. Scopes: `script.projects`, `script.deployments`, `script.processes`, `script.metrics` (plus the runtime scopes a deployed script declares for `scripts.run`). Part of the [smart-mcps](../../README.md) monorepo; built on `smart-mcp-core`.
 
 > No service accounts. The Apps Script API does not work with service-account tokens; every call needs a 3-legged user OAuth token. There is no domain-wide-delegation shortcut.
 
@@ -76,6 +76,14 @@ npm run build --workspace=apps-script-smart
 node packages/apps-script-smart/dist/bin/apps-script-smart-auth.js your-account
 ```
 
-The token is written to `~/.santo-agent/oauth/your-account.script.json` (mode 600). Default account `your-account`; override with `APPS_SCRIPT_DEFAULT_IDENTITY` in `~/.config/smart-mcps/.env`.
+The token is written to `~/.santo-agent/oauth/your-account.script.json` (mode 600).
+
+Multi-account: enroll additional accounts by minting a token for each basename, e.g.
+
+```bash
+node packages/apps-script-smart/dist/bin/apps-script-smart-auth.js work-acct
+```
+
+writes `~/.santo-agent/oauth/work-acct.script.json`. Any tool then targets it by passing `account: "work-acct"`. Account resolution when `account` is omitted: explicit arg, else the `APPS_SCRIPT_DEFAULT_IDENTITY` env var, else the default `your-account`. Set `APPS_SCRIPT_DEFAULT_IDENTITY` in `~/.config/smart-mcps/.env` to change the default.
 
 The auth CLI requests the four management scopes (`script.projects`, `script.deployments`, `script.processes`, `script.metrics`). For `run_function`, re-mint with the additional runtime scopes the target script declares (see the setup section above).

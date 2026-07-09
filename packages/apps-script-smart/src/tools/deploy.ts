@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { defineTool } from "smart-mcp-core";
 import type { AppsScriptContext } from "../context.js";
+import { resolveAccount } from "./account.js";
 import type { DeploymentConfigInput } from "../client.js";
 import { mapVersion, type SlimVersion } from "../version-mapper.js";
 import { mapDeployment, type SlimDeployment } from "../deployment-mapper.js";
@@ -10,6 +11,8 @@ import { mapDeployment, type SlimDeployment } from "../deployment-mapper.js";
 // =============================================================================
 
 const deployScriptInputSchema = z.object({
+  /** Account to act as; omit for the default identity. */
+  account: z.string().optional(),
   script_id: z.string().min(1),
   /** Description recorded on the new version snapshot. */
   version_description: z.string().optional(),
@@ -38,9 +41,11 @@ export const deployScriptTool = defineTool<
     deployScriptInputSchema as unknown as z.ZodType<DeployScriptInput>,
   handler: async (input, ctx) => {
     const parsed = input as DeployScriptParsed;
+    const account = resolveAccount(parsed.account, ctx);
 
     // Step 1: snapshot HEAD into a new immutable version.
     const rawVersion = await ctx.client.createVersion(
+      account,
       parsed.script_id,
       parsed.version_description,
     );
@@ -59,6 +64,7 @@ export const deployScriptTool = defineTool<
     };
     if (parsed.description !== undefined) config.description = parsed.description;
     const rawDeployment = await ctx.client.createDeployment(
+      account,
       parsed.script_id,
       config,
     );

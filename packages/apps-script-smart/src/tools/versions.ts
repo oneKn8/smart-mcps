@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { defineTool } from "smart-mcp-core";
 import type { AppsScriptContext } from "../context.js";
+import { resolveAccount } from "./account.js";
 import { mapVersion, type SlimVersion } from "../version-mapper.js";
 
 // =============================================================================
@@ -8,6 +9,8 @@ import { mapVersion, type SlimVersion } from "../version-mapper.js";
 // =============================================================================
 
 const createVersionInputSchema = z.object({
+  /** Account to act as; omit for the default identity. */
+  account: z.string().optional(),
   script_id: z.string().min(1),
   description: z.string().optional(),
 });
@@ -24,7 +27,9 @@ export const createVersionTool = defineTool<
   description: "Create an immutable version snapshot",
   inputSchema: createVersionInputSchema,
   handler: async (input, ctx) => {
+    const account = resolveAccount(input.account, ctx);
     const raw = await ctx.client.createVersion(
+      account,
       input.script_id,
       input.description,
     );
@@ -37,6 +42,8 @@ export const createVersionTool = defineTool<
 // =============================================================================
 
 const listVersionsInputSchema = z.object({
+  /** Account to act as; omit for the default identity. */
+  account: z.string().optional(),
   script_id: z.string().min(1),
   page_size: z.number().int().positive().optional(),
   page_token: z.string().optional(),
@@ -57,7 +64,8 @@ export const listVersionsTool = defineTool<
   description: "List a project's versions",
   inputSchema: listVersionsInputSchema,
   handler: async (input, ctx) => {
-    const res = await ctx.client.listVersions({
+    const account = resolveAccount(input.account, ctx);
+    const res = await ctx.client.listVersions(account, {
       scriptId: input.script_id,
       ...(input.page_size !== undefined ? { pageSize: input.page_size } : {}),
       ...(input.page_token !== undefined
@@ -76,6 +84,8 @@ export const listVersionsTool = defineTool<
 // =============================================================================
 
 const getVersionInputSchema = z.object({
+  /** Account to act as; omit for the default identity. */
+  account: z.string().optional(),
   script_id: z.string().min(1),
   version_number: z.number().int(),
 });
@@ -92,7 +102,9 @@ export const getVersionTool = defineTool<
   description: "Get one project version",
   inputSchema: getVersionInputSchema,
   handler: async (input, ctx) => {
+    const account = resolveAccount(input.account, ctx);
     const raw = await ctx.client.getVersion(
+      account,
       input.script_id,
       input.version_number,
     );

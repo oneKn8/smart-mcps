@@ -6,8 +6,13 @@ type FakeClient = {
   getProject: ReturnType<typeof vi.fn>;
 };
 
-function ctxOf(client: Partial<FakeClient>): { client: never } {
-  return { client: client as unknown as never };
+// Default account the context resolves to when a call omits `account`.
+const ACCT = "acct";
+
+function ctxOf(
+  client: Partial<FakeClient>,
+): { client: never; defaultAccount: string } {
+  return { client: client as unknown as never, defaultAccount: ACCT };
 }
 
 describe("createProjectTool", () => {
@@ -20,7 +25,10 @@ describe("createProjectTool", () => {
       parent_id: "doc1",
     }) as Parameters<typeof createProjectTool.handler>[0];
     const out = await createProjectTool.handler(input, ctxOf({ createProject }));
-    expect(createProject).toHaveBeenCalledWith({ title: "T", parentId: "doc1" });
+    expect(createProject).toHaveBeenCalledWith(ACCT, {
+      title: "T",
+      parentId: "doc1",
+    });
     expect(out.project).toEqual({
       script_id: "s_new",
       title: "T",
@@ -40,7 +48,20 @@ describe("createProjectTool", () => {
       title: "T",
     }) as Parameters<typeof createProjectTool.handler>[0];
     await createProjectTool.handler(input, ctxOf({ createProject }));
-    expect(createProject).toHaveBeenCalledWith({ title: "T" });
+    expect(createProject).toHaveBeenCalledWith(ACCT, { title: "T" });
+  });
+
+  it("threads an explicit account through to the client (override)", async () => {
+    const createProject = vi
+      .fn()
+      .mockResolvedValue({ scriptId: "s_new", title: "T" });
+    const input = createProjectTool.inputSchema.parse({
+      account: "bob",
+      title: "T",
+    }) as Parameters<typeof createProjectTool.handler>[0];
+    await createProjectTool.handler(input, ctxOf({ createProject }));
+    // The explicit account wins over ctx.defaultAccount.
+    expect(createProject).toHaveBeenCalledWith("bob", { title: "T" });
   });
 });
 
@@ -53,7 +74,7 @@ describe("getProjectTool", () => {
       script_id: "s1",
     }) as Parameters<typeof getProjectTool.handler>[0];
     const out = await getProjectTool.handler(input, ctxOf({ getProject }));
-    expect(getProject).toHaveBeenCalledWith("s1");
+    expect(getProject).toHaveBeenCalledWith(ACCT, "s1");
     expect(out.project.script_id).toBe("s1");
   });
 });

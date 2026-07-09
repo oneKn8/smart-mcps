@@ -5,8 +5,13 @@ import {
   getVersionTool,
 } from "../versions.js";
 
-function ctxOf(client: Record<string, unknown>): { client: never } {
-  return { client: client as unknown as never };
+// Default account the context resolves to when a call omits `account`.
+const ACCT = "acct";
+
+function ctxOf(
+  client: Record<string, unknown>,
+): { client: never; defaultAccount: string } {
+  return { client: client as unknown as never, defaultAccount: ACCT };
 }
 
 describe("createVersionTool", () => {
@@ -19,7 +24,7 @@ describe("createVersionTool", () => {
       description: "v2",
     }) as Parameters<typeof createVersionTool.handler>[0];
     const out = await createVersionTool.handler(input, ctxOf({ createVersion }));
-    expect(createVersion).toHaveBeenCalledWith("s1", "v2");
+    expect(createVersion).toHaveBeenCalledWith(ACCT, "s1", "v2");
     expect(out.version.version_number).toBe(2);
   });
 });
@@ -33,7 +38,7 @@ describe("listVersionsTool", () => {
       script_id: "s1",
     }) as Parameters<typeof listVersionsTool.handler>[0];
     const out = await listVersionsTool.handler(input, ctxOf({ listVersions }));
-    expect(listVersions).toHaveBeenCalledWith({ scriptId: "s1" });
+    expect(listVersions).toHaveBeenCalledWith(ACCT, { scriptId: "s1" });
     expect(out.versions).toHaveLength(1);
     expect(out.next_page_token).toBeNull();
   });
@@ -48,7 +53,7 @@ describe("listVersionsTool", () => {
       page_token: "t1",
     }) as Parameters<typeof listVersionsTool.handler>[0];
     const out = await listVersionsTool.handler(input, ctxOf({ listVersions }));
-    expect(listVersions).toHaveBeenCalledWith({
+    expect(listVersions).toHaveBeenCalledWith(ACCT, {
       scriptId: "s1",
       pageSize: 10,
       pageToken: "t1",
@@ -67,7 +72,7 @@ describe("getVersionTool", () => {
       version_number: 5,
     }) as Parameters<typeof getVersionTool.handler>[0];
     const out = await getVersionTool.handler(input, ctxOf({ getVersion }));
-    expect(getVersion).toHaveBeenCalledWith("s1", 5);
+    expect(getVersion).toHaveBeenCalledWith(ACCT, "s1", 5);
     expect(out.version.version_number).toBe(5);
   });
 });

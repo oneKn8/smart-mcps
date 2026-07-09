@@ -1,8 +1,16 @@
 import { describe, it, expect, vi } from "vitest";
 import { listProcessesTool } from "../processes.js";
 
-function ctxOf(listProcesses: ReturnType<typeof vi.fn>): { client: never } {
-  return { client: { listProcesses } as unknown as never };
+// Default account the context resolves to when a call omits `account`.
+const ACCT = "acct";
+
+function ctxOf(
+  listProcesses: ReturnType<typeof vi.fn>,
+): { client: never; defaultAccount: string } {
+  return {
+    client: { listProcesses } as unknown as never,
+    defaultAccount: ACCT,
+  };
 }
 
 describe("listProcessesTool", () => {
@@ -16,7 +24,7 @@ describe("listProcessesTool", () => {
       statuses: ["COMPLETED"],
     }) as Parameters<typeof listProcessesTool.handler>[0];
     const out = await listProcessesTool.handler(input, ctxOf(listProcesses));
-    expect(listProcesses).toHaveBeenCalledWith({
+    expect(listProcesses).toHaveBeenCalledWith(ACCT, {
       scriptId: "s1",
       functionName: "poll",
       statuses: ["COMPLETED"],
@@ -33,7 +41,7 @@ describe("listProcessesTool", () => {
       {},
     ) as Parameters<typeof listProcessesTool.handler>[0];
     const out = await listProcessesTool.handler(input, ctxOf(listProcesses));
-    expect(listProcesses).toHaveBeenCalledWith({});
+    expect(listProcesses).toHaveBeenCalledWith(ACCT, {});
     expect(out.next_page_token).toBe("t");
   });
 });

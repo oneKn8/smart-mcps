@@ -1,8 +1,13 @@
 import { describe, it, expect, vi } from "vitest";
 import { deployScriptTool } from "../deploy.js";
 
-function ctxOf(client: Record<string, unknown>): { client: never } {
-  return { client: client as unknown as never };
+// Default account the context resolves to when a call omits `account`.
+const ACCT = "acct";
+
+function ctxOf(
+  client: Record<string, unknown>,
+): { client: never; defaultAccount: string } {
+  return { client: client as unknown as never, defaultAccount: ACCT };
 }
 
 describe("deployScriptTool — convenience composite", () => {
@@ -25,9 +30,9 @@ describe("deployScriptTool — convenience composite", () => {
       ctxOf({ createVersion, createDeployment }),
     );
 
-    expect(createVersion).toHaveBeenCalledWith("s1", "v");
+    expect(createVersion).toHaveBeenCalledWith(ACCT, "s1", "v");
     // The deployment pins the freshly-created version number.
-    expect(createDeployment).toHaveBeenCalledWith("s1", {
+    expect(createDeployment).toHaveBeenCalledWith(ACCT, "s1", {
       versionNumber: 7,
       manifestFileName: "appsscript",
       description: "prod release",

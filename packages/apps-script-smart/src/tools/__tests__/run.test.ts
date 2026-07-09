@@ -8,8 +8,11 @@ function makeClient(over: Partial<FakeClient> = {}): FakeClient {
   return { runFunction: vi.fn(), ...over };
 }
 
-function ctxOf(client: FakeClient): { client: never } {
-  return { client: client as unknown as never };
+// Default account the context resolves to when a call omits `account`.
+const ACCT = "acct";
+
+function ctxOf(client: FakeClient): { client: never; defaultAccount: string } {
+  return { client: client as unknown as never, defaultAccount: ACCT };
 }
 
 function parse(raw: unknown): Parameters<typeof runFunctionTool.handler>[0] {
@@ -55,6 +58,7 @@ describe("runFunctionTool — gating (confirm required)", () => {
     } catch (err) {
       expect(err).toBeInstanceOf(ConfirmRequiredError);
       const e = err as ConfirmRequiredError;
+      expect(e.preview).toContain("account: acct");
       expect(e.preview).toContain("deploymentId: dep_1");
       expect(e.preview).toContain("function: doThing");
       expect(e.preview).toContain('["a",1,true]');
@@ -109,7 +113,7 @@ describe("runFunctionTool — execution (confirmed)", () => {
       ctxOf(client),
     );
     // deployment_id wins over script_id for the target id.
-    expect(client.runFunction).toHaveBeenCalledWith({
+    expect(client.runFunction).toHaveBeenCalledWith(ACCT, {
       id: "dep_1",
       functionName: "doThing",
       parameters: ["x"],
@@ -126,7 +130,7 @@ describe("runFunctionTool — execution (confirmed)", () => {
       parse({ script_id: "s1", function: "f", confirm: true }),
       ctxOf(client),
     );
-    expect(client.runFunction).toHaveBeenCalledWith({
+    expect(client.runFunction).toHaveBeenCalledWith(ACCT, {
       id: "s1",
       functionName: "f",
       parameters: [],

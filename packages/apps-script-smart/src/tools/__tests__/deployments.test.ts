@@ -8,8 +8,13 @@ import {
   deleteDeploymentTool,
 } from "../deployments.js";
 
-function ctxOf(client: Record<string, unknown>): { client: never } {
-  return { client: client as unknown as never };
+// Default account the context resolves to when a call omits `account`.
+const ACCT = "acct";
+
+function ctxOf(
+  client: Record<string, unknown>,
+): { client: never; defaultAccount: string } {
+  return { client: client as unknown as never, defaultAccount: ACCT };
 }
 
 describe("createDeploymentTool", () => {
@@ -22,7 +27,7 @@ describe("createDeploymentTool", () => {
       version_number: 2,
     }) as Parameters<typeof createDeploymentTool.handler>[0];
     await createDeploymentTool.handler(input, ctxOf({ createDeployment }));
-    expect(createDeployment).toHaveBeenCalledWith("s1", {
+    expect(createDeployment).toHaveBeenCalledWith(ACCT, "s1", {
       versionNumber: 2,
       manifestFileName: "appsscript",
     });
@@ -36,7 +41,7 @@ describe("createDeploymentTool", () => {
       script_id: "s1",
     }) as Parameters<typeof createDeploymentTool.handler>[0];
     await createDeploymentTool.handler(input, ctxOf({ createDeployment }));
-    expect(createDeployment).toHaveBeenCalledWith("s1", {
+    expect(createDeployment).toHaveBeenCalledWith(ACCT, "s1", {
       manifestFileName: "appsscript",
     });
   });
@@ -70,7 +75,7 @@ describe("getDeploymentTool", () => {
       deployment_id: "dep_1",
     }) as Parameters<typeof getDeploymentTool.handler>[0];
     await getDeploymentTool.handler(input, ctxOf({ getDeployment }));
-    expect(getDeployment).toHaveBeenCalledWith("s1", "dep_1");
+    expect(getDeployment).toHaveBeenCalledWith(ACCT, "s1", "dep_1");
   });
 });
 
@@ -141,9 +146,9 @@ describe("updateDeploymentTool — confirm-gated, preserves the pin", () => {
       ctxOf({ getDeployment, updateDeployment }),
     );
     // Read-modify-write: the current deployment is read before writing.
-    expect(getDeployment).toHaveBeenCalledWith("s1", "dep_1");
+    expect(getDeployment).toHaveBeenCalledWith(ACCT, "s1", "dep_1");
     // The pin survives: no silent fall to HEAD, no clobbered manifest name.
-    expect(updateDeployment).toHaveBeenCalledWith("s1", "dep_1", {
+    expect(updateDeployment).toHaveBeenCalledWith(ACCT, "s1", "dep_1", {
       versionNumber: 7,
       manifestFileName: "custommanifest",
       description: "x",
@@ -164,7 +169,7 @@ describe("updateDeploymentTool — confirm-gated, preserves the pin", () => {
       }),
       ctxOf({ getDeployment, updateDeployment }),
     );
-    expect(updateDeployment).toHaveBeenCalledWith("s1", "dep_1", {
+    expect(updateDeployment).toHaveBeenCalledWith(ACCT, "s1", "dep_1", {
       versionNumber: 9,
       manifestFileName: "custommanifest",
     });
@@ -209,7 +214,7 @@ describe("deleteDeploymentTool — destructive gating", () => {
       input,
       ctxOf({ deleteDeployment }),
     );
-    expect(deleteDeployment).toHaveBeenCalledWith("s1", "dep_1");
+    expect(deleteDeployment).toHaveBeenCalledWith(ACCT, "s1", "dep_1");
     expect(out).toEqual({ deleted: true });
   });
 });

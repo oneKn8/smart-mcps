@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { defineTool, guardDestructive } from "smart-mcp-core";
 import type { AppsScriptContext } from "../context.js";
+import { resolveAccount } from "./account.js";
 import type { DeploymentConfigInput } from "../client.js";
 import { mapDeployment, type SlimDeployment } from "../deployment-mapper.js";
 
@@ -9,6 +10,8 @@ import { mapDeployment, type SlimDeployment } from "../deployment-mapper.js";
 // =============================================================================
 
 const createDeploymentInputSchema = z.object({
+  /** Account to act as; omit for the default identity. */
+  account: z.string().optional(),
   script_id: z.string().min(1),
   /** Version to publish; omit to deploy HEAD (a dev/test deployment). */
   version_number: z.number().int().optional(),
@@ -49,7 +52,9 @@ export const createDeploymentTool = defineTool<
     createDeploymentInputSchema as unknown as z.ZodType<CreateDeploymentInput>,
   handler: async (input, ctx) => {
     const parsed = input as CreateDeploymentParsed;
+    const account = resolveAccount(parsed.account, ctx);
     const raw = await ctx.client.createDeployment(
+      account,
       parsed.script_id,
       buildConfig(parsed),
     );
@@ -62,6 +67,8 @@ export const createDeploymentTool = defineTool<
 // =============================================================================
 
 const listDeploymentsInputSchema = z.object({
+  /** Account to act as; omit for the default identity. */
+  account: z.string().optional(),
   script_id: z.string().min(1),
   page_size: z.number().int().positive().optional(),
   page_token: z.string().optional(),
@@ -82,7 +89,8 @@ export const listDeploymentsTool = defineTool<
   description: "List a project's deployments",
   inputSchema: listDeploymentsInputSchema,
   handler: async (input, ctx) => {
-    const res = await ctx.client.listDeployments({
+    const account = resolveAccount(input.account, ctx);
+    const res = await ctx.client.listDeployments(account, {
       scriptId: input.script_id,
       ...(input.page_size !== undefined ? { pageSize: input.page_size } : {}),
       ...(input.page_token !== undefined
@@ -101,6 +109,8 @@ export const listDeploymentsTool = defineTool<
 // =============================================================================
 
 const getDeploymentInputSchema = z.object({
+  /** Account to act as; omit for the default identity. */
+  account: z.string().optional(),
   script_id: z.string().min(1),
   deployment_id: z.string().min(1),
 });
@@ -117,7 +127,9 @@ export const getDeploymentTool = defineTool<
   description: "Get one deployment",
   inputSchema: getDeploymentInputSchema,
   handler: async (input, ctx) => {
+    const account = resolveAccount(input.account, ctx);
     const raw = await ctx.client.getDeployment(
+      account,
       input.script_id,
       input.deployment_id,
     );
@@ -130,6 +142,8 @@ export const getDeploymentTool = defineTool<
 // =============================================================================
 
 const updateDeploymentInputSchema = z.object({
+  /** Account to act as; omit for the default identity. */
+  account: z.string().optional(),
   script_id: z.string().min(1),
   deployment_id: z.string().min(1),
   /** New version to pin; omit to KEEP the deployment's current version. */
@@ -156,13 +170,15 @@ export const updateDeploymentTool = defineTool<
     updateDeploymentInputSchema as unknown as z.ZodType<UpdateDeploymentInput>,
   handler: async (input, ctx) => {
     const parsed = input as UpdateDeploymentParsed;
+    const account = resolveAccount(parsed.account, ctx);
 
     // Read-modify-write: a PUT replaces the whole DeploymentConfig, so omitting
     // versionNumber would silently repoint a pinned production web-app/API
     // Executable to live HEAD, and omitting manifestFileName would clobber a
     // custom manifest name. Read the current deployment and PRESERVE both
-    // unless the caller explicitly overrides them.
+    // unless the caller explicitly overrides them. Both calls target `account`.
     const currentRaw = await ctx.client.getDeployment(
+      account,
       parsed.script_id,
       parsed.deployment_id,
     );
@@ -198,6 +214,7 @@ export const updateDeploymentTool = defineTool<
     if (parsed.description !== undefined) config.description = parsed.description;
 
     const raw = await ctx.client.updateDeployment(
+      account,
       parsed.script_id,
       parsed.deployment_id,
       config,
@@ -211,6 +228,8 @@ export const updateDeploymentTool = defineTool<
 // =============================================================================
 
 const deleteDeploymentInputSchema = z.object({
+  /** Account to act as; omit for the default identity. */
+  account: z.string().optional(),
   script_id: z.string().min(1),
   deployment_id: z.string().min(1),
   confirm: z.boolean().optional().default(false),
@@ -232,11 +251,16 @@ export const deleteDeploymentTool = defineTool<
     deleteDeploymentInputSchema as unknown as z.ZodType<DeleteDeploymentInput>,
   handler: async (input, ctx) => {
     const parsed = input as DeleteDeploymentParsed;
+    const account = resolveAccount(parsed.account, ctx);
     const preview =
       `Delete deployment ${parsed.deployment_id} from project ${parsed.script_id}. ` +
       "Any web app / API Executable URL it serves stops responding.";
     guardDestructive({ confirm: parsed.confirm, preview });
-    await ctx.client.deleteDeployment(parsed.script_id, parsed.deployment_id);
+    await ctx.client.deleteDeployment(
+      account,
+      parsed.script_id,
+      parsed.deployment_id,
+    );
     return { deleted: true };
   },
 });

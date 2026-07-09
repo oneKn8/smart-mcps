@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { defineTool, guardDestructive } from "smart-mcp-core";
 import type { AppsScriptContext } from "../context.js";
+import { resolveAccount } from "./account.js";
 import {
   mapContent,
   toFileWritePayload,
@@ -15,6 +16,8 @@ const fileTypeSchema = z.enum(["SERVER_JS", "HTML", "JSON"]);
 // =============================================================================
 
 const getContentInputSchema = z.object({
+  /** Account to act as; omit for the default identity. */
+  account: z.string().optional(),
   script_id: z.string().min(1),
   /** Version to read; omit for HEAD (the live, editable code). */
   version_number: z.number().int().optional(),
@@ -32,7 +35,9 @@ export const getContentTool = defineTool<
   description: "Get a project's files and manifest",
   inputSchema: getContentInputSchema,
   handler: async (input, ctx) => {
+    const account = resolveAccount(input.account, ctx);
     const raw = await ctx.client.getContent(
+      account,
       input.script_id,
       input.version_number,
     );
@@ -45,6 +50,8 @@ export const getContentTool = defineTool<
 // =============================================================================
 
 const updateContentInputSchema = z.object({
+  /** Account to act as; omit for the default identity. */
+  account: z.string().optional(),
   script_id: z.string().min(1),
   /**
    * The COMPLETE file set. This REPLACES every file in the project; any
@@ -79,6 +86,7 @@ export const updateContentTool = defineTool<
     updateContentInputSchema as unknown as z.ZodType<UpdateContentInput>,
   handler: async (input, ctx) => {
     const parsed = input as UpdateContentParsed;
+    const account = resolveAccount(parsed.account, ctx);
     const names = parsed.files.map((f) => f.name);
     const hasManifest = parsed.files.some(
       (f) => f.name === "appsscript" && f.type === "JSON",
@@ -97,7 +105,7 @@ export const updateContentTool = defineTool<
       type: f.type,
       source: f.source,
     }));
-    const raw = await ctx.client.updateContent(parsed.script_id, files);
+    const raw = await ctx.client.updateContent(account, parsed.script_id, files);
     return { content: mapContent(raw) };
   },
 });
@@ -107,6 +115,8 @@ export const updateContentTool = defineTool<
 // =============================================================================
 
 const pushFileInputSchema = z.object({
+  /** Account to act as; omit for the default identity. */
+  account: z.string().optional(),
   script_id: z.string().min(1),
   /** Filename WITHOUT extension (e.g. `Code`, `index`, `appsscript`). */
   name: z.string().min(1),
@@ -135,11 +145,12 @@ export const pushFileTool = defineTool<
   description: "Add or replace one file safely",
   inputSchema: pushFileInputSchema,
   handler: async (input, ctx) => {
+    const account = resolveAccount(input.account, ctx);
     // Read-modify-write: fetch the full HEAD content, re-serialize every
     // existing file (manifest included) to the writable triple, then splice
     // in the one file. This is what keeps update_content from clobbering the
-    // rest of the project.
-    const current = await ctx.client.getContent(input.script_id);
+    // rest of the project. Both calls MUST target the same account.
+    const current = await ctx.client.getContent(account, input.script_id);
     const existing = rawFiles(current).map(toFileWritePayload);
 
     const incoming: FileWritePayload = {
@@ -162,7 +173,7 @@ export const pushFileTool = defineTool<
     });
     if (!replaced) files.push(incoming);
 
-    const raw = await ctx.client.updateContent(input.script_id, files);
+    const raw = await ctx.client.updateContent(account, input.script_id, files);
     return { content: mapContent(raw), replaced };
   },
 });

@@ -24,15 +24,10 @@ function reauthHintFor(account: string): string {
 
 export type AppsScriptClientOpts = {
   /**
-   * Override for the user home directory. When unset, the inner OAuth
-   * client resolves `process.env.HOME` lazily on first use. Tests pass a
-   * tmpdir.
-   */
-  home?: string;
-  /**
-   * Pre-built OAuth client for tests. Production code omits this; the
-   * client builds one against the apps-script token-jar slot
-   * (`<account>.script.json`) on construction.
+   * Pre-built OAuth client for tests. Production code omits this; the client
+   * lazily builds one PER ACCOUNT against the apps-script token-jar slot
+   * (`<account>.script.json`) on first use. When set, it is returned by
+   * `oauthFor` for EVERY account (a single-account test seam).
    */
   oauthClient?: GoogleOAuthClient;
 };
@@ -102,9 +97,13 @@ function runSetupError(account: string, cause: unknown): AuthError {
 }
 
 /**
- * REST client for Google Apps Script API v1. Constructor builds (but does
- * not read) the OAuth client; the token file is opened lazily on the first
- * method call.
+ * REST client for Google Apps Script API v1. The constructor is
+ * side-effect-free; per-account OAuth clients are built (but not read) lazily,
+ * and each token file is opened only on the first method call for that account.
+ *
+ * Multi-account: every method takes the resolved `account` as its first
+ * argument and dispatches through `oauthFor(account)`, so one client instance
+ * can serve any number of `<account>.script.json` token slots.
  *
  * The token carries the `script.projects`, `script.deployments`,
  * `script.processes`, and `script.metrics` scopes (plus the runtime scopes
@@ -116,29 +115,44 @@ export class AppsScriptClient {
   static readonly REQUIRED_SCOPE = APPS_SCRIPT_REQUIRED_SCOPE;
   static readonly API_BASE = APPS_SCRIPT_API_BASE;
 
-  private readonly oauthClient: GoogleOAuthClient;
+  /**
+   * One OAuth client per account, lazily built and cached so each account's
+   * in-memory access-token cache survives across calls within a single MCP
+   * process. Keyed by the account basename under `~/.santo-agent/oauth/`.
+   */
+  private readonly oauthClients = new Map<string, GoogleOAuthClient>();
+  private readonly injectedOauthClient: GoogleOAuthClient | undefined;
 
+  /**
+   * Constructor is side-effect-free — it opens no token file. `home`
+   * overrides the user home directory; when unset each inner OAuth client
+   * resolves `process.env.HOME` lazily on first use (tests pass a tmpdir).
+   */
   constructor(
-    private readonly account: string,
+    private readonly home?: string,
     opts: AppsScriptClientOpts = {},
   ) {
-    this.oauthClient =
-      opts.oauthClient ??
-      new GoogleOAuthClient(account, {
-        ...(opts.home !== undefined ? { home: opts.home } : {}),
+    this.injectedOauthClient = opts.oauthClient;
+  }
+
+  /**
+   * Lazily instantiate (and cache) one `GoogleOAuthClient` for `account`,
+   * pointed at that account's `<account>.script.json` token slot. When a test
+   * injected an `oauthClient`, it wins for every account.
+   */
+  oauthFor(account: string): GoogleOAuthClient {
+    if (this.injectedOauthClient !== undefined) return this.injectedOauthClient;
+    let existing = this.oauthClients.get(account);
+    if (existing === undefined) {
+      existing = new GoogleOAuthClient(account, {
+        ...(this.home !== undefined ? { home: this.home } : {}),
         fileSuffix: APPS_SCRIPT_TOKEN_FILE_SUFFIX,
         reauthHint: reauthHintFor(account),
         requiredScope: APPS_SCRIPT_REQUIRED_SCOPE,
       });
-  }
-
-  /**
-   * Account identifier this client is bound to. Mirrors the basename of
-   * the token file under `~/.santo-agent/oauth/`. Read-only — used by
-   * tools that surface the account in error messages.
-   */
-  getAccount(): string {
-    return this.account;
+      this.oauthClients.set(account, existing);
+    }
+    return existing;
   }
 
   // ===========================================================================
@@ -150,11 +164,14 @@ export class AppsScriptClient {
    * binds the script to a container doc/sheet/form; omit it for a
    * standalone script. Returns the raw `Project` resource.
    */
-  async createProject(body: {
-    title: string;
-    parentId?: string;
-  }): Promise<unknown> {
-    const token = await this.oauthClient.getAccessToken();
+  async createProject(
+    account: string,
+    body: {
+      title: string;
+      parentId?: string;
+    },
+  ): Promise<unknown> {
+    const token = await this.oauthFor(account).getAccessToken();
     const payload: Record<string, unknown> = { title: body.title };
     if (body.parentId !== undefined) payload.parentId = body.parentId;
     try {
@@ -164,20 +181,20 @@ export class AppsScriptClient {
         body: payload,
       });
     } catch (err) {
-      throw mapAppsScriptAuthError(err, this.account);
+      throw mapAppsScriptAuthError(err, account);
     }
   }
 
   /** GET /projects/{scriptId} — project metadata. 404 → NotFoundError. */
-  async getProject(scriptId: string): Promise<unknown> {
-    const token = await this.oauthClient.getAccessToken();
+  async getProject(account: string, scriptId: string): Promise<unknown> {
+    const token = await this.oauthFor(account).getAccessToken();
     try {
       return await fetchJson<unknown>(
         `${APPS_SCRIPT_API_BASE}/projects/${encodeURIComponent(scriptId)}`,
         { token },
       );
     } catch (err) {
-      throw mapProjectNotFound(err, scriptId, this.account);
+      throw mapProjectNotFound(err, scriptId, account);
     }
   }
 
@@ -187,10 +204,11 @@ export class AppsScriptClient {
    * raw `Content` resource so `push_file` can read-modify-write it.
    */
   async getContent(
+    account: string,
     scriptId: string,
     versionNumber?: number,
   ): Promise<unknown> {
-    const token = await this.oauthClient.getAccessToken();
+    const token = await this.oauthFor(account).getAccessToken();
     const searchParams: Record<string, string | number | boolean | undefined> =
       {};
     if (versionNumber !== undefined) searchParams.versionNumber = versionNumber;
@@ -203,7 +221,7 @@ export class AppsScriptClient {
         },
       );
     } catch (err) {
-      throw mapProjectNotFound(err, scriptId, this.account);
+      throw mapProjectNotFound(err, scriptId, account);
     }
   }
 
@@ -215,17 +233,18 @@ export class AppsScriptClient {
    * `Content` resource.
    */
   async updateContent(
+    account: string,
     scriptId: string,
     files: ContentFile[],
   ): Promise<unknown> {
-    const token = await this.oauthClient.getAccessToken();
+    const token = await this.oauthFor(account).getAccessToken();
     try {
       return await fetchJson<unknown>(
         `${APPS_SCRIPT_API_BASE}/projects/${encodeURIComponent(scriptId)}/content`,
         { method: "PUT", token, body: { files } },
       );
     } catch (err) {
-      throw mapProjectNotFound(err, scriptId, this.account);
+      throw mapProjectNotFound(err, scriptId, account);
     }
   }
 
@@ -235,12 +254,15 @@ export class AppsScriptClient {
    * nothing and is not exposed). `deploymentId` narrows to one deployment.
    * Returns the raw `Metrics` resource.
    */
-  async getMetrics(opts: {
-    scriptId: string;
-    metricsGranularity: "DAILY" | "WEEKLY";
-    deploymentId?: string;
-  }): Promise<unknown> {
-    const token = await this.oauthClient.getAccessToken();
+  async getMetrics(
+    account: string,
+    opts: {
+      scriptId: string;
+      metricsGranularity: "DAILY" | "WEEKLY";
+      deploymentId?: string;
+    },
+  ): Promise<unknown> {
+    const token = await this.oauthFor(account).getAccessToken();
     const searchParams: Record<string, string | number | boolean | undefined> =
       { metricsGranularity: opts.metricsGranularity };
     if (opts.deploymentId !== undefined) {
@@ -252,7 +274,7 @@ export class AppsScriptClient {
         { token, searchParams },
       );
     } catch (err) {
-      throw mapProjectNotFound(err, opts.scriptId, this.account);
+      throw mapProjectNotFound(err, opts.scriptId, account);
     }
   }
 
@@ -266,10 +288,11 @@ export class AppsScriptClient {
    * raw `Version` with its system-assigned `versionNumber`.
    */
   async createVersion(
+    account: string,
     scriptId: string,
     description?: string,
   ): Promise<unknown> {
-    const token = await this.oauthClient.getAccessToken();
+    const token = await this.oauthFor(account).getAccessToken();
     const body: Record<string, unknown> = {};
     if (description !== undefined) body.description = description;
     try {
@@ -278,7 +301,7 @@ export class AppsScriptClient {
         { method: "POST", token, body },
       );
     } catch (err) {
-      throw mapProjectNotFound(err, scriptId, this.account);
+      throw mapProjectNotFound(err, scriptId, account);
     }
   }
 
@@ -287,12 +310,15 @@ export class AppsScriptClient {
    * `{ versions[], nextPageToken }` envelope; `versions` is normalized to
    * `[]` when Google omits it.
    */
-  async listVersions(opts: {
-    scriptId: string;
-    pageSize?: number;
-    pageToken?: string;
-  }): Promise<{ items: unknown[]; nextPageToken?: string }> {
-    const token = await this.oauthClient.getAccessToken();
+  async listVersions(
+    account: string,
+    opts: {
+      scriptId: string;
+      pageSize?: number;
+      pageToken?: string;
+    },
+  ): Promise<{ items: unknown[]; nextPageToken?: string }> {
+    const token = await this.oauthFor(account).getAccessToken();
     const searchParams: Record<string, string | number | boolean | undefined> =
       {};
     if (opts.pageSize !== undefined) searchParams.pageSize = opts.pageSize;
@@ -307,7 +333,7 @@ export class AppsScriptClient {
         },
       );
     } catch (err) {
-      throw mapProjectNotFound(err, opts.scriptId, this.account);
+      throw mapProjectNotFound(err, opts.scriptId, account);
     }
     return {
       items: raw.versions ?? [],
@@ -319,10 +345,11 @@ export class AppsScriptClient {
 
   /** GET /projects/{scriptId}/versions/{versionNumber}. 404 → NotFoundError. */
   async getVersion(
+    account: string,
     scriptId: string,
     versionNumber: number,
   ): Promise<unknown> {
-    const token = await this.oauthClient.getAccessToken();
+    const token = await this.oauthFor(account).getAccessToken();
     try {
       return await fetchJson<unknown>(
         `${APPS_SCRIPT_API_BASE}/projects/${encodeURIComponent(scriptId)}/versions/${versionNumber}`,
@@ -335,7 +362,7 @@ export class AppsScriptClient {
           { cause: err },
         );
       }
-      throw mapAppsScriptAuthError(err, this.account);
+      throw mapAppsScriptAuthError(err, account);
     }
   }
 
@@ -349,17 +376,18 @@ export class AppsScriptClient {
    * dev/test deployment). Returns the raw `Deployment`.
    */
   async createDeployment(
+    account: string,
     scriptId: string,
     config: DeploymentConfigInput,
   ): Promise<unknown> {
-    const token = await this.oauthClient.getAccessToken();
+    const token = await this.oauthFor(account).getAccessToken();
     try {
       return await fetchJson<unknown>(
         `${APPS_SCRIPT_API_BASE}/projects/${encodeURIComponent(scriptId)}/deployments`,
         { method: "POST", token, body: buildDeploymentConfig(config) },
       );
     } catch (err) {
-      throw mapProjectNotFound(err, scriptId, this.account);
+      throw mapProjectNotFound(err, scriptId, account);
     }
   }
 
@@ -368,12 +396,15 @@ export class AppsScriptClient {
    * `{ deployments[], nextPageToken }` envelope; `deployments` is normalized
    * to `[]` when omitted.
    */
-  async listDeployments(opts: {
-    scriptId: string;
-    pageSize?: number;
-    pageToken?: string;
-  }): Promise<{ items: unknown[]; nextPageToken?: string }> {
-    const token = await this.oauthClient.getAccessToken();
+  async listDeployments(
+    account: string,
+    opts: {
+      scriptId: string;
+      pageSize?: number;
+      pageToken?: string;
+    },
+  ): Promise<{ items: unknown[]; nextPageToken?: string }> {
+    const token = await this.oauthFor(account).getAccessToken();
     const searchParams: Record<string, string | number | boolean | undefined> =
       {};
     if (opts.pageSize !== undefined) searchParams.pageSize = opts.pageSize;
@@ -391,7 +422,7 @@ export class AppsScriptClient {
         },
       );
     } catch (err) {
-      throw mapProjectNotFound(err, opts.scriptId, this.account);
+      throw mapProjectNotFound(err, opts.scriptId, account);
     }
     return {
       items: raw.deployments ?? [],
@@ -403,10 +434,11 @@ export class AppsScriptClient {
 
   /** GET /projects/{scriptId}/deployments/{deploymentId}. 404 → NotFoundError. */
   async getDeployment(
+    account: string,
     scriptId: string,
     deploymentId: string,
   ): Promise<unknown> {
-    const token = await this.oauthClient.getAccessToken();
+    const token = await this.oauthFor(account).getAccessToken();
     try {
       return await fetchJson<unknown>(
         `${APPS_SCRIPT_API_BASE}/projects/${encodeURIComponent(scriptId)}` +
@@ -414,7 +446,7 @@ export class AppsScriptClient {
         { token },
       );
     } catch (err) {
-      throw mapDeploymentNotFound(err, scriptId, deploymentId, this.account);
+      throw mapDeploymentNotFound(err, scriptId, deploymentId, account);
     }
   }
 
@@ -425,11 +457,12 @@ export class AppsScriptClient {
    * sends the config bare). Returns the raw `Deployment`.
    */
   async updateDeployment(
+    account: string,
     scriptId: string,
     deploymentId: string,
     config: DeploymentConfigInput,
   ): Promise<unknown> {
-    const token = await this.oauthClient.getAccessToken();
+    const token = await this.oauthFor(account).getAccessToken();
     try {
       return await fetchJson<unknown>(
         `${APPS_SCRIPT_API_BASE}/projects/${encodeURIComponent(scriptId)}` +
@@ -441,7 +474,7 @@ export class AppsScriptClient {
         },
       );
     } catch (err) {
-      throw mapDeploymentNotFound(err, scriptId, deploymentId, this.account);
+      throw mapDeploymentNotFound(err, scriptId, deploymentId, account);
     }
   }
 
@@ -451,10 +484,11 @@ export class AppsScriptClient {
    * value. 404 → NotFoundError.
    */
   async deleteDeployment(
+    account: string,
     scriptId: string,
     deploymentId: string,
   ): Promise<void> {
-    const token = await this.oauthClient.getAccessToken();
+    const token = await this.oauthFor(account).getAccessToken();
     try {
       await fetchJson<unknown>(
         `${APPS_SCRIPT_API_BASE}/projects/${encodeURIComponent(scriptId)}` +
@@ -462,7 +496,7 @@ export class AppsScriptClient {
         { method: "DELETE", token },
       );
     } catch (err) {
-      throw mapDeploymentNotFound(err, scriptId, deploymentId, this.account);
+      throw mapDeploymentNotFound(err, scriptId, deploymentId, account);
     }
   }
 
@@ -478,9 +512,10 @@ export class AppsScriptClient {
    * `nextPageToken`; `processes` is normalized to `[]`.
    */
   async listProcesses(
+    account: string,
     opts: ListProcessesOpts = {},
   ): Promise<{ items: unknown[]; nextPageToken?: string }> {
-    const token = await this.oauthClient.getAccessToken();
+    const token = await this.oauthFor(account).getAccessToken();
     const perScript = opts.scriptId !== undefined;
     const prefix = perScript ? "scriptProcessFilter" : "userProcessFilter";
     const searchParams: Record<string, string | number | boolean | undefined> =
@@ -524,7 +559,7 @@ export class AppsScriptClient {
         nextPageToken?: string;
       }>(url.toString(), { token });
     } catch (err) {
-      throw mapAppsScriptAuthError(err, this.account);
+      throw mapAppsScriptAuthError(err, account);
     }
     return {
       items: raw.processes ?? [],
@@ -553,8 +588,11 @@ export class AppsScriptClient {
    *     401/403. We rewrite those into an actionable setup error pointing at
    *     the README, not a generic auth failure.
    */
-  async runFunction(opts: RunFunctionOpts): Promise<RunFunctionResult> {
-    const token = await this.oauthClient.getAccessToken();
+  async runFunction(
+    account: string,
+    opts: RunFunctionOpts,
+  ): Promise<RunFunctionResult> {
+    const token = await this.oauthFor(account).getAccessToken();
     let op: unknown;
     try {
       op = await fetchJson<unknown>(
@@ -572,7 +610,7 @@ export class AppsScriptClient {
     } catch (err) {
       // A real transport 401/403 means the one-time setup is missing/broken.
       if (err instanceof AuthError || err instanceof PermissionError) {
-        throw runSetupError(this.account, err);
+        throw runSetupError(account, err);
       }
       if (err instanceof NotFoundError) {
         throw new NotFoundError(
@@ -582,7 +620,7 @@ export class AppsScriptClient {
           { cause: err },
         );
       }
-      throw mapAppsScriptAuthError(err, this.account);
+      throw mapAppsScriptAuthError(err, account);
     }
 
     // HTTP 200 may still carry a script-side error. Inspect it FIRST.

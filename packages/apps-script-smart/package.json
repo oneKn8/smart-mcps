@@ -2,7 +2,7 @@
   "name": "apps-script-smart",
   "version": "0.1.0",
   "private": true,
-  "description": "Smart MCP for Google Apps Script (projects, deployments, gated run), single-account, wraps ~/.santo-agent OAuth token jar.",
+  "description": "Smart MCP for Google Apps Script (projects, deployments, gated run), multi-account, wraps ~/.santo-agent OAuth token jar.",
   "type": "module",
   "main": "dist/server.js",
   "exports": {

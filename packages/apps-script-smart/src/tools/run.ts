@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { defineTool, guardDestructive, ValidationError } from "smart-mcp-core";
 import type { AppsScriptContext } from "../context.js";
+import { resolveAccount } from "./account.js";
 
 // =============================================================================
 // run_function (scripts.run) — THE LOADED GUN
@@ -12,6 +13,8 @@ import type { AppsScriptContext } from "../context.js";
 // =============================================================================
 
 const runFunctionInputSchema = z.object({
+  /** Account to run AS; omit for the default identity. */
+  account: z.string().optional(),
   /**
    * Preferred target: the API Executable DeploymentID (required in the new
    * IDE). Either this or `script_id` must be set; `deployment_id` wins.
@@ -47,6 +50,7 @@ export const runFunctionTool = defineTool<
     runFunctionInputSchema as unknown as z.ZodType<RunFunctionInput>,
   handler: async (input, ctx) => {
     const parsed = input as RunFunctionParsed;
+    const account = resolveAccount(parsed.account, ctx);
 
     if (
       parsed.deployment_id === undefined &&
@@ -64,16 +68,19 @@ export const runFunctionTool = defineTool<
     const targetLabel = usingDeployment ? "deploymentId" : "scriptId";
 
     // The preview is the safety surface: the exact code-exec the caller is
-    // about to authorize. Show all four fields verbatim.
+    // about to authorize. Show the account it runs AS plus all four fields
+    // verbatim — the account is load-bearing here (the script executes with
+    // that identity's granted Google scopes).
     const preview =
       "Run an Apps Script function AS YOU (arbitrary remote code execution).\n" +
+      `account: ${account}\n` +
       `${targetLabel}: ${target}\n` +
       `function: ${parsed.function}\n` +
       `parameters: ${JSON.stringify(parsed.parameters)}\n` +
       `devMode: ${parsed.dev_mode}`;
     guardDestructive({ confirm: parsed.confirm, preview });
 
-    return ctx.client.runFunction({
+    return ctx.client.runFunction(account, {
       id: target,
       functionName: parsed.function,
       parameters: parsed.parameters,

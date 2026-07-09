@@ -1,8 +1,13 @@
 import { describe, it, expect, vi } from "vitest";
 import { getMetricsTool } from "../metrics.js";
 
-function ctxOf(getMetrics: ReturnType<typeof vi.fn>): { client: never } {
-  return { client: { getMetrics } as unknown as never };
+// Default account the context resolves to when a call omits `account`.
+const ACCT = "acct";
+
+function ctxOf(
+  getMetrics: ReturnType<typeof vi.fn>,
+): { client: never; defaultAccount: string } {
+  return { client: { getMetrics } as unknown as never, defaultAccount: ACCT };
 }
 
 describe("getMetricsTool", () => {
@@ -12,7 +17,7 @@ describe("getMetricsTool", () => {
       script_id: "s1",
     }) as Parameters<typeof getMetricsTool.handler>[0];
     await getMetricsTool.handler(input, ctxOf(getMetrics));
-    expect(getMetrics).toHaveBeenCalledWith({
+    expect(getMetrics).toHaveBeenCalledWith(ACCT, {
       scriptId: "s1",
       metricsGranularity: "DAILY",
     });
@@ -30,7 +35,7 @@ describe("getMetricsTool", () => {
       deployment_id: "dep_1",
     }) as Parameters<typeof getMetricsTool.handler>[0];
     const out = await getMetricsTool.handler(input, ctxOf(getMetrics));
-    expect(getMetrics).toHaveBeenCalledWith({
+    expect(getMetrics).toHaveBeenCalledWith(ACCT, {
       scriptId: "s1",
       metricsGranularity: "WEEKLY",
       deploymentId: "dep_1",

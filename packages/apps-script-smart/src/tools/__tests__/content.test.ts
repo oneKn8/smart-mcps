@@ -19,8 +19,11 @@ function makeClient(over: Partial<FakeClient> = {}): FakeClient {
   };
 }
 
-function ctxOf(client: FakeClient): { client: never } {
-  return { client: client as unknown as never };
+// Default account the context resolves to when a call omits `account`.
+const ACCT = "acct";
+
+function ctxOf(client: FakeClient): { client: never; defaultAccount: string } {
+  return { client: client as unknown as never, defaultAccount: ACCT };
 }
 
 // ============================================================================
@@ -40,7 +43,7 @@ describe("getContentTool", () => {
       version_number: 4,
     }) as Parameters<typeof getContentTool.handler>[0];
     const out = await getContentTool.handler(input, ctxOf(client));
-    expect(client.getContent).toHaveBeenCalledWith("s1", 4);
+    expect(client.getContent).toHaveBeenCalledWith(ACCT, "s1", 4);
     expect(out.content).toEqual({
       script_id: "s1",
       files: [{ name: "Code", type: "SERVER_JS", source: "x" }],
@@ -115,7 +118,7 @@ describe("updateContentTool", () => {
       confirm: true,
     }) as Parameters<typeof updateContentTool.handler>[0];
     const out = await updateContentTool.handler(input, ctxOf(client));
-    expect(client.updateContent).toHaveBeenCalledWith("s1", files);
+    expect(client.updateContent).toHaveBeenCalledWith(ACCT, "s1", files);
     expect(out.content).toEqual({ script_id: "s1", files: [] });
   });
 });
@@ -144,10 +147,14 @@ describe("pushFileTool — preserves the manifest and other files", () => {
     let sentFiles: unknown;
     const client = makeClient({
       getContent: vi.fn().mockResolvedValue(headContent),
-      updateContent: vi.fn().mockImplementation((_id: string, files: unknown) => {
-        sentFiles = files;
-        return Promise.resolve({ scriptId: "s1", files });
-      }),
+      updateContent: vi
+        .fn()
+        .mockImplementation(
+          (_account: string, _id: string, files: unknown) => {
+            sentFiles = files;
+            return Promise.resolve({ scriptId: "s1", files });
+          },
+        ),
     });
     const input = pushFileTool.inputSchema.parse({
       script_id: "s1",
@@ -159,7 +166,7 @@ describe("pushFileTool — preserves the manifest and other files", () => {
     const out = await pushFileTool.handler(input, ctxOf(client));
 
     // Read-modify-write: getContent first, then updateContent with the full set.
-    expect(client.getContent).toHaveBeenCalledWith("s1");
+    expect(client.getContent).toHaveBeenCalledWith(ACCT, "s1");
     // The whole project is re-sent: 3 files, read-only fields stripped.
     expect(sentFiles).toEqual([
       { name: "Code", type: "SERVER_JS", source: "function fresh(){}" },
@@ -190,7 +197,11 @@ describe("pushFileTool — preserves the manifest and other files", () => {
       updateContent: vi
         .fn()
         .mockImplementation(
-          (_id: string, files: { name: string; type: string; source: string }[]) => {
+          (
+            _account: string,
+            _id: string,
+            files: { name: string; type: string; source: string }[],
+          ) => {
             sentFiles = files;
             return Promise.resolve({ scriptId: "s1", files });
           },
@@ -230,10 +241,12 @@ describe("pushFileTool — preserves the manifest and other files", () => {
       getContent: vi.fn().mockResolvedValue(headContent),
       updateContent: vi
         .fn()
-        .mockImplementation((_id: string, files: { name: string }[]) => {
-          sentFiles = files;
-          return Promise.resolve({ scriptId: "s1", files });
-        }),
+        .mockImplementation(
+          (_account: string, _id: string, files: { name: string }[]) => {
+            sentFiles = files;
+            return Promise.resolve({ scriptId: "s1", files });
+          },
+        ),
     });
     const input = pushFileTool.inputSchema.parse({
       script_id: "s1",

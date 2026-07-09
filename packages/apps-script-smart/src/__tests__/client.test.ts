@@ -48,9 +48,11 @@ function writeTokenFile(home: string, account: string): void {
   );
 }
 
+// The multi-account client is account-agnostic; each method takes the account
+// as its first argument. Tests write the "alice" token slot and pass "alice".
 function client(): AppsScriptClient {
   writeTokenFile(tmpHome, "alice");
-  return new AppsScriptClient("alice", { home: tmpHome });
+  return new AppsScriptClient(tmpHome);
 }
 
 beforeEach(() => {
@@ -76,11 +78,7 @@ afterEach(() => {
 describe("AppsScriptClient — constructor", () => {
   it("is side-effect-free without HOME", () => {
     delete process.env.HOME;
-    expect(() => new AppsScriptClient("alice")).not.toThrow();
-  });
-
-  it("getAccount returns the constructor account", () => {
-    expect(new AppsScriptClient("alice").getAccount()).toBe("alice");
+    expect(() => new AppsScriptClient()).not.toThrow();
   });
 
   it("exposes the API base + scope constants", () => {
@@ -88,10 +86,12 @@ describe("AppsScriptClient — constructor", () => {
     expect(AppsScriptClient.TOKEN_FILE_SUFFIX).toBe(".script.json");
   });
 
-  it("throws AuthError when the token file is missing", async () => {
-    // HOME is a fresh empty tmp dir; no token file written.
-    const c = new AppsScriptClient("nobody", { home: tmpHome });
-    await expect(c.getProject("s1")).rejects.toBeInstanceOf(AuthError);
+  it("throws AuthError when the account's token file is missing", async () => {
+    // HOME is a fresh empty tmp dir; no token file written for "nobody".
+    const c = new AppsScriptClient(tmpHome);
+    await expect(c.getProject("nobody", "s1")).rejects.toBeInstanceOf(
+      AuthError,
+    );
   });
 });
 
@@ -108,7 +108,10 @@ describe("AppsScriptClient — projects", () => {
         return HttpResponse.json({ scriptId: "s_new", title: "T" });
       }),
     );
-    const res = await client().createProject({ title: "T", parentId: "doc1" });
+    const res = await client().createProject("alice", {
+      title: "T",
+      parentId: "doc1",
+    });
     expect(body).toEqual({ title: "T", parentId: "doc1" });
     expect(res).toEqual({ scriptId: "s_new", title: "T" });
   });
@@ -121,7 +124,7 @@ describe("AppsScriptClient — projects", () => {
         return HttpResponse.json({ scriptId: "s_new", title: "T" });
       }),
     );
-    await client().createProject({ title: "T" });
+    await client().createProject("alice", { title: "T" });
     expect(body).toEqual({ title: "T" });
   });
 
@@ -131,7 +134,9 @@ describe("AppsScriptClient — projects", () => {
         HttpResponse.json({ error: { message: "not found" } }, { status: 404 }),
       ),
     );
-    await expect(client().getProject("s_missing")).rejects.toMatchObject({
+    await expect(
+      client().getProject("alice", "s_missing"),
+    ).rejects.toMatchObject({
       name: "NotFoundError",
     });
   });
@@ -150,7 +155,7 @@ describe("AppsScriptClient — content", () => {
         return HttpResponse.json({ scriptId: "s1", files: [] });
       }),
     );
-    await client().getContent("s1", 3);
+    await client().getContent("alice", "s1", 3);
     expect(new URL(url!).searchParams.get("versionNumber")).toBe("3");
   });
 
@@ -166,7 +171,7 @@ describe("AppsScriptClient — content", () => {
       { name: "Code", type: "SERVER_JS", source: "x" },
       { name: "appsscript", type: "JSON", source: "{}" },
     ];
-    await client().updateContent("s1", files);
+    await client().updateContent("alice", "s1", files);
     expect(body).toEqual({ files });
   });
 });
@@ -184,7 +189,7 @@ describe("AppsScriptClient — metrics", () => {
         return HttpResponse.json({});
       }),
     );
-    await client().getMetrics({
+    await client().getMetrics("alice", {
       scriptId: "s1",
       metricsGranularity: "DAILY",
       deploymentId: "dep_1",
@@ -208,7 +213,7 @@ describe("AppsScriptClient — versions", () => {
         return HttpResponse.json({ scriptId: "s1", versionNumber: 1 });
       }),
     );
-    await client().createVersion("s1", "first");
+    await client().createVersion("alice", "s1", "first");
     expect(body).toEqual({ description: "first" });
   });
 
@@ -221,7 +226,7 @@ describe("AppsScriptClient — versions", () => {
         }),
       ),
     );
-    const res = await client().listVersions({ scriptId: "s1" });
+    const res = await client().listVersions("alice", { scriptId: "s1" });
     expect(res).toEqual({
       items: [{ versionNumber: 1 }],
       nextPageToken: "tok",
@@ -234,7 +239,7 @@ describe("AppsScriptClient — versions", () => {
         HttpResponse.json({}, { status: 404 }),
       ),
     );
-    await expect(client().getVersion("s1", 9)).rejects.toMatchObject({
+    await expect(client().getVersion("alice", "s1", 9)).rejects.toMatchObject({
       name: "NotFoundError",
     });
   });
@@ -253,7 +258,7 @@ describe("AppsScriptClient — deployments", () => {
         return HttpResponse.json({ deploymentId: "dep_1" });
       }),
     );
-    await client().createDeployment("s1", {
+    await client().createDeployment("alice", "s1", {
       versionNumber: 2,
       manifestFileName: "appsscript",
     });
@@ -268,7 +273,9 @@ describe("AppsScriptClient — deployments", () => {
         return HttpResponse.json({ deploymentId: "dep_1" });
       }),
     );
-    await client().updateDeployment("s1", "dep_1", { versionNumber: 3 });
+    await client().updateDeployment("alice", "s1", "dep_1", {
+      versionNumber: 3,
+    });
     expect(body).toEqual({ deploymentConfig: { versionNumber: 3 } });
   });
 
@@ -279,7 +286,7 @@ describe("AppsScriptClient — deployments", () => {
       ),
     );
     await expect(
-      client().deleteDeployment("s1", "dep_x"),
+      client().deleteDeployment("alice", "s1", "dep_x"),
     ).rejects.toMatchObject({ name: "NotFoundError" });
   });
 
@@ -289,7 +296,7 @@ describe("AppsScriptClient — deployments", () => {
         HttpResponse.json({ deployments: [{ deploymentId: "dep_1" }] }),
       ),
     );
-    const res = await client().listDeployments({ scriptId: "s1" });
+    const res = await client().listDeployments("alice", { scriptId: "s1" });
     expect(res).toEqual({ items: [{ deploymentId: "dep_1" }] });
   });
 });
@@ -307,7 +314,10 @@ describe("AppsScriptClient — processes", () => {
         return HttpResponse.json({ processes: [] });
       }),
     );
-    await client().listProcesses({ functionName: "poll", statuses: ["FAILED"] });
+    await client().listProcesses("alice", {
+      functionName: "poll",
+      statuses: ["FAILED"],
+    });
     const q = new URL(url!).searchParams;
     expect(q.get("userProcessFilter.functionName")).toBe("poll");
     expect(q.get("userProcessFilter.statuses")).toBe("FAILED");
@@ -321,7 +331,7 @@ describe("AppsScriptClient — processes", () => {
         return HttpResponse.json({ processes: [{ functionName: "poll" }] });
       }),
     );
-    const res = await client().listProcesses({
+    const res = await client().listProcesses("alice", {
       scriptId: "s1",
       functionName: "poll",
     });
@@ -352,7 +362,7 @@ describe("AppsScriptClient.runFunction — success path", () => {
         });
       }),
     );
-    const res = await client().runFunction({
+    const res = await client().runFunction("alice", {
       id: "dep_1",
       functionName: "myFunc",
       parameters: ["Santo"],
@@ -375,7 +385,7 @@ describe("AppsScriptClient.runFunction — incomplete/odd operation (no false su
       ),
     );
     try {
-      await client().runFunction({
+      await client().runFunction("alice", {
         id: "dep_1",
         functionName: "f",
         parameters: [],
@@ -432,7 +442,7 @@ describe("AppsScriptClient.runFunction — HTTP 200 LIES (script-side error)", (
     );
     const c = client();
     await expect(
-      c.runFunction({
+      c.runFunction("alice", {
         id: "dep_1",
         functionName: "myFunc",
         parameters: [],
@@ -442,7 +452,7 @@ describe("AppsScriptClient.runFunction — HTTP 200 LIES (script-side error)", (
 
     // And the surfaced error carries errorType/errorMessage + the stack trace.
     try {
-      await c.runFunction({
+      await c.runFunction("alice", {
         id: "dep_1",
         functionName: "myFunc",
         parameters: [],
@@ -474,7 +484,7 @@ describe("AppsScriptClient.runFunction — missing setup", () => {
       ),
     );
     try {
-      await client().runFunction({
+      await client().runFunction("alice", {
         id: "dep_1",
         functionName: "f",
         parameters: [],
@@ -497,7 +507,7 @@ describe("AppsScriptClient.runFunction — missing setup", () => {
       ),
     );
     await expect(
-      client().runFunction({
+      client().runFunction("alice", {
         id: "bad",
         functionName: "f",
         parameters: [],
@@ -527,7 +537,7 @@ describe("AppsScriptClient — auth error mapping", () => {
       ),
     );
     try {
-      await client().getProject("s1");
+      await client().getProject("alice", "s1");
       throw new Error("expected AuthError");
     } catch (err) {
       expect(err).toBeInstanceOf(AuthError);
@@ -551,7 +561,7 @@ describe("AppsScriptClient — auth error mapping", () => {
       ),
     );
     try {
-      await client().getProject("s1");
+      await client().getProject("alice", "s1");
       throw new Error("expected AuthError");
     } catch (err) {
       expect(err).toBeInstanceOf(AuthError);
@@ -566,7 +576,7 @@ describe("AppsScriptClient — auth error mapping", () => {
       ),
     );
     try {
-      await client().getProject("s1");
+      await client().getProject("alice", "s1");
       throw new Error("expected AuthError");
     } catch (err) {
       expect(err).toBeInstanceOf(AuthError);

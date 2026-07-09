@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { defineTool } from "smart-mcp-core";
 import type { AppsScriptContext } from "../context.js";
+import { resolveAccount } from "./account.js";
 import { mapProject, type SlimProject } from "../project-mapper.js";
 
 // =============================================================================
@@ -8,6 +9,8 @@ import { mapProject, type SlimProject } from "../project-mapper.js";
 // =============================================================================
 
 const createProjectInputSchema = z.object({
+  /** Account to act as; omit for the default identity. */
+  account: z.string().optional(),
   title: z.string().min(1),
   /**
    * Drive ID of a Doc/Sheet/Form to bind the script to. Omit for a
@@ -28,9 +31,10 @@ export const createProjectTool = defineTool<
   description: "Create a new Apps Script project",
   inputSchema: createProjectInputSchema,
   handler: async (input, ctx) => {
+    const account = resolveAccount(input.account, ctx);
     const body: { title: string; parentId?: string } = { title: input.title };
     if (input.parent_id !== undefined) body.parentId = input.parent_id;
-    const raw = await ctx.client.createProject(body);
+    const raw = await ctx.client.createProject(account, body);
     return { project: mapProject(raw) };
   },
 });
@@ -40,6 +44,8 @@ export const createProjectTool = defineTool<
 // =============================================================================
 
 const getProjectInputSchema = z.object({
+  /** Account to act as; omit for the default identity. */
+  account: z.string().optional(),
   script_id: z.string().min(1),
 });
 
@@ -55,7 +61,8 @@ export const getProjectTool = defineTool<
   description: "Get an Apps Script project's metadata",
   inputSchema: getProjectInputSchema,
   handler: async (input, ctx) => {
-    const raw = await ctx.client.getProject(input.script_id);
+    const account = resolveAccount(input.account, ctx);
+    const raw = await ctx.client.getProject(account, input.script_id);
     return { project: mapProject(raw) };
   },
 });

@@ -3,11 +3,14 @@ import { AppsScriptClient } from "./client.js";
 
 /**
  * Per-request context exposed to every apps-script-smart tool handler.
- * Carries the live REST client. Tools that need the resolved account read
- * it via `client.getAccount()` rather than duplicating it on the context.
+ * Carries the live multi-account REST client plus the default account a tool
+ * call falls back to when its optional `account` param is omitted (and no
+ * `APPS_SCRIPT_DEFAULT_IDENTITY` env override is set). Account resolution for
+ * a given call lives in `tools/account.ts`.
  */
 export interface AppsScriptContext {
   client: AppsScriptClient;
+  defaultAccount: string;
 }
 
 const DEFAULT_IDENTITY = "your-account";
@@ -17,10 +20,11 @@ type AppsScriptCreds = {
 };
 
 /**
- * Construct the runtime context. Resolves `APPS_SCRIPT_DEFAULT_IDENTITY`
- * from env / shared `.env` / per-service config; defaults to
- * `"your-account"` when unset. The AppsScriptClient constructor is
- * side-effect-free — no token file is opened here.
+ * Construct the runtime context. Resolves the default account from
+ * `APPS_SCRIPT_DEFAULT_IDENTITY` (env / shared `.env` / per-service config),
+ * defaulting to `"your-account"` when unset. The AppsScriptClient is now
+ * account-agnostic — each tool call passes its resolved account — so the
+ * constructor takes only the optional `home` override and opens no token file.
  */
 export function buildContext(home?: string): AppsScriptContext {
   const creds = loadCreds<Record<string, string>>({
@@ -28,11 +32,9 @@ export function buildContext(home?: string): AppsScriptContext {
     required: [],
     optional: ["APPS_SCRIPT_DEFAULT_IDENTITY"],
   }) as AppsScriptCreds;
-  const account = creds.APPS_SCRIPT_DEFAULT_IDENTITY ?? DEFAULT_IDENTITY;
+  const defaultAccount = creds.APPS_SCRIPT_DEFAULT_IDENTITY ?? DEFAULT_IDENTITY;
   return {
-    client: new AppsScriptClient(
-      account,
-      home === undefined ? {} : { home },
-    ),
+    client: new AppsScriptClient(home),
+    defaultAccount,
   };
 }
