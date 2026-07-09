@@ -14,7 +14,9 @@
 
 import { HetznerClient } from "../packages/hetzner-smart/dist/client.js";
 
-const LOCATION = process.env.HETZNER_E2E_LOCATION ?? "nbg1";
+// Optional hard constraint on location; when unset we pick any location where
+// the cheapest x86 shared type is actually orderable.
+const FORCE_LOCATION = process.env.HETZNER_E2E_LOCATION ?? null;
 const IMAGE = process.env.HETZNER_E2E_IMAGE ?? "ubuntu-24.04";
 const NAME = `hetzner-smart-e2e-${Math.floor(Date.now() / 1000)}`;
 
@@ -27,30 +29,47 @@ function toNum(v) {
   return Number.isFinite(n) ? n : null;
 }
 
-// Cheapest non-deprecated x86 shared-vCPU type available in LOCATION, by monthly net.
-async function cheapestType(client) {
+// Cheapest non-deprecated x86 shared-vCPU (type, location) pair that a datacenter
+// actually lists as AVAILABLE for new servers. Pricing alone is not enough: a type
+// can carry a price for a location it can no longer be ordered in (422 invalid_input,
+// "unsupported location for server type"), which is exactly what a naive pick hits.
+async function pickAvailable(client) {
+  const dcs = await client.getAllPages("/datacenters", "datacenters");
   const types = await client.getAllPages("/server_types", "server_types");
+  const byId = new Map(types.map((t) => [t.id, t]));
   let best = null;
-  for (const t of types) {
-    if (t?.deprecated) continue;
-    if (t?.architecture && t.architecture !== "x86") continue;
-    if (t?.cpu_type && t.cpu_type !== "shared") continue;
-    const row = Array.isArray(t?.prices)
-      ? t.prices.find((p) => p?.location === LOCATION)
-      : undefined;
-    const monthly = toNum(row?.price_monthly?.net);
-    if (monthly == null) continue;
-    if (!best || monthly < best.monthly) best = { name: t.name, monthly };
+  for (const dc of dcs) {
+    const loc = dc?.location?.name;
+    if (!loc || (FORCE_LOCATION && loc !== FORCE_LOCATION)) continue;
+    const available = dc?.server_types?.available ?? [];
+    for (const id of available) {
+      const t = byId.get(id);
+      if (!t || t.deprecated) continue;
+      if (t.architecture && t.architecture !== "x86") continue;
+      if (t.cpu_type && t.cpu_type !== "shared") continue;
+      const row = Array.isArray(t.prices)
+        ? t.prices.find((p) => p?.location === loc)
+        : undefined;
+      const monthly = toNum(row?.price_monthly?.net);
+      if (monthly == null) continue;
+      if (!best || monthly < best.monthly) best = { name: t.name, location: loc, monthly };
+    }
   }
-  if (!best) throw new Error(`no x86 shared server type priced in location ${LOCATION}`);
+  if (!best) {
+    throw new Error(
+      `no available x86 shared server type found${FORCE_LOCATION ? ` in ${FORCE_LOCATION}` : ""}`,
+    );
+  }
   return best;
 }
 
 async function main() {
   const client = new HetznerClient(); // throws AuthError if token missing
 
-  const pick = await cheapestType(client);
-  log("plan", `cheapest x86 shared in ${LOCATION}: ${pick.name} (EUR ${pick.monthly.toFixed(2)}/mo) image=${IMAGE}`);
+  const currency = (await client.getPricing())?.currency ?? "";
+  const pick = await pickAvailable(client);
+  const LOCATION = pick.location;
+  log("plan", `cheapest available x86 shared: ${pick.name} in ${LOCATION} (${pick.monthly.toFixed(2)} ${currency}/mo) image=${IMAGE}`);
 
   let serverId = null;
   try {
