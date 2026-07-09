@@ -4,6 +4,7 @@ import {
   AuthError,
   NotFoundError,
   UpstreamError,
+  ValidationError,
 } from "smart-mcp-core";
 
 // Hetzner Cloud exposes a single REST host authenticated with a project-scoped
@@ -109,6 +110,29 @@ function hetznerErrorCode(err: unknown): string | undefined {
   const errObj = asRecord(rec?.error);
   const code = errObj?.code;
   return typeof code === "string" ? code : undefined;
+}
+
+// Pulls the human-readable Hetzner `error.message` out of an error's `detail`.
+// Undefined when the upstream body was non-JSON, empty, or carried no message.
+function hetznerErrorMessage(err: unknown): string | undefined {
+  const detail = (err as { detail?: unknown }).detail;
+  const rec = asRecord(detail);
+  const errObj = asRecord(rec?.error);
+  const message = errObj?.message;
+  return typeof message === "string" && message.length > 0 ? message : undefined;
+}
+
+// Appends the upstream reason to the bare "METHOD URL → status" line core
+// produces, so callers see e.g. "unsupported location for server type" instead
+// of just "422". Returns undefined when no upstream message is available.
+function surfaceHetznerMessage(
+  err: Error,
+  code: string | undefined,
+): string | undefined {
+  const message = hetznerErrorMessage(err);
+  if (!message) return undefined;
+  const suffix = code ? ` (${code})` : "";
+  return `${err.message}: ${message}${suffix}`;
 }
 
 function capitalize(kind: string): string {
@@ -238,6 +262,21 @@ export class HetznerClient {
           "Resource has an action in progress; retry shortly.",
           { detail: err.detail, cause: err },
         );
+      }
+      // Otherwise (e.g. 422/409/5xx) surface the raw upstream reason so the
+      // caller sees why, not just the status. Class is preserved.
+      const surfaced = surfaceHetznerMessage(err, code);
+      if (surfaced) {
+        return new UpstreamError(surfaced, { detail: err.detail, cause: err });
+      }
+    }
+
+    // A 400 is mapped to ValidationError by core; enrich its message the same
+    // way without changing the class.
+    if (err instanceof ValidationError) {
+      const surfaced = surfaceHetznerMessage(err, hetznerErrorCode(err));
+      if (surfaced) {
+        return new ValidationError(surfaced, { detail: err.detail, cause: err });
       }
     }
 

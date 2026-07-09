@@ -9,7 +9,12 @@ import {
 } from "vitest";
 import { setupServer } from "msw/node";
 import { http, HttpResponse } from "msw";
-import { AuthError, NotFoundError, UpstreamError } from "smart-mcp-core";
+import {
+  AuthError,
+  NotFoundError,
+  UpstreamError,
+  ValidationError,
+} from "smart-mcp-core";
 import { HetznerClient, type HetznerAction } from "../client.js";
 
 const BASE = "https://api.hetzner.cloud/v1";
@@ -472,5 +477,93 @@ describe("HetznerClient — resource surface", () => {
     const res = await withToken().listServerTypes();
     expect(seenUrl).toContain("/v1/server_types");
     expect((res.server_types as Array<unknown>)).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// (l) generic 4xx surfaces the upstream error.message instead of a bare status
+// ---------------------------------------------------------------------------
+describe("HetznerClient — surfaces upstream error messages", () => {
+  it("surfaces the Hetzner error.message on a 422 create (server)", async () => {
+    server.use(
+      http.post(`${BASE}/servers`, () =>
+        HttpResponse.json(
+          {
+            error: {
+              code: "invalid_input",
+              message: "unsupported location for server type",
+              details: {},
+            },
+          },
+          { status: 422 },
+        ),
+      ),
+    );
+    const client = withToken();
+    try {
+      await client.createServer({
+        name: "alpha",
+        server_type: "cx22",
+        location: "ash",
+        image: "ubuntu-24.04",
+      });
+      throw new Error("should have thrown");
+    } catch (err) {
+      // Class stays UpstreamError (core maps 422 generically); only the message
+      // is enriched with the real reason.
+      expect(err).toBeInstanceOf(UpstreamError);
+      expect((err as Error).message).toContain(
+        "unsupported location for server type",
+      );
+    }
+  });
+
+  it("surfaces the Hetzner error.message on a 409 (uniqueness) create", async () => {
+    server.use(
+      http.post(`${BASE}/ssh_keys`, () =>
+        HttpResponse.json(
+          {
+            error: {
+              code: "uniqueness_error",
+              message: "SSH key with the same fingerprint already exists",
+            },
+          },
+          { status: 409 },
+        ),
+      ),
+    );
+    const client = withToken();
+    try {
+      await client.createSshKey({ name: "beta", public_key: "ssh-ed25519 AAAA" });
+      throw new Error("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(UpstreamError);
+      expect((err as Error).message).toContain("already exists");
+    }
+  });
+
+  it("surfaces the Hetzner error.message on a 400 while keeping ValidationError", async () => {
+    server.use(
+      http.post(`${BASE}/volumes`, () =>
+        HttpResponse.json(
+          {
+            error: {
+              code: "invalid_input",
+              message: "size is below the minimum of 10 GB",
+            },
+          },
+          { status: 400 },
+        ),
+      ),
+    );
+    const client = withToken();
+    try {
+      await client.createVolume({ name: "gamma", size: 1 });
+      throw new Error("should have thrown");
+    } catch (err) {
+      // 400 stays ValidationError; message is enriched with the real reason.
+      expect(err).toBeInstanceOf(ValidationError);
+      expect((err as Error).message).toContain("size is below the minimum");
+    }
   });
 });
