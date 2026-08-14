@@ -12,4 +12,4 @@ flow-smart needs the sibling MCPs built and their tokens minted (run each siblin
 npm run build --workspace=flow-smart
 ```
 
-Default account `your-account`; override with `FLOW_DEFAULT_IDENTITY` in `~/.config/smart-mcps/.env`.
+Requires `FLOW_DEFAULT_IDENTITY` (the bound Google account username) in env or `~/.config/smart-mcps/.env`.

@@ -9,3 +9,4 @@ coverage/
 *.tsbuildinfo
 .claude/
 *_MCP_MEMORY.md
+/CLAUDE.md

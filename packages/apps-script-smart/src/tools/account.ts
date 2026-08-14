@@ -8,7 +8,7 @@ import type { AppsScriptContext } from "../context.js";
  *   2. the `APPS_SCRIPT_DEFAULT_IDENTITY` env var, if set (read at call time so
  *      it can be overridden per-process without rebuilding the context);
  *   3. `context.defaultAccount` (resolved once at startup via loadCreds, which
- *      itself defaults to `"your-account"`).
+ *      itself requires `APPS_SCRIPT_DEFAULT_IDENTITY`).
  *
  * Unlike email-smart there is no identities directory to validate against —
  * apps-script accounts are just `<account>.script.json` token slots under

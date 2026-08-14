@@ -5,7 +5,7 @@
 //
 // Usage:
 //   node packages/calendar-smart/scripts/live-smoke.mjs [account]
-// Defaults account to "your-account".
+// Account comes from argv[2] or CALENDAR_DEFAULT_IDENTITY.
 
 import { CalendarClient } from "../dist/client.js";
 import { mapEvent } from "../dist/event-mapper.js";
@@ -17,7 +17,11 @@ import {
   todayInTz,
 } from "../dist/time-zone.js";
 
-const account = process.argv[2] ?? "your-account";
+const account = process.argv[2] ?? process.env.CALENDAR_DEFAULT_IDENTITY;
+if (!account) {
+  console.error("usage: node " + process.argv[1] + " <account>");
+  process.exit(1);
+}
 const client = new CalendarClient(account);
 
 function divider(title) {

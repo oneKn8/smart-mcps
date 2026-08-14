@@ -29,16 +29,15 @@ export interface FlowContext {
   account: string;
 }
 
-const DEFAULT_IDENTITY = "your-account";
-
 type FlowCreds = {
-  FLOW_DEFAULT_IDENTITY?: string;
+  FLOW_DEFAULT_IDENTITY: string;
 };
 
 /**
  * Construct the runtime context. Resolves `FLOW_DEFAULT_IDENTITY` from
- * env / shared `.env` / per-service config; defaults to `"your-account"`
- * when unset. Every client constructor is side-effect-free — no token file
+ * env / shared `.env` / per-service config; throws `AuthError` at startup
+ * when unset (eager-fail, matching the client constructor convention).
+ * Every client constructor is side-effect-free — no token file
  * is opened here; flow-smart reuses whatever sibling tokens already exist
  * (`<account>.tasks.json`, `.docs.json`, `.script.json`, `.calendar.json`,
  * and email-smart's `<account>.json`).
@@ -46,10 +45,9 @@ type FlowCreds = {
 export function buildContext(home?: string): FlowContext {
   const creds = loadCreds<Record<string, string>>({
     serviceName: "flow-smart",
-    required: [],
-    optional: ["FLOW_DEFAULT_IDENTITY"],
+    required: ["FLOW_DEFAULT_IDENTITY"],
   }) as FlowCreds;
-  const account = creds.FLOW_DEFAULT_IDENTITY ?? DEFAULT_IDENTITY;
+  const account = creds.FLOW_DEFAULT_IDENTITY;
   const googleOpts = home === undefined ? {} : { home };
   return {
     tasks: new TasksClient(account, googleOpts),

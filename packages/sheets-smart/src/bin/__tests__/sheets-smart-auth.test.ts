@@ -86,7 +86,7 @@ describe("runAuth — happy path", () => {
     );
 
     const result = await runAuth({
-      account: "your-account",
+      account: "alpha-account",
       home: tmpHome,
       redirectUri: FAKE_REDIRECT,
       codeReader: async () => "auth-code-from-google",
@@ -97,7 +97,7 @@ describe("runAuth — happy path", () => {
       tmpHome,
       ".santo-agent",
       "oauth",
-      "your-account.sheets.json",
+      "alpha-account.sheets.json",
     );
     expect(result.tokenPath).toBe(expectedPath);
     expect(fs.existsSync(expectedPath)).toBe(true);

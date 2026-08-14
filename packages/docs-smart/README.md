@@ -66,4 +66,4 @@ npm run build --workspace=docs-smart
 node packages/docs-smart/dist/bin/docs-smart-auth.js your-account
 ```
 
-The token is written to `~/.santo-agent/oauth/your-account.docs.json` (mode 600). Default account `your-account`; override with `DOCS_DEFAULT_IDENTITY` in `~/.config/smart-mcps/.env`.
+The token is written to `~/.santo-agent/oauth/your-account.docs.json` (mode 600). Requires `DOCS_DEFAULT_IDENTITY` in `~/.config/smart-mcps/.env`.

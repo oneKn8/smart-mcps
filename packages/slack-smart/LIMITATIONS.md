@@ -41,7 +41,7 @@ The 2026-07-03 large-agent-file upload path below is unchanged — it needs an e
 **What happened:**
 - `upload_file` with `file_path` ENOENTs on BOTH the sandbox scratchpad (`/tmp/claude-1000/...`) AND the user home dir (`/home/oneknight/...`) — re-confirms the server is fully fs-isolated. Worth restating loudly since it re-bit me: home dir is NOT reachable either; do not try `file_path` for anything the agent wrote.
 - `content_base64` (the documented alternative) only works for SMALL files: 29.5 KB → 39.4 KB base64, and any tool/Bash output over ~15 KB gets auto-persisted/truncated by the harness, so the model can't read it back to inline it in the arg. Minifying doesn't get HTML under the ~11 KB source threshold.
-- `content_url` (the 2026-07-01 fix) would work but needs the file hosted at a reachable URL first — and the obvious host (claude.ai artifacts) is banned for client work (former-employer-account boundary, see repo memory).
+- `content_url` (the 2026-07-01 fix) would work but needs the file hosted at a reachable URL first — and hosting the file at a public URL is out of scope for this MCP.
 
 **Net:** no clean in-band way for the agent to push a >~15 KB local file to Slack. Fallback used: staged it at `~/tbc-messages-concept.html` and had Santo drag it in.
 

@@ -10,25 +10,22 @@ export interface TasksContext {
   client: TasksClient;
 }
 
-const DEFAULT_IDENTITY = "your-account";
-
 type TasksCreds = {
-  TASKS_DEFAULT_IDENTITY?: string;
+  TASKS_DEFAULT_IDENTITY: string;
 };
 
 /**
  * Construct the runtime context. Resolves `TASKS_DEFAULT_IDENTITY` from
- * env / shared `.env` / per-service config; defaults to `"your-account"`
- * when unset. The TasksClient constructor is side-effect-free — no token
+ * env / shared `.env` / per-service config; throws `AuthError` at
+ * startup when unset. The TasksClient constructor is side-effect-free — no token
  * file is opened here.
  */
 export function buildContext(home?: string): TasksContext {
   const creds = loadCreds<Record<string, string>>({
     serviceName: "tasks-smart",
-    required: [],
-    optional: ["TASKS_DEFAULT_IDENTITY"],
+    required: ["TASKS_DEFAULT_IDENTITY"],
   }) as TasksCreds;
-  const account = creds.TASKS_DEFAULT_IDENTITY ?? DEFAULT_IDENTITY;
+  const account = creds.TASKS_DEFAULT_IDENTITY;
   return {
     client: new TasksClient(
       account,

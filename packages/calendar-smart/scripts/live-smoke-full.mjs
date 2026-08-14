@@ -11,7 +11,11 @@ import { mapEvent } from "../dist/event-mapper.js";
 import { mapCalendar } from "../dist/calendar-mapper.js";
 import { mapAclRule } from "../dist/acl-mapper.js";
 
-const account = process.argv[2] ?? "your-account";
+const account = process.argv[2] ?? process.env.CALENDAR_DEFAULT_IDENTITY;
+if (!account) {
+  console.error("usage: node " + process.argv[1] + " <account>");
+  process.exit(1);
+}
 const client = new CalendarClient(account);
 
 let pass = 0;

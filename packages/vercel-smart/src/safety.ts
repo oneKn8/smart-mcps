@@ -1,4 +1,4 @@
-import { PermissionError } from "smart-mcp-core";
+import { loadCreds, PermissionError } from "smart-mcp-core";
 
 /**
  * Production-affecting actions that must clear an explicit, operator-set env gate
@@ -60,19 +60,30 @@ export function assertRevealAllowed(): void {
 
 /**
  * Teams whose projects this MCP must NEVER mutate, independent of the prod/confirm
- * gates. Default: alpha-team's Vercel team ("example-denied-team") — Santo's work is
- * independent of former-employer, so agents driving this tool must not write to that team's
- * projects. Reads are unaffected. The default is a floor; VERCEL_SMART_DENIED_TEAMS
- * (comma-separated team slugs) only ADDS to it, it cannot remove the default.
+ * gates. Configured via VERCEL_SMART_DENIED_TEAMS (comma-separated team slugs),
+ * resolved like any other credential: process env first, then the shared
+ * ~/.config/smart-mcps/.env, then per-service config. Reads are unaffected.
+ * Empty when unset.
  */
-const DEFAULT_DENIED_TEAMS = ["example-denied-team"];
+type DenyCreds = {
+  VERCEL_SMART_DENIED_TEAMS?: string;
+};
 
 export function deniedTeamSlugs(): string[] {
-  const extra = (process.env.VERCEL_SMART_DENIED_TEAMS ?? "")
-    .split(",")
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
-  return Array.from(new Set([...DEFAULT_DENIED_TEAMS, ...extra]));
+  const creds = loadCreds<Record<string, string>>({
+    serviceName: "vercel-smart",
+    required: [],
+    optional: ["VERCEL_SMART_DENIED_TEAMS"],
+  }) as DenyCreds;
+  const raw = creds.VERCEL_SMART_DENIED_TEAMS ?? "";
+  return Array.from(
+    new Set(
+      raw
+        .split(",")
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0),
+    ),
+  );
 }
 
 /**

@@ -1,42 +1,51 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import {
   assertTeamWritable,
   deniedTeamSlugs,
 } from "../safety.js";
 
 describe("team write deny-list", () => {
-  afterEach(() => {
+  const savedHome = process.env.HOME;
+  const savedDenied = process.env.VERCEL_SMART_DENIED_TEAMS;
+
+  beforeEach(() => {
+    // Isolate from the real ~/.config/smart-mcps/.env (see client.test.ts pattern)
+    process.env.HOME = "/nonexistent-smart-mcps-test-home";
     delete process.env.VERCEL_SMART_DENIED_TEAMS;
   });
 
-  it("blocks writes to the default-denied example-denied-team team", () => {
-    expect(() => assertTeamWritable("example-denied-team", "some-proj")).toThrow(
+  afterEach(() => {
+    process.env.HOME = savedHome;
+    if (savedDenied === undefined) delete process.env.VERCEL_SMART_DENIED_TEAMS;
+    else process.env.VERCEL_SMART_DENIED_TEAMS = savedDenied;
+  });
+
+  it("defaults to an empty deny-list when unconfigured", () => {
+    expect(deniedTeamSlugs()).toEqual([]);
+    expect(() => assertTeamWritable("alpha-team", "some-proj")).not.toThrow();
+  });
+
+  it("blocks writes to a team listed in VERCEL_SMART_DENIED_TEAMS", () => {
+    process.env.VERCEL_SMART_DENIED_TEAMS = "alpha-team";
+    expect(() => assertTeamWritable("alpha-team", "some-proj")).toThrow(
       /blocked/i,
     );
   });
 
   it("allows writes to a non-denied team", () => {
-    expect(() =>
-      assertTeamWritable("gamma-team", "gamma-dashboard"),
-    ).not.toThrow();
+    process.env.VERCEL_SMART_DENIED_TEAMS = "alpha-team";
+    expect(() => assertTeamWritable("beta-team", "beta-site")).not.toThrow();
   });
 
   it("allows personal scope (null/undefined slug is never denied)", () => {
+    process.env.VERCEL_SMART_DENIED_TEAMS = "alpha-team";
     expect(() => assertTeamWritable(null, "p")).not.toThrow();
     expect(() => assertTeamWritable(undefined, "p")).not.toThrow();
   });
 
-  it("VERCEL_SMART_DENIED_TEAMS adds to the default, never removes it", () => {
-    process.env.VERCEL_SMART_DENIED_TEAMS = "acme, extra-team";
-    const denied = deniedTeamSlugs();
-    expect(denied).toContain("example-denied-team"); // default floor stays
-    expect(denied).toContain("acme");
-    expect(denied).toContain("extra-team");
-    expect(() => assertTeamWritable("acme", "x")).toThrow();
-    expect(() => assertTeamWritable("example-denied-team", "x")).toThrow();
-  });
-
-  it("deniedTeamSlugs defaults to exactly the acme team with no env override", () => {
-    expect(deniedTeamSlugs()).toEqual(["example-denied-team"]);
+  it("parses a comma-separated list, trimming whitespace and dropping empties", () => {
+    process.env.VERCEL_SMART_DENIED_TEAMS = "alpha-team, beta-team, ,alpha-team";
+    expect(deniedTeamSlugs()).toEqual(["alpha-team", "beta-team"]);
+    expect(() => assertTeamWritable("beta-team", "x")).toThrow();
   });
 });

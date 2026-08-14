@@ -21,7 +21,7 @@ function makeClient(over: FakeClient = {}): FakeClient {
     insertEvent: vi.fn().mockResolvedValue({}),
     patchEvent: vi.fn().mockResolvedValue({}),
     getEvent: vi.fn().mockResolvedValue({}),
-    getAccountEmail: vi.fn().mockReturnValue("your-account@gmail.com"),
+    getAccountEmail: vi.fn().mockReturnValue("alpha-account@gmail.com"),
     ensureTimeZone: vi.fn().mockResolvedValue("America/Chicago"),
     ...over,
   };
@@ -762,7 +762,7 @@ describe("respondToEventTool — handler", () => {
       attendees: [
         { email: "host@example.test", responseStatus: "accepted" },
         {
-          email: "your-account@gmail.com",
+          email: "alpha-account@gmail.com",
           responseStatus: "needsAction",
           optional: false,
         },
@@ -780,7 +780,7 @@ describe("respondToEventTool — handler", () => {
         attendees: [
           { email: "host@example.test", responseStatus: "accepted" },
           {
-            email: "your-account@gmail.com",
+            email: "alpha-account@gmail.com",
             responseStatus: "accepted",
             optional: false,
           },
@@ -808,7 +808,7 @@ describe("respondToEventTool — handler", () => {
         attendees: [
           { email: "host@example.test", responseStatus: "accepted" },
           {
-            email: "your-account@gmail.com",
+            email: "alpha-account@gmail.com",
             responseStatus: "accepted",
             optional: false,
           },
@@ -818,7 +818,7 @@ describe("respondToEventTool — handler", () => {
     });
     expect(out.event.id).toBe("evt_alpha");
     const me = out.event.attendees.find(
-      (a) => a.email === "your-account@gmail.com",
+      (a) => a.email === "alpha-account@gmail.com",
     );
     expect(me?.response).toBe("accepted");
   });
@@ -843,7 +843,7 @@ describe("respondToEventTool — handler", () => {
       const me = call.body.attendees.find(
         (a) =>
           (a as unknown as { email: string }).email ===
-          "your-account@gmail.com",
+          "alpha-account@gmail.com",
       );
       expect(me?.responseStatus).toBe(response);
     }
@@ -877,10 +877,10 @@ describe("respondToEventTool — handler", () => {
   it("throws when the user is the organizer (organizer.self === true)", async () => {
     const event = rawEvent({
       id: "evt_alpha",
-      organizer: { email: "your-account@gmail.com", self: true },
+      organizer: { email: "alpha-account@gmail.com", self: true },
       attendees: [
         {
-          email: "your-account@gmail.com",
+          email: "alpha-account@gmail.com",
           responseStatus: "accepted",
         },
         { email: "bob@example.test", responseStatus: "needsAction" },
@@ -907,7 +907,7 @@ describe("respondToEventTool — handler", () => {
       id: "evt_alpha",
       attendees: [
         {
-          email: "your-account@gmail.com",
+          email: "alpha-account@gmail.com",
           responseStatus: "needsAction",
         },
       ],

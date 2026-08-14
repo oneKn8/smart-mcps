@@ -21,7 +21,11 @@
 import { CalendarClient } from "../dist/client.js";
 import { mapEvent } from "../dist/event-mapper.js";
 
-const account = process.argv[2] ?? "your-account";
+const account = process.argv[2] ?? process.env.CALENDAR_DEFAULT_IDENTITY;
+if (!account) {
+  console.error("usage: node " + process.argv[1] + " <account>");
+  process.exit(1);
+}
 const client = new CalendarClient(account);
 
 let pass = 0;

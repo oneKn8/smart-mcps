@@ -40,7 +40,7 @@ import {
   exportFileTool,
 } from "../media.js";
 
-const ACCOUNT = "your-account";
+const ACCOUNT = "alpha-account";
 
 type FakeClient = {
   accessToken: ReturnType<typeof vi.fn>;

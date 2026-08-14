@@ -114,8 +114,8 @@ describe("CalendarClient — constructor", () => {
   });
 
   it("getAccountEmail appends @gmail.com when account has no @", () => {
-    const c = new CalendarClient("your-account");
-    expect(c.getAccountEmail()).toBe("your-account@gmail.com");
+    const c = new CalendarClient("alpha-account");
+    expect(c.getAccountEmail()).toBe("alpha-account@gmail.com");
   });
 
   it("getAccountEmail returns account verbatim when it already contains @", () => {

@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { AuthError } from "smart-mcp-core";
 import { buildContext } from "../context.js";
 import { SheetsClient } from "../client.js";
 
@@ -34,13 +35,13 @@ afterEach(() => {
 
 describe("buildContext", () => {
   it("returns a context with a SheetsClient", () => {
+    process.env.SHEETS_DEFAULT_IDENTITY = "alpha-account";
     const ctx = buildContext(tmpHome);
     expect(ctx.client).toBeInstanceOf(SheetsClient);
   });
 
-  it("defaults the account to your-account when no override is set", () => {
-    const ctx = buildContext(tmpHome);
-    expect(ctx.client.getAccount()).toBe("your-account");
+  it("throws AuthError when no identity is configured", () => {
+    expect(() => buildContext(tmpHome)).toThrow(AuthError);
   });
 
   it("honors a SHEETS_DEFAULT_IDENTITY env override", () => {

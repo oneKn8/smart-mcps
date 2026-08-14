@@ -13,4 +13,4 @@ npm run build --workspace=tasks-smart
 node packages/tasks-smart/dist/bin/tasks-smart-auth.js your-account
 ```
 
-The token is written to `~/.santo-agent/oauth/your-account.tasks.json` (mode 600). Default account `your-account`; override with `TASKS_DEFAULT_IDENTITY` in `~/.config/smart-mcps/.env`.
+The token is written to `~/.santo-agent/oauth/your-account.tasks.json` (mode 600). Requires `TASKS_DEFAULT_IDENTITY` in `~/.config/smart-mcps/.env`.

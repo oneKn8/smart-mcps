@@ -10,25 +10,22 @@ export interface GDriveContext {
   client: GDriveClient;
 }
 
-const DEFAULT_IDENTITY = "your-account";
-
 type GDriveCreds = {
-  GDRIVE_DEFAULT_IDENTITY?: string;
+  GDRIVE_DEFAULT_IDENTITY: string;
 };
 
 /**
  * Construct the runtime context. Resolves `GDRIVE_DEFAULT_IDENTITY` from
- * env / shared `.env` / per-service config; defaults to `"your-account"`
- * when unset. The GDriveClient constructor is side-effect-free — no token
+ * env / shared `.env` / per-service config; throws `AuthError` at
+ * startup when unset. The GDriveClient constructor is side-effect-free — no token
  * file is opened here.
  */
 export function buildContext(home?: string): GDriveContext {
   const creds = loadCreds<Record<string, string>>({
     serviceName: "gdrive-smart",
-    required: [],
-    optional: ["GDRIVE_DEFAULT_IDENTITY"],
+    required: ["GDRIVE_DEFAULT_IDENTITY"],
   }) as GDriveCreds;
-  const account = creds.GDRIVE_DEFAULT_IDENTITY ?? DEFAULT_IDENTITY;
+  const account = creds.GDRIVE_DEFAULT_IDENTITY;
   return {
     client: new GDriveClient(
       account,

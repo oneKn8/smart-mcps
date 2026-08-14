@@ -434,7 +434,7 @@ export class VercelClient {
   /**
    * Resolve a project for a WRITE: strict resolution (M5 — refuses ambiguous
    * cross-team names) plus a team deny-list check so no mutation ever lands on a
-   * protected team's project (default: example-denied-team). Read paths keep using
+   * protected team's project (configured via VERCEL_SMART_DENIED_TEAMS). Read paths keep using
    * resolveProjectStrict directly, so reads of a denied team still work.
    */
   async resolveProjectStrictForWrite(

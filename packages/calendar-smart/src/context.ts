@@ -10,25 +10,22 @@ export interface CalendarContext {
   client: CalendarClient;
 }
 
-const DEFAULT_IDENTITY = "your-account";
-
 type CalendarCreds = {
-  CALENDAR_DEFAULT_IDENTITY?: string;
+  CALENDAR_DEFAULT_IDENTITY: string;
 };
 
 /**
  * Construct the runtime context. Resolves `CALENDAR_DEFAULT_IDENTITY` from
- * env / shared `.env` / per-service config; defaults to `"your-account"`
- * when unset. The CalendarClient constructor is side-effect-free — no token
+ * env / shared `.env` / per-service config; throws `AuthError` at
+ * startup when unset. The CalendarClient constructor is side-effect-free — no token
  * file is opened here.
  */
 export function buildContext(home?: string): CalendarContext {
   const creds = loadCreds<Record<string, string>>({
     serviceName: "calendar-smart",
-    required: [],
-    optional: ["CALENDAR_DEFAULT_IDENTITY"],
+    required: ["CALENDAR_DEFAULT_IDENTITY"],
   }) as CalendarCreds;
-  const account = creds.CALENDAR_DEFAULT_IDENTITY ?? DEFAULT_IDENTITY;
+  const account = creds.CALENDAR_DEFAULT_IDENTITY;
   return {
     client: new CalendarClient(
       account,

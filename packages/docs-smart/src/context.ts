@@ -10,25 +10,22 @@ export interface DocsContext {
   client: DocsClient;
 }
 
-const DEFAULT_IDENTITY = "your-account";
-
 type DocsCreds = {
-  DOCS_DEFAULT_IDENTITY?: string;
+  DOCS_DEFAULT_IDENTITY: string;
 };
 
 /**
  * Construct the runtime context. Resolves `DOCS_DEFAULT_IDENTITY` from
- * env / shared `.env` / per-service config; defaults to `"your-account"`
- * when unset. The DocsClient constructor is side-effect-free — no token
+ * env / shared `.env` / per-service config; throws `AuthError` at
+ * startup when unset. The DocsClient constructor is side-effect-free — no token
  * file is opened here.
  */
 export function buildContext(home?: string): DocsContext {
   const creds = loadCreds<Record<string, string>>({
     serviceName: "docs-smart",
-    required: [],
-    optional: ["DOCS_DEFAULT_IDENTITY"],
+    required: ["DOCS_DEFAULT_IDENTITY"],
   }) as DocsCreds;
-  const account = creds.DOCS_DEFAULT_IDENTITY ?? DEFAULT_IDENTITY;
+  const account = creds.DOCS_DEFAULT_IDENTITY;
   return {
     client: new DocsClient(
       account,

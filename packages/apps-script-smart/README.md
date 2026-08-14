@@ -84,6 +84,6 @@ Multi-account: enroll additional accounts by minting a token for each basename, 
 node packages/apps-script-smart/dist/bin/apps-script-smart-auth.js work-acct
 ```
 
-writes `~/.santo-agent/oauth/work-acct.script.json`. Any tool then targets it by passing `account: "work-acct"`. Account resolution when `account` is omitted: explicit arg, else the `APPS_SCRIPT_DEFAULT_IDENTITY` env var, else the default `your-account`. Set `APPS_SCRIPT_DEFAULT_IDENTITY` in `~/.config/smart-mcps/.env` to change the default.
+writes `~/.santo-agent/oauth/work-acct.script.json`. Any tool then targets it by passing `account: "work-acct"`. Account resolution when `account` is omitted: explicit arg, else the required `APPS_SCRIPT_DEFAULT_IDENTITY` env var. Set it in `~/.config/smart-mcps/.env`.
 
 The auth CLI requests the four management scopes (`script.projects`, `script.deployments`, `script.processes`, `script.metrics`). For `run_function`, re-mint with the additional runtime scopes the target script declares (see the setup section above).

@@ -13,26 +13,23 @@ export interface AppsScriptContext {
   defaultAccount: string;
 }
 
-const DEFAULT_IDENTITY = "your-account";
-
 type AppsScriptCreds = {
-  APPS_SCRIPT_DEFAULT_IDENTITY?: string;
+  APPS_SCRIPT_DEFAULT_IDENTITY: string;
 };
 
 /**
  * Construct the runtime context. Resolves the default account from
  * `APPS_SCRIPT_DEFAULT_IDENTITY` (env / shared `.env` / per-service config),
- * defaulting to `"your-account"` when unset. The AppsScriptClient is now
+ * throwing `AuthError` at startup when unset. The AppsScriptClient is now
  * account-agnostic — each tool call passes its resolved account — so the
  * constructor takes only the optional `home` override and opens no token file.
  */
 export function buildContext(home?: string): AppsScriptContext {
   const creds = loadCreds<Record<string, string>>({
     serviceName: "apps-script-smart",
-    required: [],
-    optional: ["APPS_SCRIPT_DEFAULT_IDENTITY"],
+    required: ["APPS_SCRIPT_DEFAULT_IDENTITY"],
   }) as AppsScriptCreds;
-  const defaultAccount = creds.APPS_SCRIPT_DEFAULT_IDENTITY ?? DEFAULT_IDENTITY;
+  const defaultAccount = creds.APPS_SCRIPT_DEFAULT_IDENTITY;
   return {
     client: new AppsScriptClient(home),
     defaultAccount,

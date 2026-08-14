@@ -126,7 +126,7 @@ Calendar-smart reuses the `~/.santo-agent/` OAuth token jar pattern but writes t
    npm install
    npm run build --workspace=calendar-smart
    ```
-3. Mint a calendar token (default account: `your-account`):
+3. Mint a calendar token (use your Google account username, e.g. `your-account`):
    ```bash
    node packages/calendar-smart/dist/bin/calendar-smart-auth.js your-account
    ```
@@ -166,7 +166,7 @@ Optional default-identity override in `~/.config/smart-mcps/.env`:
 # CALENDAR_DEFAULT_IDENTITY=your-account
 ```
 
-When unset the MCP defaults to `your-account`. Multi-account is on the deferred list.
+`CALENDAR_DEFAULT_IDENTITY` is required; the MCP fails at startup when it is unset. Multi-account is on the deferred list.
 
 The token itself never lives in `.env` — it's at `~/.santo-agent/oauth/<account>.calendar.json` (mode 600).
 

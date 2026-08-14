@@ -10,25 +10,22 @@ export interface SheetsContext {
   client: SheetsClient;
 }
 
-const DEFAULT_IDENTITY = "your-account";
-
 type SheetsCreds = {
-  SHEETS_DEFAULT_IDENTITY?: string;
+  SHEETS_DEFAULT_IDENTITY: string;
 };
 
 /**
  * Construct the runtime context. Resolves `SHEETS_DEFAULT_IDENTITY` from env /
- * shared `.env` / per-service config; defaults to `"your-account"` when unset.
+ * shared `.env` / per-service config; throws `AuthError` at startup when unset.
  * The SheetsClient constructor is side-effect-free — no token file is opened
  * here.
  */
 export function buildContext(home?: string): SheetsContext {
   const creds = loadCreds<Record<string, string>>({
     serviceName: "sheets-smart",
-    required: [],
-    optional: ["SHEETS_DEFAULT_IDENTITY"],
+    required: ["SHEETS_DEFAULT_IDENTITY"],
   }) as SheetsCreds;
-  const account = creds.SHEETS_DEFAULT_IDENTITY ?? DEFAULT_IDENTITY;
+  const account = creds.SHEETS_DEFAULT_IDENTITY;
   return {
     client: new SheetsClient(
       account,

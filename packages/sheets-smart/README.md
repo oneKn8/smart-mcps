@@ -54,4 +54,4 @@ Mints `~/.santo-agent/oauth/<account>.sheets.json` (0600) via loopback OAuth con
 
 ## Default account
 
-`SHEETS_DEFAULT_IDENTITY` env (else `your-account`).
+`SHEETS_DEFAULT_IDENTITY` env (required).

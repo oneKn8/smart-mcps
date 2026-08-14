@@ -26,7 +26,7 @@ import {
 // global `fetch` and use REAL temp files under os.tmpdir() for the disk I/O.
 // No msw here — msw is for the JSON `fetchJson` path only.
 
-const ACCOUNT = "your-account";
+const ACCOUNT = "alpha-account";
 const TOKEN = "tok_media_test";
 const getToken = async (): Promise<string> => TOKEN;
 

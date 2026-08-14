@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { AuthError } from "smart-mcp-core";
 import { CalendarClient } from "../client.js";
 import { buildContext } from "../context.js";
 
@@ -8,6 +9,9 @@ let savedIdentity: string | undefined;
 beforeEach(() => {
   savedHome = process.env.HOME;
   savedIdentity = process.env.CALENDAR_DEFAULT_IDENTITY;
+  // Isolate from the real ~/.config/smart-mcps/.env so the shared file can
+  // never satisfy (or fail to satisfy) the identity requirement for us.
+  process.env.HOME = "/nonexistent-calendar-smart-test-home";
 });
 
 afterEach(() => {
@@ -17,22 +21,21 @@ afterEach(() => {
   else process.env.CALENDAR_DEFAULT_IDENTITY = savedIdentity;
 });
 
-describe("buildContext — default identity resolution", () => {
-  it("defaults account to 'your-account' when CALENDAR_DEFAULT_IDENTITY is unset", () => {
+describe("buildContext — identity resolution", () => {
+  it("throws AuthError when CALENDAR_DEFAULT_IDENTITY is unset", () => {
     delete process.env.CALENDAR_DEFAULT_IDENTITY;
-    const ctx = buildContext();
-    expect(ctx.client).toBeInstanceOf(CalendarClient);
-    expect(ctx.client.getAccount()).toBe("your-account");
+    expect(() => buildContext()).toThrow(AuthError);
   });
 
   it("honors CALENDAR_DEFAULT_IDENTITY env override", () => {
     process.env.CALENDAR_DEFAULT_IDENTITY = "alice";
     const ctx = buildContext();
+    expect(ctx.client).toBeInstanceOf(CalendarClient);
     expect(ctx.client.getAccount()).toBe("alice");
   });
 
   it("threads the home override through to the constructor without throwing", () => {
-    delete process.env.CALENDAR_DEFAULT_IDENTITY;
+    process.env.CALENDAR_DEFAULT_IDENTITY = "alice";
     const ctx = buildContext("/tmp/scaffold-home");
     expect(ctx.client).toBeInstanceOf(CalendarClient);
   });
