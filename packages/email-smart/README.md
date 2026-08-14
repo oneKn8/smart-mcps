@@ -112,7 +112,7 @@ npm run build
 ./scripts/install-clients.sh email-smart
 ```
 
-Restart Claude Code / Cursor and run `/mcp`. `email-smart` should show 18 tools.
+Restart Claude Code / Cursor and run `/mcp`. `email-smart` should show 53 tools.
 
 ## Build & test
 
