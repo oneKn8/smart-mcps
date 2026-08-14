@@ -9,10 +9,13 @@
     ".": { "types": "./dist/server.d.ts", "import": "./dist/server.js" },
     "./client": { "types": "./dist/client.d.ts", "import": "./dist/client.js" }
   },
-  "bin": { "email-smart": "dist/server.js" },
+  "bin": {
+    "email-smart": "dist/server.js",
+    "email-smart-auth": "dist/bin/email-smart-auth.js"
+  },
   "files": ["dist"],
   "scripts": {
-    "build": "tsc -p tsconfig.json && chmod +x dist/server.js",
+    "build": "tsc -p tsconfig.json && chmod +x dist/server.js dist/bin/email-smart-auth.js",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
