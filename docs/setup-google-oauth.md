@@ -100,6 +100,7 @@ node packages/gdrive-smart/dist/bin/gdrive-smart-auth.js personal
 node packages/docs-smart/dist/bin/docs-smart-auth.js personal
 node packages/sheets-smart/dist/bin/sheets-smart-auth.js personal
 node packages/apps-script-smart/dist/bin/apps-script-smart-auth.js personal
+node packages/email-smart/dist/bin/email-smart-auth.js personal
 ```
 
 Each CLI prints an authorization URL. Open it in a browser, sign in as the
@@ -118,7 +119,7 @@ scopes never mix:
 | `docs-smart` | `<account>.docs.json` | `auth/documents`, `auth/drive.file` |
 | `sheets-smart` | `<account>.sheets.json` | `auth/spreadsheets`, `auth/drive` |
 | `apps-script-smart` | `<account>.script.json` | `auth/script.projects`, `.deployments`, `.processes`, `.metrics`, `.external_request` |
-| `email-smart` | `<account>.json` | `auth/gmail.modify` (see below) |
+| `email-smart` | `<account>.json` | `https://mail.google.com/`, `auth/gmail.settings.basic`, `auth/gmail.settings.sharing` (see below) |
 
 Access tokens auto-refresh: each server refreshes against
 `oauth2.googleapis.com/token` about a minute before expiry and rewrites its
@@ -145,16 +146,32 @@ Only add the lines for servers you actually registered. `email-smart` does
 not use a `*_DEFAULT_IDENTITY` variable; every tool call passes an explicit
 `account` argument instead.
 
-## email-smart: two extra pieces
+## email-smart: three things to know
 
-`email-smart` predates the bundled auth CLIs and reads a token file with no
-server suffix: `~/.santo-agent/oauth/<account>.json`, with the
-`https://www.googleapis.com/auth/gmail.modify` scope. Its error messages
-reference `python3 ~/.santo-agent/bin/auth.py`, a bootstrap script from the
-author's machine that is **not part of this repo**. Until an `email-smart-auth`
-CLI ships, mint the file yourself: any OAuth flow for your Desktop client
-requesting `gmail.modify` works, and the file must be JSON of exactly this
-shape (Google's authorized_user format plus `expiry`):
+Mint the token with the bundled CLI, same as every other server:
+
+```bash
+node packages/email-smart/dist/bin/email-smart-auth.js <account>
+```
+
+First, the file layout: `email-smart` predates the per-server token-file
+suffixes and reads a token file with no server suffix —
+`~/.santo-agent/oauth/<account>.json`, not `<account>.email.json`. The CLI
+writes to that bare path.
+
+Second, the scopes. The CLI requests the minimal set covering every shipped
+tool: `https://mail.google.com/` (the permanent-delete tools reject
+`gmail.modify`, and the full mail scope also covers the send/read/modify
+surface), `gmail.settings.basic` (filters, vacation, imap/pop/language,
+send-as), and `gmail.settings.sharing` (auto-forwarding, forwarding
+addresses, delegates). Some `email-smart` error messages still reference
+`python3 ~/.santo-agent/bin/auth.py`, a bootstrap script from the author's
+machine that is **not part of this repo** — whenever you see that, run the
+CLI above instead.
+
+The token file is JSON of exactly this shape (Google's authorized_user
+format plus `expiry`), validated field-by-field at load time; any missing
+field produces an `AuthError` naming it:
 
 ```json
 {
@@ -163,14 +180,10 @@ shape (Google's authorized_user format plus `expiry`):
   "token_uri": "https://oauth2.googleapis.com/token",
   "client_id": "<from client.json>",
   "client_secret": "<from client.json>",
-  "scopes": ["https://www.googleapis.com/auth/gmail.modify"],
+  "scopes": ["https://mail.google.com/", "..."],
   "expiry": "<ISO-8601 timestamp>"
 }
 ```
-
-The bundled CLIs write exactly this shape, so adapting one is
-straightforward; the file is validated field-by-field at load time and any
-missing field produces an `AuthError` naming it.
 
 `email-smart` also requires an identity file per account at
 `~/.santo-agent/identities/<account>.yaml`:

@@ -2,7 +2,7 @@
 
 Multi-account Gmail MCP — send + inbox read + reversible bulk modify + drafts + bulk-unsubscribe. Wraps the existing `~/.santo-agent/` OAuth token jar. Part of the [smart-mcps](../../README.md) monorepo. Built on `smart-mcp-core`.
 
-Scope: `gmail.modify` only. Never `gmail.delete` or full-mailbox.
+Scopes: `https://mail.google.com/` (the permanent-delete tools require the full mail scope; it also covers the send/read/modify surface), `gmail.settings.basic`, `gmail.settings.sharing`. Permanent-delete tools are hard-gated behind `confirm` and `dry_run`.
 
 ## Tools (27)
 
@@ -80,12 +80,14 @@ This MCP reuses the `~/.santo-agent/` OAuth token jar. **No `~/.config/smart-mcp
 
 For each Gmail account you want to use:
 
-1. Make sure the OAuth scope `https://www.googleapis.com/auth/gmail.modify` is added to your Google Cloud OAuth consent screen.
-2. Run the Python auth bootstrap:
+1. Drop a Google OAuth Desktop client at `~/.santo-agent/oauth/client.json` (Google Cloud Console -> APIs & Services -> Credentials -> Desktop app) and enable the **Gmail API** on the project. See [docs/setup-google-oauth.md](../../docs/setup-google-oauth.md) for the full walkthrough.
+2. Build the workspace and mint a token with the bundled CLI:
    ```bash
-   python3 ~/.santo-agent/bin/auth.py --account <account-name>
+   npm install
+   npm run build --workspace=email-smart
+   node packages/email-smart/dist/bin/email-smart-auth.js <account-name>
    ```
-   Browser opens, sign in, consent to the broader scope, refresh token saved to `~/.santo-agent/oauth/<account-name>.json` (mode 0600).
+   The CLI prints an authorization URL, spins up a localhost loopback HTTP server, waits for Google to redirect back with the code, exchanges it, and writes the token to `~/.santo-agent/oauth/<account-name>.json` (mode 0600). It requests `https://mail.google.com/`, `gmail.settings.basic`, and `gmail.settings.sharing` — the minimal set covering every shipped tool.
 3. Drop an identity yaml at `~/.santo-agent/identities/<account-name>.yaml`:
    ```yaml
    account: <account-name>
@@ -124,6 +126,6 @@ npm test --workspace=email-smart
 
 - **Multi-account by design.** Every tool requires `account: string`. Pass any configured account; the MCP loads its own OAuth token + identity yaml for that account.
 - **Audit log shared with Python.** Both this MCP and `~/.santo-agent/bin/send-email.py` append to the same `~/.santo-agent/audit/send-log.jsonl`. Field order matches.
-- **`gmail.modify` is the ceiling.** This MCP can send, read, archive, trash, label, mark-read. It cannot permanently delete (which would need `gmail.delete` — deliberately excluded). Trash auto-purges in 30 days; until then, items are recoverable from the Trash folder.
-- **SMTP transport not yet supported.** If a Workspace EDU account (e.g. UTD) blocks third-party OAuth Desktop apps, `auth.py` will fail. For those accounts you'd need an SMTP transport adapter (deferred to Phase 3.5).
+- **Permanent delete requires the full mail scope.** `delete_message_permanent`, `batch_delete_messages`, and `delete_thread_permanent` bypass Trash and cannot be undone; Gmail rejects them under `gmail.modify`, which is why `email-smart-auth` requests `https://mail.google.com/`. All three are hard-gated behind `confirm: true` (the batch tool additionally defaults to `dry_run: true`). Everything else that removes mail goes through Trash (auto-purges in 30 days; recoverable until then).
+- **SMTP transport not yet supported.** If a Workspace EDU account (e.g. UTD) blocks third-party OAuth Desktop apps, `email-smart-auth` will fail at the consent screen. For those accounts you'd need an SMTP transport adapter (deferred to Phase 3.5).
 - **Dry-run defaults on bulk modify.** Calling any of the four bulk modify tools without explicitly setting `dry_run: false` returns a preview only. This is the safest default for an LLM caller.
