@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Setup help
+    url: https://github.com/oneKn8/smart-mcps#five-minute-quickstart-zero-credentials
+    about: Start with the README quickstart (weather-smart needs no credentials). Google OAuth setup is covered in docs/setup-google-oauth.md.

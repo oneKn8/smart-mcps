@@ -1,0 +1,62 @@
+name: Bug report
+description: A server fails to build, boot, or a tool misbehaves
+labels: [bug]
+body:
+  - type: dropdown
+    id: server
+    attributes:
+      label: Server
+      options:
+        - apps-script-smart
+        - calendar-smart
+        - docs-smart
+        - drive-smart
+        - email-smart
+        - flow-smart
+        - gdrive-smart
+        - hetzner-smart
+        - runpod-smart
+        - sheets-smart
+        - slack-smart
+        - tasks-smart
+        - vercel-smart
+        - weather-smart
+        - smart-mcp-core / monorepo (build, install, scripts)
+    validations:
+      required: true
+  - type: input
+    id: tool
+    attributes:
+      label: Tool name
+      description: The MCP tool involved, if any (e.g. daily_brief)
+    validations:
+      required: false
+  - type: textarea
+    id: ran
+    attributes:
+      label: What you ran
+      description: Exact command or MCP tool call, plus relevant setup (env vars by NAME only, never values)
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected vs actual
+      description: What you expected, and what happened instead (paste the full error)
+    validations:
+      required: true
+  - type: textarea
+    id: smoke
+    attributes:
+      label: Smoke-boot output
+      description: "Output and exit code of: timeout 3 node packages/<server>/dist/server.js < /dev/null; echo $?"
+      render: shell
+    validations:
+      required: true
+  - type: input
+    id: node
+    attributes:
+      label: Node version
+      description: Output of node -v (this repo requires 22+)
+    validations:
+      required: true
