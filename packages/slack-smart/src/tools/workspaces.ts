@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { defineTool } from "smart-mcp-core";
 import type { SlackContext } from "../context.js";
+import { tokenKind } from "../workspaces.js";
 
 const inputSchema = z.object({
   check: z
@@ -15,6 +16,7 @@ type Input = z.infer<typeof inputSchema>;
 type WorkspaceStatus = {
   name: string;
   default: boolean;
+  token_kind: "oauth" | "session";
   has_bot_token: boolean;
   team?: string;
   team_id?: string;
@@ -29,8 +31,7 @@ type Output = { workspaces: WorkspaceStatus[] };
 export const list_workspaces = defineTool<Input, Output, SlackContext>({
   name: "list_workspaces",
   description:
-    "List Slack workspaces, which is default, and whether each token works. " +
-    "Pass workspace on any tool to act there.",
+    "List configured Slack workspaces and whether each token still works.",
   inputSchema: inputSchema as unknown as z.ZodType<Input>,
   handler: async (input, context) => {
     const registry = context.workspaces;
@@ -40,6 +41,7 @@ export const list_workspaces = defineTool<Input, Output, SlackContext>({
       const status: WorkspaceStatus = {
         name,
         default: name === registry.defaultName,
+        token_kind: tokenKind(entry.userToken),
         has_bot_token: entry.botToken !== undefined,
       };
       if (input.check) {

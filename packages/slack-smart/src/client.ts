@@ -38,7 +38,20 @@ function assertSlackFileHost(rawUrl: string): void {
 export type SlackCreds = {
   SLACK_USER_TOKEN: string;
   SLACK_BOT_TOKEN?: string;
+  /**
+   * Value of Slack's `d` session cookie. Required when SLACK_USER_TOKEN is a
+   * web-client session token (`xoxc-...`): Slack only honours those together
+   * with the cookie of the browser session that minted them.
+   */
+  SLACK_COOKIE?: string;
 };
+
+/** Normalise a pasted cookie ("d=abc", "abc", or a full cookie line) to `d=abc`. */
+export function normalizeSessionCookie(raw: string): string {
+  const match = raw.match(/(?:^|;\s*)d=([^;]+)/);
+  const value = match ? match[1] : raw.trim();
+  return `d=${value}`;
+}
 
 // Pagination convention: methods that accept a cursor pass it as `cursor` in
 // args and read `response_metadata.next_cursor` from the response to get the
@@ -88,14 +101,21 @@ export class SlackClient {
     opts: { token?: "user" | "bot"; http?: "GET" | "POST" } = {},
   ): Promise<T> {
     const url = `https://slack.com/api/${method}`;
-    const token = this.tokenFor(opts.token ?? "user");
+    const which = opts.token ?? "user";
+    const token = this.tokenFor(which);
     const httpMethod = opts.http ?? "GET";
+    // A session token is only valid alongside its browser cookie.
+    const headers: Record<string, string> =
+      which === "user" && this.creds.SLACK_COOKIE
+        ? { cookie: normalizeSessionCookie(this.creds.SLACK_COOKIE) }
+        : {};
 
     let body: T;
     if (httpMethod === "GET") {
       // GET callers only ever pass primitives — cast is safe.
       body = await fetchJson<T>(url, {
         token,
+        headers,
         searchParams: args as Record<string, string | number | boolean | undefined>,
       });
     } else {
@@ -104,7 +124,12 @@ export class SlackClient {
       for (const [k, v] of Object.entries(args)) {
         if (v !== undefined) cleanArgs[k] = v;
       }
-      body = await fetchJson<T>(url, { method: "POST", token, body: cleanArgs });
+      body = await fetchJson<T>(url, {
+        method: "POST",
+        token,
+        headers,
+        body: cleanArgs,
+      });
     }
 
     if (!body.ok) {

@@ -15,7 +15,7 @@ import {
   RateLimitError,
   UpstreamError,
 } from "smart-mcp-core";
-import { SlackClient } from "../client.js";
+import { SlackClient, normalizeSessionCookie } from "../client.js";
 
 const server = setupServer();
 beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
@@ -227,5 +227,43 @@ describe("SlackClient.authTest", () => {
     const client = new SlackClient();
     const result = await client.authTest();
     expect(result).toEqual(identity);
+  });
+});
+
+describe("session cookie", () => {
+  it("sends the d cookie with user-token calls when configured", async () => {
+    let seenCookie: string | null = null;
+    let seenAuth: string | null = null;
+    server.use(
+      http.get("https://slack.com/api/auth.test", ({ request }) => {
+        seenCookie = request.headers.get("cookie");
+        seenAuth = request.headers.get("authorization");
+        return HttpResponse.json({ ok: true, user_id: "U1", team_id: "T1" });
+      }),
+    );
+    const client = new SlackClient({ SLACK_USER_TOKEN: "xoxc-s", SLACK_COOKIE: "abc" });
+    await client.slackCall("auth.test");
+    expect(seenCookie).toBe("d=abc");
+    expect(seenAuth).toBe("Bearer xoxc-s");
+  });
+
+  it("sends no cookie header when none is configured", async () => {
+    let seenCookie: string | null = "unset";
+    server.use(
+      http.get("https://slack.com/api/auth.test", ({ request }) => {
+        seenCookie = request.headers.get("cookie");
+        return HttpResponse.json({ ok: true, user_id: "U1", team_id: "T1" });
+      }),
+    );
+    const client = new SlackClient({ SLACK_USER_TOKEN: "xoxp-o" });
+    await client.slackCall("auth.test");
+    expect(seenCookie).toBeNull();
+  });
+
+  it("normalises pasted cookie shapes", () => {
+    expect(normalizeSessionCookie("abc")).toBe("d=abc");
+    expect(normalizeSessionCookie("d=abc")).toBe("d=abc");
+    expect(normalizeSessionCookie("b=1; d=abc; x=2")).toBe("d=abc");
+    expect(normalizeSessionCookie("  abc  ")).toBe("d=abc");
   });
 });

@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { AuthError, ValidationError } from "smart-mcp-core";
 import {
   discoverWorkspaces,
+  tokenKind,
   WorkspaceRegistry,
   type WorkspaceEntry,
 } from "../workspaces.js";
@@ -128,5 +129,46 @@ describe("WorkspaceRegistry", () => {
     const { reg } = registry(env);
     expect(() => reg.clientFor("litellm")).toThrow(ValidationError);
     expect(() => reg.clientFor("litellm")).toThrow(/tbc, vllm/);
+  });
+});
+
+describe("session tokens", () => {
+  it("attaches SLACK_COOKIE_<NAME> to a session-token workspace", () => {
+    const found = discoverWorkspaces({
+      SLACK_USER_TOKEN_VLLM: "xoxc-session",
+      SLACK_COOKIE_VLLM: "d=abc",
+    });
+    expect(found.workspaces.get("vllm")).toEqual({
+      name: "vllm",
+      userToken: "xoxc-session",
+      cookie: "d=abc",
+    });
+    expect(tokenKind("xoxc-session")).toBe("session");
+    expect(tokenKind("xoxp-oauth")).toBe("oauth");
+  });
+
+  it("refuses a session token without its cookie, naming the key to set", () => {
+    expect(() => discoverWorkspaces({ SLACK_USER_TOKEN_VLLM: "xoxc-session" })).toThrow(
+      /SLACK_COOKIE_VLLM/,
+    );
+  });
+
+  it("accepts an oauth token without a cookie and keeps a cookie if given", () => {
+    const found = discoverWorkspaces({
+      SLACK_USER_TOKEN_TBC: "xoxp-oauth",
+      SLACK_COOKIE_TBC: "d=ignored-but-kept",
+    });
+    expect(found.workspaces.get("tbc")?.cookie).toBe("d=ignored-but-kept");
+  });
+
+  it("refuses a cookie with no user token for the same workspace", () => {
+    expect(() =>
+      discoverWorkspaces({ SLACK_USER_TOKEN_TBC: "a", SLACK_COOKIE_VLLM: "d=x" }),
+    ).toThrow(/SLACK_COOKIE_VLLM/);
+  });
+
+  it("supports the legacy bare pair with SLACK_COOKIE", () => {
+    const found = discoverWorkspaces({ SLACK_USER_TOKEN: "xoxc-s", SLACK_COOKIE: "d=z" });
+    expect(found.workspaces.get("default")?.cookie).toBe("d=z");
   });
 });

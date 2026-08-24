@@ -11,7 +11,14 @@ export type WorkspaceEntry = {
   name: string;
   userToken: string;
   botToken?: string;
+  /** Slack `d` session cookie; present when userToken is an `xoxc-` session token. */
+  cookie?: string;
 };
+
+/** Whether a user token came from the OAuth install flow or a browser session. */
+export function tokenKind(userToken: string): "oauth" | "session" {
+  return userToken.startsWith("xoxc-") ? "session" : "oauth";
+}
 
 export type DiscoveredWorkspaces = {
   workspaces: Map<string, WorkspaceEntry>;
@@ -22,6 +29,8 @@ const USER_PREFIX = "SLACK_USER_TOKEN_";
 const BOT_PREFIX = "SLACK_BOT_TOKEN_";
 const LEGACY_USER = "SLACK_USER_TOKEN";
 const LEGACY_BOT = "SLACK_BOT_TOKEN";
+const COOKIE_PREFIX = "SLACK_COOKIE_";
+const LEGACY_COOKIE = "SLACK_COOKIE";
 const DEFAULT_KEY = "SLACK_DEFAULT_WORKSPACE";
 const LEGACY_NAME = "default";
 const SHARED_ENV_PATH = "~/.config/smart-mcps/.env";
@@ -41,36 +50,61 @@ export function discoverWorkspaces(
   const workspaces = new Map<string, WorkspaceEntry>();
   const orphanBots: string[] = [];
 
+  const build = (
+    name: string,
+    userToken: string,
+    botToken: string | undefined,
+    cookie: string | undefined,
+    cookieKey: string,
+  ): WorkspaceEntry => {
+    if (tokenKind(userToken) === "session" && !present(cookie)) {
+      throw new AuthError(
+        `Workspace "${name}" uses a browser session token (xoxc-...), which Slack ` +
+          `only accepts together with the browser's d cookie. Set ${cookieKey}.`,
+      );
+    }
+    return {
+      name,
+      userToken,
+      ...(present(botToken) ? { botToken } : {}),
+      ...(present(cookie) ? { cookie } : {}),
+    };
+  };
+
   for (const [key, value] of Object.entries(env)) {
     if (!key.startsWith(USER_PREFIX) || !present(value)) continue;
-    const name = key.slice(USER_PREFIX.length).toLowerCase();
-    const botToken = env[BOT_PREFIX + key.slice(USER_PREFIX.length)];
-    workspaces.set(name, {
+    const suffix = key.slice(USER_PREFIX.length);
+    const name = suffix.toLowerCase();
+    workspaces.set(
       name,
-      userToken: value,
-      ...(present(botToken) ? { botToken } : {}),
-    });
+      build(
+        name,
+        value,
+        env[BOT_PREFIX + suffix],
+        env[COOKIE_PREFIX + suffix],
+        COOKIE_PREFIX + suffix,
+      ),
+    );
   }
 
   for (const [key, value] of Object.entries(env)) {
-    if (!key.startsWith(BOT_PREFIX) || !present(value)) continue;
-    const suffix = key.slice(BOT_PREFIX.length);
+    const prefix = [BOT_PREFIX, COOKIE_PREFIX].find(p => key.startsWith(p));
+    if (!prefix || !present(value)) continue;
+    const suffix = key.slice(prefix.length);
     if (!workspaces.has(suffix.toLowerCase())) orphanBots.push(key);
   }
   if (orphanBots.length > 0) {
     throw new AuthError(
-      `Bot token(s) without a matching user token: ${orphanBots.join(", ")}. ` +
-        `Each SLACK_BOT_TOKEN_<NAME> needs a SLACK_USER_TOKEN_<NAME>.`,
+      `Bot token(s) or cookie(s) without a matching user token: ${orphanBots.join(", ")}. ` +
+        `Each SLACK_BOT_TOKEN_<NAME> or SLACK_COOKIE_<NAME> needs a SLACK_USER_TOKEN_<NAME>.`,
     );
   }
 
   if (workspaces.size === 0 && present(env[LEGACY_USER])) {
-    const botToken = env[LEGACY_BOT];
-    workspaces.set(LEGACY_NAME, {
-      name: LEGACY_NAME,
-      userToken: env[LEGACY_USER],
-      ...(present(botToken) ? { botToken } : {}),
-    });
+    workspaces.set(
+      LEGACY_NAME,
+      build(LEGACY_NAME, env[LEGACY_USER], env[LEGACY_BOT], env[LEGACY_COOKIE], LEGACY_COOKIE),
+    );
   }
 
   if (workspaces.size === 0) {
@@ -168,5 +202,6 @@ function toCreds(entry: WorkspaceEntry): SlackCreds {
   return {
     SLACK_USER_TOKEN: entry.userToken,
     ...(entry.botToken !== undefined ? { SLACK_BOT_TOKEN: entry.botToken } : {}),
+    ...(entry.cookie !== undefined ? { SLACK_COOKIE: entry.cookie } : {}),
   };
 }

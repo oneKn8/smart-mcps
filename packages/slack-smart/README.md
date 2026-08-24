@@ -37,6 +37,15 @@ Every tool accepts an optional `workspace` (the suffix, case-insensitive) and ru
 
 To add a workspace later, repeat steps 1 and 3 there (the same manifest works in any workspace you are a member of; some workspaces route the install through admin approval), then add its `SLACK_USER_TOKEN_<NAME>` line.
 
+**Workspaces that will not approve your app.** Slack's own web client holds a user token too (`xoxc-...`), valid only together with the browser's `d` cookie. Configure that pair instead of an OAuth token and every tool works as you, with no app install:
+
+```bash
+SLACK_USER_TOKEN_OSS=xoxc-...    # from app.slack.com local storage, key localConfig_v2, that team's "token"
+SLACK_COOKIE_OSS=d=...           # the d cookie for app.slack.com (DevTools -> Application -> Cookies)
+```
+
+The pair expires when you sign out of that workspace in the browser; `list_workspaces` reports `token_kind: session` and shows the auth error when it does. Treat both values as passwords.
+
 ## Registration
 
 Build and register with the multi-client installer from the repo root:
@@ -58,7 +67,7 @@ Write tools are confirm-gated: they throw a `ConfirmRequiredError` with a human-
 | Name | Description |
 |---|---|
 | `whoami` | Return the authenticated user's id, name, and team info. |
-| `list_workspaces` | List configured workspaces, the default, and whether each token still authenticates. |
+| `list_workspaces` | List configured Slack workspaces and whether each token still works. |
 
 ### Conversations (15)
 
