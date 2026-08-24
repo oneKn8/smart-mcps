@@ -32,6 +32,7 @@ const EXPECTED_TOOL_NAMES = [
   "list_scheduled",
   "list_usergroups",
   "list_users",
+    "list_workspaces",
   "lookup_by_email",
   "mark_read",
   "mentions",
@@ -67,12 +68,12 @@ const EXPECTED_TOOL_NAMES = [
 ];
 
 describe("slack-smart tool wiring", () => {
-  it("exports the exact set of 62 tool names (sorted)", () => {
+  it("exports the exact set of 63 tool names (sorted)", () => {
     expect(tools.map((t) => t.name).sort()).toEqual(EXPECTED_TOOL_NAMES);
   });
 
   it("exports the expected number of tools", () => {
-    expect(tools).toHaveLength(62);
+    expect(tools).toHaveLength(63);
   });
 
   it("tool names include the 4 bookmark tools", () => {

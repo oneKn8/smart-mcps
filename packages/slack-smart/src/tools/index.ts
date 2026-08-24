@@ -1,6 +1,7 @@
 import type { ToolDefinition } from "smart-mcp-core";
 import type { SlackContext } from "../context.js";
 import { whoami } from "./identity.js";
+import { list_workspaces } from "./workspaces.js";
 import {
   list_channels,
   channel_history,
@@ -80,6 +81,7 @@ import { create_canvas, update_canvas } from "./canvas.js";
 // canvas (2)
 export const tools: ToolDefinition<unknown, unknown, SlackContext>[] = [
   whoami as unknown as ToolDefinition<unknown, unknown, SlackContext>,
+  list_workspaces as unknown as ToolDefinition<unknown, unknown, SlackContext>,
   list_channels as unknown as ToolDefinition<unknown, unknown, SlackContext>,
   channel_history as unknown as ToolDefinition<unknown, unknown, SlackContext>,
   thread_replies as unknown as ToolDefinition<unknown, unknown, SlackContext>,
