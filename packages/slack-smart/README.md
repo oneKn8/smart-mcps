@@ -28,10 +28,14 @@ Click **Install to Workspace** and authorize. Copy the **User OAuth Token** (`xo
 
 ```bash
 # ~/.config/smart-mcps/.env  (chmod 600)
-SLACK_USER_TOKEN=xoxp-...   # required — every tool runs as you
+SLACK_USER_TOKEN_WORK=xoxp-...   # one line per workspace; the suffix is the workspace name
+SLACK_USER_TOKEN_OSS=xoxp-...
+SLACK_DEFAULT_WORKSPACE=work     # which one tools use when no `workspace` is passed
 ```
 
-`SLACK_USER_TOKEN` is required. The server exits at startup if it is missing. `search.*` tools always use the user token (Slack does not allow bot tokens for search).
+Every tool accepts an optional `workspace` (the suffix, case-insensitive) and runs as you in that workspace; `list_workspaces` shows what is configured and whether each token still authenticates. With a single workspace you can skip `SLACK_DEFAULT_WORKSPACE`, and the older bare `SLACK_USER_TOKEN` still works as a workspace called `default` as long as no named token is set. Bot tokens follow the same pattern (`SLACK_BOT_TOKEN_WORK`). The server exits at startup if no user token is configured or the default is ambiguous. `search.*` tools always use the user token (Slack does not allow bot tokens for search).
+
+To add a workspace later, repeat steps 1 and 3 there (the same manifest works in any workspace you are a member of; some workspaces route the install through admin approval), then add its `SLACK_USER_TOKEN_<NAME>` line.
 
 ## Registration
 
@@ -45,15 +49,16 @@ npm run build
 
 The installer auto-discovers `packages/*/dist/server.js` and registers `slack-smart` in Claude Code (`~/.claude.json`), Cursor (`~/.cursor/mcp.json`), and prints a Codex snippet. After registration, restart your MCP client. Tools appear under the `slack-smart` namespace.
 
-## Tools (62)
+## Tools (63)
 
 Write tools are confirm-gated: they throw a `ConfirmRequiredError` with a human-readable preview unless `confirm: true` is passed. This prevents accidental writes.
 
-### Identity (1)
+### Identity (2)
 
 | Name | Description |
 |---|---|
 | `whoami` | Return the authenticated user's id, name, and team info. |
+| `list_workspaces` | List configured workspaces, the default, and whether each token still authenticates. |
 
 ### Conversations (15)
 
@@ -184,7 +189,7 @@ The first six are read-only; `set_status` and `set_presence` are write — confi
 
 Write tools (`post_message`, `reply_in_thread`, `update_message`, `delete_message`, `schedule_message`, `cancel_scheduled`, `mark_read`, `leave_channel`, `archive_channel`, `add_reaction`, `remove_reaction`, `upload_file`, `delete_file`, `pin_message`, `unpin_message`, `set_snooze`, `end_snooze`, `set_status`, `set_presence`, `add_bookmark`, `edit_bookmark`, `remove_bookmark`, `smart_send`, `invite_to_channel`, `set_channel_purpose`, `set_channel_topic`, `create_channel`, `create_canvas`, `update_canvas`) all call `guardDestructive` before touching the API. `join_channel` is additive and not gated. Without `confirm: true` they return a preview of the action and throw `ConfirmRequiredError`. Pass `confirm: true` to execute.
 
-Read tools default to the user token (`xoxp`). `post_message`, `reply_in_thread`, `update_message`, `delete_message`, `schedule_message`, and `smart_send` accept a `send_as` field: `"user"` (default) uses `SLACK_USER_TOKEN`; `"bot"` uses `SLACK_BOT_TOKEN`. The default is `"user"` because the bot app is often not installed in the target workspace.
+Read tools default to the user token (`xoxp`). `post_message`, `reply_in_thread`, `update_message`, `delete_message`, `schedule_message`, and `smart_send` accept a `send_as` field: `"user"` (default) uses the workspace's user token; `"bot"` uses its bot token. The default is `"user"` because the bot app is often not installed in the target workspace.
 
 `upload_file` takes exactly one source: `file_path`, `content_base64`, or `content_url` (`content_base64`/`content_url` also need `filename`). `file_path` is read from the **server's own filesystem**, so a path produced on another machine will not exist here — use `content_url` (an http/https link) or `content_base64` for caller-generated files. `content_url` fetches are SSRF-hardened: http(s) only, loopback/private/link-local/metadata destinations are rejected (for both IP literals and every resolved address), redirects are re-validated per hop, and the download is size-capped and timed out. The fetch runs only after `confirm: true`. Residual risk: DNS rebinding between validation and connection is not fully closed (would require connection-level IP pinning).
 
