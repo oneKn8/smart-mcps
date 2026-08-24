@@ -1,0 +1,37 @@
+# slack-smart minimal manifest: read plus post-as-you, no admin-ish scopes.
+# Use this in community workspaces where app installs need admin approval;
+# it is easier to approve and covers reading channels/threads/search, reacting,
+# and posting messages. Tools needing the dropped scopes (channel management,
+# profile/status writes, file uploads, canvases, bookmarks, pins, DND) will
+# return missing_scope for this workspace. Scope names only, no secrets.
+display_information:
+  name: slack-smart
+  description: Personal read-and-reply Slack client (MCP), runs as the installing user
+oauth_config:
+  scopes:
+    user:
+      - search:read
+      - channels:history
+      - groups:history
+      - im:history
+      - mpim:history
+      - channels:read
+      - groups:read
+      - im:read
+      - mpim:read
+      - im:write
+      - users:read
+      - users.profile:read
+      - reactions:read
+      - reactions:write
+      - chat:write
+      - files:read
+      - pins:read
+      - bookmarks:read
+      - team:read
+      - emoji:read
+      - usergroups:read
+settings:
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false
