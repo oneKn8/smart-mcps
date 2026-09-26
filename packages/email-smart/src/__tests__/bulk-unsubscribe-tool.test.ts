@@ -52,6 +52,7 @@ type MakeMsgOpts = {
   subject?: string;
   listUnsub?: string;
   listUnsubPost?: string;
+  listId?: string;
 };
 
 function makeMessageRaw(opts: MakeMsgOpts): unknown {
@@ -63,6 +64,8 @@ function makeMessageRaw(opts: MakeMsgOpts): unknown {
     headers.push({ name: "List-Unsubscribe", value: opts.listUnsub });
   if (opts.listUnsubPost !== undefined)
     headers.push({ name: "List-Unsubscribe-Post", value: opts.listUnsubPost });
+  if (opts.listId !== undefined)
+    headers.push({ name: "List-Id", value: opts.listId });
   return {
     id: opts.id,
     threadId: opts.threadId ?? `thr_${opts.id}`,
@@ -159,8 +162,8 @@ describe("bulk_unsubscribe tool", () => {
     expect(result.dry_run).toBe(true);
     expect(result.scanned).toBe(2);
     expect(result.archived_count).toBe(0);
-    expect(result.by_domain).toHaveLength(1);
-    const entry = result.by_domain[0]!;
+    expect(result.by_list).toHaveLength(1);
+    const entry = result.by_list[0]!;
     expect(entry.from_domain).toBe("spammy.com");
     expect(entry.message_count).toBe(2);
     expect(entry.method).toBe("url");
@@ -229,7 +232,7 @@ describe("bulk_unsubscribe tool", () => {
       context,
     );
 
-    expect(result.by_domain[0]!.method).toBe("one_click");
+    expect(result.by_list[0]!.method).toBe("one_click");
   });
 
   it("URL+mailto without one-click post header → method=url (URL preferred)", async () => {
@@ -258,7 +261,7 @@ describe("bulk_unsubscribe tool", () => {
       context,
     );
 
-    expect(result.by_domain[0]!.method).toBe("url");
+    expect(result.by_list[0]!.method).toBe("url");
   });
 
   it("mailto only → method=mailto", async () => {
@@ -287,7 +290,7 @@ describe("bulk_unsubscribe tool", () => {
       context,
     );
 
-    expect(result.by_domain[0]!.method).toBe("mailto");
+    expect(result.by_list[0]!.method).toBe("mailto");
   });
 
   it("no List-Unsubscribe header → method=none, attempted=false", async () => {
@@ -312,7 +315,7 @@ describe("bulk_unsubscribe tool", () => {
       context,
     );
 
-    const entry = result.by_domain[0]!;
+    const entry = result.by_list[0]!;
     expect(entry.method).toBe("none");
     expect(entry.attempted).toBe(false);
     expect(entry.success).toBe(false);
@@ -356,8 +359,8 @@ describe("bulk_unsubscribe tool", () => {
     expect(init.body).toBe("List-Unsubscribe=One-Click");
     const headers = init.headers as Record<string, string>;
     expect(headers["Content-Type"]).toBe("application/x-www-form-urlencoded");
-    expect(result.by_domain[0]!.success).toBe(true);
-    expect(result.by_domain[0]!.attempted).toBe(true);
+    expect(result.by_list[0]!.success).toBe(true);
+    expect(result.by_list[0]!.attempted).toBe(true);
   });
 
   it("URL GET method: fetch called with method=GET, 200 → success=true", async () => {
@@ -394,7 +397,7 @@ describe("bulk_unsubscribe tool", () => {
     expect(call[0]).toBe("https://a.com/u");
     const init = call[1] as RequestInit;
     expect(init.method).toBe("GET");
-    expect(result.by_domain[0]!.success).toBe(true);
+    expect(result.by_list[0]!.success).toBe(true);
   });
 
   it("mailto method: client.sendMessage called with raw MIME including To: <mailto-address>, default subject 'unsubscribe'", async () => {
@@ -434,7 +437,7 @@ describe("bulk_unsubscribe tool", () => {
     const decoded = Buffer.from(raw as string, "base64url").toString("utf8");
     expect(decoded).toContain("To: unsub@b.com");
     expect(decoded).toContain("Subject: unsubscribe");
-    expect(result.by_domain[0]!.success).toBe(true);
+    expect(result.by_list[0]!.success).toBe(true);
   });
 
   it("mailto with ?subject=foo&body=bar params honored", async () => {
@@ -503,7 +506,7 @@ describe("bulk_unsubscribe tool", () => {
       context,
     );
 
-    const entry = result.by_domain[0]!;
+    const entry = result.by_list[0]!;
     expect(entry.success).toBe(false);
     expect(entry.attempted).toBe(true);
     expect(entry.reason).toContain("500");
@@ -540,7 +543,7 @@ describe("bulk_unsubscribe tool", () => {
       context,
     );
 
-    const entry = result.by_domain[0]!;
+    const entry = result.by_list[0]!;
     expect(entry.success).toBe(false);
     expect(entry.reason).toContain("ECONNREFUSED");
   });
@@ -616,10 +619,10 @@ describe("bulk_unsubscribe tool", () => {
 
     expect(client.batchModify).not.toHaveBeenCalled();
     expect(result.archived_count).toBe(0);
-    expect(result.by_domain[0]!.success).toBe(true);
+    expect(result.by_list[0]!.success).toBe(true);
   });
 
-  it("groups by domain: 5 messages from same @spammy.com → one entry with message_count=5", async () => {
+  it("one List-Unsubscribe target shared by 5 sender addresses → one entry with message_count=5", async () => {
     const { context, client } = makeContext();
     client.listMessages.mockResolvedValue({
       messages: [
@@ -652,8 +655,8 @@ describe("bulk_unsubscribe tool", () => {
       context,
     );
 
-    expect(result.by_domain).toHaveLength(1);
-    const entry = result.by_domain[0]!;
+    expect(result.by_list).toHaveLength(1);
+    const entry = result.by_list[0]!;
     expect(entry.from_domain).toBe("spammy.com");
     expect(entry.message_count).toBe(5);
     expect(entry.message_ids).toEqual(["m1", "m2", "m3", "m4", "m5"]);
@@ -726,9 +729,9 @@ describe("bulk_unsubscribe tool", () => {
       context,
     );
 
-    expect(result.by_domain).toHaveLength(2);
-    const a = result.by_domain.find((d) => d.from_domain === "a.com")!;
-    const b = result.by_domain.find((d) => d.from_domain === "b.com")!;
+    expect(result.by_list).toHaveLength(2);
+    const a = result.by_list.find((d) => d.from_domain === "a.com")!;
+    const b = result.by_list.find((d) => d.from_domain === "b.com")!;
     expect(a.success).toBe(false);
     expect(b.success).toBe(true);
     expect(result.archived_count).toBe(1);
@@ -766,7 +769,7 @@ describe("bulk_unsubscribe tool", () => {
       context,
     );
 
-    expect(result.by_domain[0]!.method).toBe("one_click");
+    expect(result.by_list[0]!.method).toBe("one_click");
   });
 
   it("archive failure does not abort the operation; success still recorded", async () => {
@@ -801,9 +804,154 @@ describe("bulk_unsubscribe tool", () => {
       context,
     );
 
-    expect(result.by_domain[0]!.success).toBe(true);
+    expect(result.by_list[0]!.success).toBe(true);
     // batchModify failure is logged but not fatal — archived_count not bumped
     expect(result.archived_count).toBe(0);
     errSpy.mockRestore();
+  });
+  it("two lists from one domain → two entries, both unsubscribed and archived (no first-header-per-domain collapse)", async () => {
+    fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("", { status: 200 }),
+    );
+    const { context, client } = makeContext();
+    client.listMessages.mockResolvedValue({
+      messages: [
+        { id: "m1", threadId: "t1" },
+        { id: "m2", threadId: "t2" },
+        { id: "m3", threadId: "t3" },
+      ],
+      resultSizeEstimate: 3,
+    });
+    client.getMessage.mockImplementation(async (_a: string, id: string) =>
+      id === "m2"
+        ? makeMessageRaw({
+            id,
+            from: "Cloud <googlecloud@google.com>",
+            listUnsub: "<https://google.com/unsub/cloud>",
+            listUnsubPost: "List-Unsubscribe=One-Click",
+          })
+        : makeMessageRaw({
+            id,
+            from: "Dev <googledev-noreply@google.com>",
+            listUnsub: `<https://google.com/unsub/dev?m=${id}>`,
+            listUnsubPost: "List-Unsubscribe=One-Click",
+          }),
+    );
+    client.batchModify.mockResolvedValue(undefined);
+
+    const result = await bulkUnsubscribe.handler(
+      {
+        account: "alice",
+        q: "from:google.com",
+        max: 20,
+        archive_after: true,
+        dry_run: false,
+        confirm: true,
+      },
+      context,
+    );
+
+    expect(result.by_list).toHaveLength(2);
+    const dev = result.by_list.find((e) => e.from === "googledev-noreply@google.com")!;
+    const cloud = result.by_list.find((e) => e.from === "googlecloud@google.com")!;
+    expect(dev.from_domain).toBe("google.com");
+    expect(dev.message_ids).toEqual(["m1", "m3"]);
+    expect(cloud.message_ids).toEqual(["m2"]);
+    expect(dev.success).toBe(true);
+    expect(cloud.success).toBe(true);
+    const posted = fetchSpy!.mock.calls.map((c) => String(c[0])).sort();
+    expect(posted).toEqual([
+      "https://google.com/unsub/cloud",
+      "https://google.com/unsub/dev?m=m1",
+    ]);
+    expect(result.archived_count).toBe(3);
+  });
+
+  it("one sender, two List-Ids → two entries", async () => {
+    const { context, client } = makeContext();
+    client.listMessages.mockResolvedValue({
+      messages: [
+        { id: "m1", threadId: "t1" },
+        { id: "m2", threadId: "t2" },
+      ],
+      resultSizeEstimate: 2,
+    });
+    client.getMessage.mockImplementation(async (_a: string, id: string) =>
+      makeMessageRaw({
+        id,
+        from: "LinkedIn <messages-noreply@linkedin.com>",
+        listId: id === "m1" ? "People You May Know <pymk.linkedin.com>" : "<digest.linkedin.com>",
+        listUnsub: `<https://linkedin.com/unsub/${id}>`,
+      }),
+    );
+
+    const result = await bulkUnsubscribe.handler(
+      { account: "alice", q: "from:linkedin.com", max: 20, archive_after: false, dry_run: true, confirm: false },
+      context,
+    );
+
+    expect(result.by_list).toHaveLength(2);
+    expect(result.by_list.map((e) => e.list_id).sort()).toEqual([
+      "digest.linkedin.com",
+      "pymk.linkedin.com",
+    ]);
+  });
+
+  it("folded List-Unsubscribe header: whitespace inside <...> is dropped before the POST", async () => {
+    fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("", { status: 200 }),
+    );
+    const { context, client } = makeContext();
+    client.listMessages.mockResolvedValue({
+      messages: [{ id: "m1", threadId: "t1" }],
+      resultSizeEstimate: 1,
+    });
+    client.getMessage.mockResolvedValue(
+      makeMessageRaw({
+        id: "m1",
+        from: "newsletters-noreply@linkedin.com",
+        listUnsub:
+          "<mailto:unsub@linkedin.com>, <https://www.linkedin.com/series-notifications/?action=unsubscribe&memberToken=ADoAAE\r\n Zp&lipi=abc>",
+        listUnsubPost: "List-Unsubscribe=One-Click",
+      }),
+    );
+
+    const result = await bulkUnsubscribe.handler(
+      { account: "alice", q: "from:linkedin.com", max: 20, archive_after: false, dry_run: false, confirm: true },
+      context,
+    );
+
+    expect(result.by_list[0]!.success).toBe(true);
+    expect(String(fetchSpy!.mock.calls[0]![0])).toBe(
+      "https://www.linkedin.com/series-notifications/?action=unsubscribe&memberToken=ADoAAEZp&lipi=abc",
+    );
+  });
+
+  it("a comma inside a bracketed URI does not split it", async () => {
+    fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("", { status: 200 }),
+    );
+    const { context, client } = makeContext();
+    client.listMessages.mockResolvedValue({
+      messages: [{ id: "m1", threadId: "t1" }],
+      resultSizeEstimate: 1,
+    });
+    client.getMessage.mockResolvedValue(
+      makeMessageRaw({
+        id: "m1",
+        from: "news@shop.example",
+        listUnsub: "<https://shop.example/u?lists=1,2,3&t=x>, <mailto:u@shop.example>",
+        listUnsubPost: "List-Unsubscribe=One-Click",
+      }),
+    );
+
+    await bulkUnsubscribe.handler(
+      { account: "alice", q: "from:shop.example", max: 20, archive_after: false, dry_run: false, confirm: true },
+      context,
+    );
+
+    expect(String(fetchSpy!.mock.calls[0]![0])).toBe(
+      "https://shop.example/u?lists=1,2,3&t=x",
+    );
   });
 });

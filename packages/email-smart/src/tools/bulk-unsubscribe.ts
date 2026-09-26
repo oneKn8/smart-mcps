@@ -13,12 +13,17 @@ import { buildRawMessage } from "../mime.js";
 // bulk_unsubscribe — RFC 2369 (List-Unsubscribe) + RFC 8058 (one-click POST).
 // =============================================================================
 //
-// The inbox-zero killer feature. For each unique from-domain in the query
+// The inbox-zero killer feature. For each distinct mailing list in the query
 // result, attempts to honor the upstream-provided unsubscribe mechanism:
 //
 //   1. RFC 8058 one-click POST (if List-Unsubscribe-Post header present).
 //   2. HTTPS GET to the URL in List-Unsubscribe (if no one-click).
 //   3. Send a minimal "unsubscribe" email to the mailto: target (RFC 2368).
+//
+// A list is its List-Id (RFC 2919) when the sender sets one, else its sender
+// address. Grouping by from-domain used to collapse every list a domain sends
+// (googledev@ and googlecloud@ google.com) onto the first header seen, so the
+// rest were silently never unsubscribed.
 //
 // Hard safety rule: dry_run=true (default) and confirm=false MUST NOT make
 // any HTTP request outside the controlled Gmail API. Only header parsing
@@ -40,8 +45,10 @@ type BulkUnsubscribeInput = z.infer<typeof bulkUnsubscribeInputSchema>;
 
 type Method = "one_click" | "url" | "mailto" | "none";
 
-type DomainEntry = {
+type ListEntry = {
+  from: string;
   from_domain: string;
+  list_id?: string;
   message_count: number;
   method: Method;
   list_unsubscribe_value?: string;
@@ -54,7 +61,7 @@ type DomainEntry = {
 
 type BulkUnsubscribeOutput = {
   scanned: number;
-  by_domain: DomainEntry[];
+  by_list: ListEntry[];
   archived_count: number;
   dry_run: boolean;
 };
@@ -62,21 +69,31 @@ type BulkUnsubscribeOutput = {
 // ----------------------------- helpers ---------------------------------------
 
 /**
- * Extract the lowercased domain from a From header. Handles "Name <user@domain>"
+ * Extract the lowercased address from a From header. Handles "Name <user@domain>"
  * and bare "user@domain" forms. Falls back to "<unknown>" when neither matches.
- * Mirrors the helper in `tools/smart.ts` — kept duplicated to avoid a shared
- * file for one tiny helper.
  */
-function extractDomain(from: string): string {
-  const angle = from.match(/<([^>@\s]+)@([^>\s]+)>/);
-  if (angle && typeof angle[2] === "string") {
-    return angle[2].toLowerCase();
+function extractAddress(from: string): string {
+  const angle = from.match(/<([^>@\s]+@[^>\s]+)>/);
+  if (angle && typeof angle[1] === "string") {
+    return angle[1].toLowerCase();
   }
-  const bare = from.match(/([^\s@]+)@(\S+)/);
-  if (bare && typeof bare[2] === "string") {
-    return bare[2].replace(/[>,;]+$/, "").toLowerCase();
+  const bare = from.match(/([^\s<@]+@\S+)/);
+  if (bare && typeof bare[1] === "string") {
+    return bare[1].replace(/[>,;]+$/, "").toLowerCase();
   }
   return "<unknown>";
+}
+
+function domainOf(address: string): string {
+  const at = address.lastIndexOf("@");
+  return at === -1 ? "<unknown>" : address.slice(at + 1);
+}
+
+/** "Name <list.id.example>" -> "list.id.example"; "" when absent. */
+function normalizeListId(value: string): string {
+  const inner = value.match(/<([^>]+)>/);
+  const raw = inner && typeof inner[1] === "string" ? inner[1] : value;
+  return raw.replace(/\s+/g, "").toLowerCase();
 }
 
 type GmailHeader = { name: string; value: string };
@@ -116,22 +133,24 @@ type ParsedUnsub = {
  *   - <https://x.com/u>
  *   - <mailto:u@x.com>
  *   - <https://x.com/u>, <mailto:u@x.com>
- *   - whitespace folding (collapse runs of whitespace before splitting)
+ *   - header folding inside a URI (LinkedIn wraps long URIs mid-token)
+ *   - commas inside a bracketed URI (query strings like ?lists=1,2)
  *   - bare tokens (no angle brackets)
  *
  * Returns the first https URL and first mailto URI found. Callers prefer URL
  * over mailto when picking method.
  */
 function parseListUnsubscribe(value: string): ParsedUnsub {
-  if (value.length === 0) return {};
-  const collapsed = value.replace(/\s+/g, " ").trim();
-  const tokens = collapsed.split(",").map((t) => t.trim());
+  if (value.trim().length === 0) return {};
+  // RFC 2369 brackets every URI, so take what is inside the brackets rather
+  // than splitting on commas, which a URI may legally contain. Fall back to
+  // comma-separated bare tokens for senders that omit the brackets.
+  const bracketed = [...value.matchAll(/<([^>]*)>/g)].map((m) => m[1] ?? "");
+  const tokens = bracketed.length > 0 ? bracketed : value.split(",");
   const out: ParsedUnsub = {};
   for (const tok of tokens) {
-    let inner = tok;
-    if (inner.startsWith("<") && inner.endsWith(">")) {
-      inner = inner.slice(1, -1).trim();
-    }
+    // Whitespace is never part of a URI; any found inside one is folding.
+    const inner = tok.replace(/\s+/g, "");
     const lower = inner.toLowerCase();
     if (
       out.url === undefined &&
@@ -258,10 +277,12 @@ async function executeUnsubscribe(
   return { success: false, reason: "no usable unsubscribe target" };
 }
 
-// ----------------------------- domain grouping -------------------------------
+// ----------------------------- list grouping ---------------------------------
 
-type DomainAccumulator = {
+type ListAccumulator = {
+  from: string;
   from_domain: string;
+  list_id: string;
   message_ids: string[];
   subjects: string[];
   list_unsubscribe_value: string;
@@ -272,8 +293,11 @@ async function fetchAndGroup(
   context: EmailContext,
   account: string,
   ids: string[],
-): Promise<Map<string, DomainAccumulator>> {
-  const byDomain = new Map<string, DomainAccumulator>();
+): Promise<ListAccumulator[]> {
+  const byKey = new Map<string, ListAccumulator>();
+  // A byte-identical List-Unsubscribe header is one list even when the From
+  // address rotates per message.
+  const keyByHeader = new Map<string, string>();
   for (const id of ids) {
     let raw: unknown;
     try {
@@ -286,23 +310,34 @@ async function fetchAndGroup(
     }
     const headers = readPayloadHeaders(raw);
     const slim = mapMessage(raw);
-    const domain = extractDomain(slim.from);
+    const from = extractAddress(slim.from);
+    const listId = normalizeListId(findHeader(headers, "List-Id"));
     const listUnsub = findHeader(headers, "List-Unsubscribe");
     const listUnsubPost = findHeader(headers, "List-Unsubscribe-Post");
 
-    let acc = byDomain.get(domain);
+    let key = listId.length > 0 ? `list:${listId}` : `from:${from}`;
+    if (!byKey.has(key) && listUnsub.length > 0) {
+      key = keyByHeader.get(listUnsub) ?? key;
+    }
+    if (listUnsub.length > 0 && !keyByHeader.has(listUnsub)) {
+      keyByHeader.set(listUnsub, key);
+    }
+
+    let acc = byKey.get(key);
     if (acc === undefined) {
       acc = {
-        from_domain: domain,
+        from,
+        from_domain: domainOf(from),
+        list_id: listId,
         message_ids: [],
         subjects: [],
         list_unsubscribe_value: listUnsub,
         list_unsubscribe_post_value: listUnsubPost,
       };
-      byDomain.set(domain, acc);
+      byKey.set(key, acc);
     } else {
-      // Keep the FIRST seen header for the domain — that's the canonical
-      // unsubscribe target per the task spec.
+      // Keep the FIRST seen header for the list: listMessages returns newest
+      // first, so that is the freshest unsubscribe token.
       if (acc.list_unsubscribe_value.length === 0 && listUnsub.length > 0) {
         acc.list_unsubscribe_value = listUnsub;
       }
@@ -316,7 +351,7 @@ async function fetchAndGroup(
     acc.message_ids.push(slim.id.length > 0 ? slim.id : id);
     if (acc.subjects.length < SAMPLE_SUBJECTS) acc.subjects.push(slim.subject);
   }
-  return byDomain;
+  return [...byKey.values()];
 }
 
 // ----------------------------- tool ------------------------------------------
@@ -345,16 +380,17 @@ export const bulkUnsubscribe = defineTool<
       maxResults: input.max,
     });
     const ids = list.messages.map((m) => m.id);
-    const byDomain = await fetchAndGroup(context, input.account, ids);
+    const lists = await fetchAndGroup(context, input.account, ids);
 
     // Build dry-run preview entries up front. dry_run=true returns these
     // as-is (no side effects).
-    const previewEntries: DomainEntry[] = [];
-    for (const acc of byDomain.values()) {
+    const previewEntries: ListEntry[] = [];
+    for (const acc of lists) {
       const parsed = parseListUnsubscribe(acc.list_unsubscribe_value);
       const oneClick = isOneClickPost(acc.list_unsubscribe_post_value);
       const method = pickMethod(parsed, oneClick);
-      const entry: DomainEntry = {
+      const entry: ListEntry = {
+        from: acc.from,
         from_domain: acc.from_domain,
         message_count: acc.message_ids.length,
         method,
@@ -363,6 +399,7 @@ export const bulkUnsubscribe = defineTool<
         sample_subjects: acc.subjects,
         message_ids: acc.message_ids,
       };
+      if (acc.list_id.length > 0) entry.list_id = acc.list_id;
       if (acc.list_unsubscribe_value.length > 0) {
         entry.list_unsubscribe_value = acc.list_unsubscribe_value;
       }
@@ -375,7 +412,7 @@ export const bulkUnsubscribe = defineTool<
     if (input.dry_run) {
       return {
         scanned: ids.length,
-        by_domain: previewEntries,
+        by_list: previewEntries,
         archived_count: 0,
         dry_run: true,
       };
@@ -384,18 +421,14 @@ export const bulkUnsubscribe = defineTool<
     const action = input.archive_after
       ? "unsubscribe + archive"
       : "unsubscribe only";
-    const preview = `Will process up to ${input.max} messages matching '${input.q}'; will ${action} by from-domain. Action only on confirm.`;
+    const preview = `Will process up to ${input.max} messages matching '${input.q}'; will ${action} per mailing list. Action only on confirm.`;
     guardDestructive({ confirm: input.confirm, preview });
 
-    // Execute per-domain. Errors in one domain do NOT abort the batch.
+    // Execute per list. Errors in one list do NOT abort the batch.
     let archivedCount = 0;
-    const results: DomainEntry[] = [];
-    for (const entry of previewEntries) {
-      const acc = byDomain.get(entry.from_domain);
-      if (acc === undefined) {
-        results.push(entry);
-        continue;
-      }
+    const results: ListEntry[] = [];
+    for (const [i, entry] of previewEntries.entries()) {
+      const acc = lists[i]!;
       if (entry.method === "none") {
         // Already populated reason above; mark attempted=false explicitly.
         results.push(entry);
@@ -414,7 +447,7 @@ export const bulkUnsubscribe = defineTool<
       } catch (err) {
         outcome = { success: false, reason: (err as Error).message };
       }
-      const finalEntry: DomainEntry = {
+      const finalEntry: ListEntry = {
         ...entry,
         attempted: true,
         success: outcome.success,
@@ -432,7 +465,7 @@ export const bulkUnsubscribe = defineTool<
           // Archive is a best-effort post-step; surface it on stderr but do
           // not flip success — the unsubscribe itself worked.
           console.error(
-            `[email-smart] bulk_unsubscribe: archive failed for ${entry.from_domain}: ${(err as Error).message}`,
+            `[email-smart] bulk_unsubscribe: archive failed for ${entry.from}: ${(err as Error).message}`,
           );
         }
       }
@@ -441,7 +474,7 @@ export const bulkUnsubscribe = defineTool<
 
     return {
       scanned: ids.length,
-      by_domain: results,
+      by_list: results,
       archived_count: archivedCount,
       dry_run: false,
     };
